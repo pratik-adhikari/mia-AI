@@ -1,0 +1,46 @@
+{
+  "id": "web-schema-afriso-product-v1",
+  "site": "afriso.com",
+  "schema": {
+    "name": "AFRISO product page",
+    "baseSelector": "html",
+    "fields": [
+      {
+        "name": "product",
+        "selector": "h1",
+        "type": "nested",
+        "fields": [
+          {"name": "name", "type": "text"}
+        ]
+      },
+      {
+        "name": "jsonLd",
+        "selector": "script[type='application/ld+json']",
+        "type": "text"
+      },
+      {
+        "name": "sections",
+        "selector": ".tech-table > .group",
+        "type": "nested_list",
+        "fields": [
+          {"name": "name", "selector": "dt.groupingProperty", "type": "text"},
+          {"name": "label", "selector": "dt.PRODTH", "type": "text"},
+          {"name": "value", "selector": "dd.PRODTH", "type": "text"},
+          {
+            "name": "properties",
+            "selector": "dl.d-flex",
+            "type": "nested_list",
+            "fields": [
+              {"name": "label", "selector": "dt", "type": "text"},
+              {"name": "value", "selector": "dd", "type": "text"}
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "exampleUrl": "https://www.afriso.com/products/domestic-technology/level-indicators-and-level-controllers/tankcontrol-20-25/52161-fuellstandmessgeraet-tankcontrol-25",
+  "createdAt": "2026-09-15T00:00:00Z",
+  "version": 1,
+  "status": "trusted"
+}

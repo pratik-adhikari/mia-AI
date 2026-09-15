@@ -31,7 +31,7 @@ from mia_dpp.store import ArtifactKind, Store
 from mia_dpp.tools.mapping.mapper import DeterministicWebsiteMapper
 from mia_dpp.tools.mapping.review import MappingReviewService
 from mia_dpp.tools.search import SearchHit
-from mia_dpp.tools.web.models import RenderedPage
+from mia_dpp.tools.web.models import ExtractionSchema, RenderedPage, SourceLink
 from mia_dpp.tools.web.tool import WebExtractionTool
 from mia_dpp.tools.web.url_policy import ProductUrlPolicy
 
@@ -56,7 +56,7 @@ class FixtureLoader:
     def __init__(self) -> None:
         self.calls: list[str] = []
 
-    async def load(self, url: str) -> RenderedPage:
+    async def load(self, url: str, schema: ExtractionSchema | None = None) -> RenderedPage:
         self.calls.append(url)
         return RenderedPage(
             url=url,
@@ -68,13 +68,37 @@ class FixtureLoader:
             </script></head><body><h1>Gauge PG-16</h1>
             <table><tr><th>Supply voltage</th><td>24 V</td></tr></table></body></html>
             """,
+            structured_data=(
+                {
+                    "product": {"name": "Gauge PG-16"},
+                    "jsonLd": (
+                        '{"@context":"https://schema.org","@type":"Product",'
+                        '"name":"Gauge PG-16","model":"PG-16",'
+                        '"manufacturer":{"name":"Example Instruments GmbH"},'
+                        '"serialNumber":"SN-2048","sku":"63820",'
+                        '"productionDate":"2024"}'
+                    ),
+                    "tableFacts": [{"label": "Supply voltage", "value": "24 V"}],
+                },
+            ),
         )
+
+    def extract(
+        self, page: RenderedPage, schema: ExtractionSchema
+    ) -> tuple[dict[str, object], ...]:
+        return page.structured_data
+
+    async def generate_schema(self, page: RenderedPage) -> ExtractionSchema:
+        raise AssertionError("fixture pages already contain structured Crawl4AI output")
+
+    async def discover(self, url: str) -> tuple[SourceLink, ...]:
+        return ()
 
 
 class SlowFixtureLoader(FixtureLoader):
-    async def load(self, url: str) -> RenderedPage:
+    async def load(self, url: str, schema: ExtractionSchema | None = None) -> RenderedPage:
         await asyncio.sleep(0.2)
-        return await super().load(url)
+        return await super().load(url, schema)
 
 
 class ScriptedTestModel(TestModel):
@@ -221,7 +245,7 @@ def test_additional_source_stays_attached_to_the_current_product(tmp_path: Path)
         loader=FixtureLoader(),
         url_policy=ProductUrlPolicy(public_resolver),
     )
-    initial = asyncio.run(web_tool.extract(product_url))
+    initial, _ = asyncio.run(web_tool.extract(product_url))
     source_candidate = ProductSourceCandidate(
         id="source-additional",
         product_id="product-direct",
@@ -400,7 +424,7 @@ def test_semantic_mapping_has_a_structured_review_explanation(tmp_path: Path) ->
     async def public_resolver(host: str, port: int) -> tuple[str, ...]:
         return ("93.184.216.34",)
 
-    extraction = asyncio.run(
+    extraction, _ = asyncio.run(
         WebExtractionTool(
             loader=FixtureLoader(),
             url_policy=ProductUrlPolicy(public_resolver),

@@ -30,6 +30,10 @@ class Settings(BaseSettings):
         default=Path("/tmp/mia-workspaces"),
         validation_alias="MIA_WORKSPACE_ROOT",
     )
+    web_schema_root: Path = Field(
+        default=Path("/tmp/mia-web-schemas"),
+        validation_alias="MIA_WEB_SCHEMA_ROOT",
+    )
     standards_root: Path = Field(
         default=REPOSITORY_ROOT / "standards" / "idta-submodel-templates",
         validation_alias="MIA_STANDARDS_ROOT",

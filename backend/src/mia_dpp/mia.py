@@ -37,6 +37,7 @@ from mia_dpp.integrations.ddgs import DdgsSearchProvider
 from mia_dpp.store import ArtifactKind, SessionSnapshot, Store
 from mia_dpp.tools.mapping.review import MappingReviewService
 from mia_dpp.tools.search import SearchProvider
+from mia_dpp.tools.web.schema import WebSchemaStore
 from mia_dpp.tools.web.tool import WebExtractionTool
 
 
@@ -67,7 +68,18 @@ class Mia:
         self.templates = OfficialTemplateRepository(self.settings.standards_root)
 
         search = search_provider or DdgsSearchProvider()
-        self.web_tool = web_tool or WebExtractionTool(loader=Crawl4AIPageLoader())
+        api_key = (
+            self.settings.openrouter_api_key.get_secret_value()
+            if self.settings.openrouter_api_key is not None
+            else None
+        )
+        self.web_tool = web_tool or WebExtractionTool(
+            loader=Crawl4AIPageLoader(
+                schema_model=f"openrouter/{self.settings.agent_model}",
+                api_key=api_key,
+            ),
+            schemas=WebSchemaStore(self.settings.web_schema_root),
+        )
         self.store = Store(
             self.settings.thread_store_path,
             artifact_root=self.settings.workspace_root,
@@ -80,7 +92,7 @@ class Mia:
             agent_model = OpenRouterModel(
                 self.settings.agent_model,
                 provider=OpenRouterProvider(
-                    api_key=self.settings.openrouter_api_key.get_secret_value(),
+                    api_key=api_key,
                     app_url="https://mia-dpp.vercel.app",
                     app_title="MIA Digital Product Passport",
                 ),

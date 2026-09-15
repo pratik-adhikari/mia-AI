@@ -27,6 +27,9 @@ class SourceLocation(WireModel):
 
     page: int | None = Field(default=None, ge=1)
     selector: str | None = None
+    base_selector: str | None = None
+    schema_id: str | None = None
+    record_path: tuple[int, ...] = ()
     json_pointer: str | None = None
     excerpt: str | None = None
     table: str | None = None

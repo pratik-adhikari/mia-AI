@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import json
 import time
+from hashlib import sha256
+from pathlib import PurePosixPath
 from urllib.parse import urlsplit
 
 from pydantic import Field
@@ -20,7 +23,9 @@ from mia_dpp.agent.models import (
     TraceStatus,
 )
 from mia_dpp.domain.base import WireModel
+from mia_dpp.domain.discovery import ProductSourceCandidate
 from mia_dpp.domain.mappings import MappingStatus
+from mia_dpp.errors import ExtractionError
 from mia_dpp.store import ArtifactKind
 from mia_dpp.tools.mapping.coverage import coverage
 from mia_dpp.tools.mapping.mapper import DeterministicWebsiteMapper
@@ -30,6 +35,7 @@ from mia_dpp.tools.search import (
     find_product_sources,
     find_products,
 )
+from mia_dpp.tools.web.models import SourceLink
 
 
 class ToolObservation(WireModel):
@@ -291,7 +297,7 @@ async def extract_product_page(
             )
 
     started = time.monotonic()
-    package = await ctx.deps.web_tool.extract(url)
+    package, page = await ctx.deps.web_tool.extract(url)
     source_url = package.evidence[0].source_uri
     source_candidate_owner = next(
         (
@@ -327,18 +333,35 @@ async def extract_product_page(
     evidence_by_id.update({item.id: item for item in package.evidence})
     work.evidence = tuple(evidence_by_id.values())
     work.status = ProductStatus.IN_PROGRESS
+    raw_artifact = ctx.deps.store.write_bytes(
+        ctx.deps.state.thread_id,
+        ArtifactKind.RAW,
+        "source.html",
+        page.html.encode(),
+        content_type="text/html; charset=utf-8",
+        created_by="extract_product_page",
+        product_id=resolved_id,
+        source_url=source_url,
+    )
     source_artifact = ctx.deps.store.write_json(
         ctx.deps.state.thread_id,
         ArtifactKind.SOURCE,
         "source.json",
         {
             "url": source_url,
+            "acquiredAt": page.acquired_at.isoformat(),
+            "contentSha256": page.content_sha256,
+            "schemaId": page.schema_id,
+            "baseSelector": page.base_selector,
             "productName": package.product_name,
             "sourceArtifactIds": package.source_artifact_ids,
+            "structuredData": page.structured_data,
+            "assets": [item.model_dump(mode="json") for item in page.assets],
         },
         created_by="extract_product_page",
         product_id=resolved_id,
         source_url=source_url,
+        derived_from=(raw_artifact.id,),
     )
     evidence_artifact = ctx.deps.store.write_json(
         ctx.deps.state.thread_id,
@@ -350,7 +373,21 @@ async def extract_product_page(
         source_url=source_url,
         derived_from=(source_artifact.id,),
     )
-    work.artifact_ids = (*work.artifact_ids, source_artifact.id, evidence_artifact.id)
+    created_artifact_ids = [raw_artifact.id, source_artifact.id, evidence_artifact.id]
+    if page.mhtml:
+        mhtml_artifact = ctx.deps.store.write_bytes(
+            ctx.deps.state.thread_id,
+            ArtifactKind.RAW,
+            "source.mhtml",
+            page.mhtml.encode(),
+            content_type="multipart/related",
+            created_by="extract_product_page",
+            product_id=resolved_id,
+            source_url=source_url,
+            derived_from=(raw_artifact.id,),
+        )
+        created_artifact_ids.append(mhtml_artifact.id)
+    work.artifact_ids = (*work.artifact_ids, *created_artifact_ids)
     ctx.deps.state.products[resolved_id] = work
     if resolved_id not in ctx.deps.state.selected_product_ids:
         ctx.deps.state.selected_product_ids = (*ctx.deps.state.selected_product_ids, resolved_id)
@@ -373,6 +410,57 @@ async def extract_product_page(
         summary="Run deterministic mapping for this product next.",
         count=len(evidence),
         identifiers=(resolved_id,),
+    )
+
+
+async def download_source_asset(
+    ctx: RunContext[MiaDependencies],
+    product_id: str,
+    asset_url: str,
+) -> ToolObservation:
+    """Download one document or image previously discovered for a product."""
+
+    allowed: set[str] = set()
+    for artifact in ctx.deps.store.list_artifacts(ctx.deps.state.thread_id):
+        if artifact.kind is not ArtifactKind.SOURCE or artifact.product_id != product_id:
+            continue
+        _, data = ctx.deps.store.read_artifact(ctx.deps.state.thread_id, artifact.id)
+        payload = json.loads(data)
+        allowed.update(item["url"] for item in payload.get("assets", []) if item.get("url"))
+    if asset_url not in allowed:
+        return ToolObservation(
+            outcome="asset_not_discovered",
+            summary="Only an asset discovered on this product's source page may be downloaded.",
+            count=0,
+        )
+    asset, data = await ctx.deps.web_tool.download_source_asset(asset_url)
+    name = PurePosixPath(urlsplit(asset.url).path).name or f"{asset.id}.bin"
+    artifact = ctx.deps.store.write_bytes(
+        ctx.deps.state.thread_id,
+        ArtifactKind.RAW,
+        name,
+        data,
+        content_type=asset.media_type or "application/octet-stream",
+        created_by="download_source_asset",
+        product_id=product_id,
+        source_url=asset.url,
+    )
+    work = ctx.deps.state.products.get(product_id)
+    if work is not None:
+        work.artifact_ids = (*work.artifact_ids, artifact.id)
+    ctx.deps.add_event(
+        "source.asset_downloaded",
+        f"Downloaded {name} from the selected product source.",
+        tool_name="download_source_asset",
+        product_id=product_id,
+        source_ids=(asset.id,),
+        metadata={"bytes": len(data), "mediaType": asset.media_type},
+    )
+    return ToolObservation(
+        outcome="asset_downloaded",
+        summary="The selected source asset is now available in the workspace.",
+        count=1,
+        identifiers=(artifact.id,),
     )
 
 
@@ -531,6 +619,12 @@ async def research_product_sources(
     if domain is None and work.source_urls:
         domain = (urlsplit(work.source_urls[0]).hostname or "").removeprefix("www.").casefold()
     started = time.monotonic()
+    related: tuple[SourceLink, ...] = ()
+    if work.source_urls:
+        try:
+            related = await ctx.deps.web_tool.discover_related_sources(work.source_urls[0])
+        except ExtractionError:  # Search remains available when a bounded crawl is blocked.
+            related = ()
     try:
         candidates = await find_product_sources(
             ctx.deps.search,
@@ -540,17 +634,31 @@ async def research_product_sources(
             manufacturer_domain=domain,
         )
     except SearchUnavailableError as error:
-        ctx.deps.add_event(
-            "source.research",
-            str(error),
-            status=TraceStatus.FAILED,
-            tool_name="research_product_sources",
+        if not related:
+            ctx.deps.add_event(
+                "source.research",
+                str(error),
+                status=TraceStatus.FAILED,
+                tool_name="research_product_sources",
+                product_id=product_id,
+                input_summary=query,
+            )
+            return ToolObservation(outcome="unavailable", summary=str(error), count=0)
+        candidates = ()
+    crawl_candidates = tuple(
+        ProductSourceCandidate(
+            id="source-" + sha256(f"{product_id}\0{link.url}".encode()).hexdigest()[:20],
             product_id=product_id,
-            input_summary=query,
+            title=link.text or link.title or link.url,
+            url=link.url,
+            authoritative_domain=True,
+            source_uri=link.url,
         )
-        return ToolObservation(outcome="unavailable", summary=str(error), count=0)
+        for link in related
+    )
     existing_urls = set(work.source_urls)
-    work.source_candidates = tuple(item for item in candidates if item.url not in existing_urls)
+    merged = {item.url: item for item in (*crawl_candidates, *candidates)}
+    work.source_candidates = tuple(item for url, item in merged.items() if url not in existing_urls)
     ctx.deps.state.products[product_id] = work
     ctx.deps.add_event(
         "source.candidates",
@@ -944,6 +1052,7 @@ AGENT_TOOLS = (
     Tool(discover_products, sequential=True),
     Tool(select_products, sequential=True),
     Tool(extract_product_page, sequential=True),
+    Tool(download_source_asset, sequential=True),
     Tool(map_product_evidence, sequential=True),
     Tool(research_product_sources, sequential=True),
     Tool(inspect_unresolved_mappings, sequential=True),
