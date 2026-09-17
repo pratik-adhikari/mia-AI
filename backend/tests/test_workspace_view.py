@@ -30,3 +30,25 @@ def test_workspace_view_reads_thread_artifacts_and_events(tmp_path: Path) -> Non
     assert workspace.combined_export("thread-workspace")["jsonArtifacts"][artifact.id] == {
         "name": "Example"
     }
+
+
+def test_workspace_view_isolates_threads(tmp_path: Path) -> None:
+    catalogue = ProductCatalogue(tmp_path / "catalogue.sqlite3")
+    storage = LocalArtifactStore(tmp_path / "artifacts")
+    first, _ = catalogue.get_or_create_product("https://example.com/first")
+    second, _ = catalogue.get_or_create_product("https://example.com/second")
+    first_run = catalogue.start_run(first.id, "thread-first")
+    second_run = catalogue.start_run(second.id, "thread-second")
+    for product, run, value in ((first, first_run, b"first"), (second, second_run, b"second")):
+        artifact = storage.put(
+            "evidence/value.txt",
+            value,
+            content_type="text/plain",
+            product_id=product.id,
+            run_id=run.id,
+        )
+        catalogue.register_artifact(artifact)
+
+    workspace = WorkspaceView(catalogue, storage)
+    assert [item.product_id for item in workspace.list_artifacts("thread-first")] == [first.id]
+    assert [item.product_id for item in workspace.list_artifacts("thread-second")] == [second.id]
