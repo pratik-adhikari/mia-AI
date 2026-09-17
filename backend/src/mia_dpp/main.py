@@ -1,5 +1,7 @@
 """Canonical ASGI entrypoint for MIA."""
 
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -9,17 +11,22 @@ from mia_dpp.mia import Mia
 
 
 def create_app(mia: Mia | None = None) -> FastAPI:
-    """Create the production FastAPI application.
-
-    The ASGI server calls this entrypoint. ``Mia`` assembles and orchestrates
-    the application; this function only exposes it through FastAPI routes.
-    """
+    """Create the production FastAPI application around one composed MIA runtime."""
 
     application = mia or Mia()
+
+    @asynccontextmanager
+    async def lifespan(_: FastAPI):
+        try:
+            yield
+        finally:
+            await application.close()
+
     app = FastAPI(
         title="MIA Digital Product Passport",
         version=__version__,
-        description="Deterministic product evidence to official IDTA/AAS compilation.",
+        description="Evidence-backed product data to official IDTA/AAS compilation.",
+        lifespan=lifespan,
     )
     app.state.mia = application
     app.add_middleware(

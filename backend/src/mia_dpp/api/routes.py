@@ -25,11 +25,14 @@ from mia_dpp.agent.models import (
 from mia_dpp.api.schemas import (
     DppBuildRequest,
     HealthResponse,
+    ProductDetail,
+    ProductLibraryItem,
 )
+from mia_dpp.domain.product import ChatMessage
 from mia_dpp.domain.targets import TemplateSummary
 from mia_dpp.errors import MiaError
 from mia_dpp.mia import Mia
-from mia_dpp.store import WorkspaceArtifact
+from mia_dpp.storage.models import WorkspaceArtifact
 from mia_dpp.tools.mapping.models import (
     MappingKnowledgeEntry,
 )
@@ -236,3 +239,58 @@ async def create_dpp(payload: DppBuildRequest, http_request: Request) -> DppPack
         raise HTTPException(status_code=503, detail=str(error)) from error
     except MiaError as error:
         raise HTTPException(status_code=422, detail=str(error)) from error
+
+
+@router.get(
+    "/api/threads/{thread_id}/messages",
+    response_model=tuple[ChatMessage, ...],
+)
+async def thread_messages(thread_id: str, http_request: Request) -> tuple[ChatMessage, ...]:
+    """Return timestamped human/assistant chat history for one durable thread."""
+
+    return _application(http_request).context.catalogue.list_messages(thread_id)
+
+
+@router.get("/api/products", response_model=tuple[ProductLibraryItem, ...])
+async def product_library(http_request: Request) -> tuple[ProductLibraryItem, ...]:
+    """List every durable product with its latest successful passport."""
+
+    catalogue = _application(http_request).context.catalogue
+    return tuple(
+        ProductLibraryItem(
+            product=product,
+            latest_dpp=catalogue.latest_successful_dpp(product.id),
+            run_count=len(catalogue.list_runs(product.id)),
+        )
+        for product in catalogue.list_products()
+    )
+
+
+@router.get("/api/products/{product_id}", response_model=ProductDetail)
+async def product_detail(product_id: str, http_request: Request) -> ProductDetail:
+    """Show product presentation data, attempts, DPP versions, and artifacts."""
+
+    catalogue = _application(http_request).context.catalogue
+    product = catalogue.get_product(product_id)
+    if product is None:
+        raise HTTPException(status_code=404, detail="unknown product")
+    return ProductDetail(
+        product=product,
+        runs=catalogue.list_runs(product_id),
+        dpp_versions=catalogue.list_dpp_versions(product_id),
+        artifacts=catalogue.list_artifacts(product_id=product_id),
+    )
+
+
+@router.get("/api/artifacts/{artifact_id}")
+async def read_durable_artifact(artifact_id: str, http_request: Request) -> Response:
+    """Read a product-library artifact by its durable catalogue identity."""
+
+    mia = _application(http_request)
+    artifact = mia.context.catalogue.get_artifact(artifact_id)
+    if artifact is None:
+        raise HTTPException(status_code=404, detail="unknown artifact")
+    return Response(
+        content=mia.context.artifacts.get(artifact),
+        media_type=artifact.content_type,
+    )
