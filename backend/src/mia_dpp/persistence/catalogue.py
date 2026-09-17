@@ -227,6 +227,15 @@ class ProductCatalogue:
         )
         return run
 
+    def set_run_status(self, run_id: str, status: RunStatus) -> ProductRun:
+        run = self._require(self.get_run(run_id), run_id)
+        run = run.model_copy(update={"status": status})
+        self._execute(
+            "UPDATE runs SET status=?, payload=? WHERE id=?",
+            (status.value, run.model_dump_json(), run_id),
+        )
+        return run
+
     def finish_run(
         self,
         run_id: str,
