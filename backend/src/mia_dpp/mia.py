@@ -37,7 +37,7 @@ from mia_dpp.integrations.ddgs import DdgsSearchProvider
 from mia_dpp.store import ArtifactKind, SessionSnapshot, Store
 from mia_dpp.tools.mapping.models import SemanticMapper
 from mia_dpp.tools.mapping.review import MappingReviewService
-from mia_dpp.tools.mapping.semantic import PydanticBatchSemanticMapper
+from mia_dpp.agents.semantic_mapping import PydanticBatchSemanticMapper
 from mia_dpp.tools.search import SearchProvider
 from mia_dpp.tools.web.tool import WebExtractionTool
 
