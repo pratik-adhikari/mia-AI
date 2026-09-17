@@ -4,11 +4,19 @@ from __future__ import annotations
 
 from typing import TypedDict
 
+from mia_dpp.domain.discovery import CompanyCandidate, ProductCandidate
+
 
 class MiaWorkflowState(TypedDict, total=False):
     # Conversation / identity
     thread_id: str
     user_message: str
+    discovery_history_json: str
+    company_candidates: tuple[CompanyCandidate, ...]
+    selected_company: CompanyCandidate | None
+    product_candidates: tuple[ProductCandidate, ...]
+    selected_product_ids: tuple[str, ...]
+    product_queue: tuple[str, ...]
     product_url: str
     product_id: str
     run_id: str
@@ -50,3 +58,39 @@ class MiaWorkflowState(TypedDict, total=False):
     status: str
     reply: str
     decision_summary: str
+
+
+def reset_product_state(*, product_url: str = "", product_queue: tuple[str, ...] = ()) -> dict[str, object]:
+    """Return the run-scoped reset used when starting another product in a thread."""
+
+    return {
+        "product_url": product_url,
+        "product_queue": product_queue,
+        "product_id": "",
+        "run_id": "",
+        "cache_hit": False,
+        "reused_dpp_version_id": "",
+        "product_name": "",
+        "manufacturer": "",
+        "image_url": "",
+        "known_source_urls": (),
+        "evidence_artifact_id": "",
+        "targets_artifact_id": "",
+        "deterministic_mapping_artifact_id": "",
+        "semantic_mapping_artifact_id": "",
+        "review_items_artifact_id": "",
+        "reviewed_mapping_artifact_id": "",
+        "coverage_artifact_id": "",
+        "dpp_artifact_id": "",
+        "aas_artifact_id": "",
+        "validation_artifact_id": "",
+        "mapping_cycle_id": "",
+        "review_required": False,
+        "required_unresolved": 0,
+        "missing_requirement_ids": (),
+        "research_attempts": 0,
+        "research_found_source": False,
+        "source_fingerprint": "",
+        "build_deployable": False,
+        "status": "running",
+    }

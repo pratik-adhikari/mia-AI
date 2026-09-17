@@ -7,6 +7,10 @@ from typing import Literal
 from mia_dpp.workflow.state import MiaWorkflowState
 
 
+def after_discovery(state: MiaWorkflowState) -> Literal["process", "wait"]:
+    return "process" if state.get("product_url") and state.get("status") == "running" else "wait"
+
+
 def after_product_lookup(state: MiaWorkflowState) -> Literal["reuse", "extract"]:
     return "reuse" if state.get("cache_hit", False) else "extract"
 
@@ -27,7 +31,13 @@ def after_research(state: MiaWorkflowState) -> Literal["extract", "human"]:
     return "extract" if state.get("research_found_source", False) else "human"
 
 
+def after_product_done(state: MiaWorkflowState) -> Literal["next", "done"]:
+    return "next" if state.get("product_queue") else "done"
+
+
+DISCOVERY_ROUTES = {"process": "resolve_product", "wait": "__end__"}
 PRODUCT_ROUTES = {"reuse": "reuse_existing_dpp", "extract": "extract_evidence"}
 SEMANTIC_ROUTES = {"review": "human_review", "coverage": "coverage"}
 COVERAGE_ROUTES = {"build": "build_aas", "research": "research", "human": "human_value"}
 RESEARCH_ROUTES = {"extract": "extract_evidence", "human": "human_value"}
+DONE_ROUTES = {"next": "advance_product", "done": "__end__"}

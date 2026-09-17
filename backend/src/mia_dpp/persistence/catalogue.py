@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import sqlite3
 import uuid
 from datetime import UTC, datetime
@@ -21,7 +22,9 @@ from mia_dpp.domain.product import (
     RunEvent,
     RunStatus,
 )
+from mia_dpp.domain.mappings import FieldMapping
 from mia_dpp.storage.models import StoredArtifact
+from mia_dpp.tools.mapping.models import MappingKnowledgeEntry, MappingKnowledgeStatus
 from mia_dpp.workflow.identity import canonical_product_url
 
 ModelT = TypeVar("ModelT", bound=BaseModel)
@@ -68,6 +71,10 @@ CREATE TABLE IF NOT EXISTS artifacts(
 );
 CREATE INDEX IF NOT EXISTS artifacts_product ON artifacts(product_id, created_at);
 CREATE INDEX IF NOT EXISTS artifacts_run ON artifacts(run_id, created_at);
+CREATE TABLE IF NOT EXISTS mapping_knowledge(
+    id TEXT PRIMARY KEY,
+    payload TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS dpp_versions(
     id TEXT PRIMARY KEY,
     product_id TEXT NOT NULL,
@@ -269,6 +276,13 @@ class ProductCatalogue:
             (product_id,),
         )
 
+    def list_runs_for_thread(self, thread_id: str) -> tuple[ProductRun, ...]:
+        return self._many(
+            ProductRun,
+            "SELECT payload FROM runs WHERE thread_id=? ORDER BY started_at",
+            (thread_id,),
+        )
+
     def add_message(
         self,
         thread_id: str,
@@ -370,6 +384,138 @@ class ProductCatalogue:
                 (run_id,),
             )
         return self._many(StoredArtifact, "SELECT payload FROM artifacts ORDER BY created_at")
+
+    def remember_mapping_candidate(
+        self,
+        mapping: FieldMapping,
+        *,
+        manufacturer: str | None,
+        domain: str | None,
+        product_family: str | None,
+    ) -> MappingKnowledgeEntry:
+        return self._upsert_mapping_knowledge(
+            mapping,
+            manufacturer=manufacturer,
+            domain=domain,
+            product_family=product_family,
+            status=MappingKnowledgeStatus.CANDIDATE,
+        )
+
+    def remember_mapping_review(
+        self,
+        mapping: FieldMapping,
+        *,
+        decision: str,
+        manufacturer: str | None,
+        domain: str | None,
+        product_family: str | None,
+        comment: str | None,
+    ) -> MappingKnowledgeEntry:
+        status = (
+            MappingKnowledgeStatus.TRUSTED
+            if decision in {"approve", "correct", "keep", "change_target"}
+            else MappingKnowledgeStatus.CANDIDATE
+        )
+        return self._upsert_mapping_knowledge(
+            mapping,
+            manufacturer=manufacturer,
+            domain=domain,
+            product_family=product_family,
+            status=status,
+            decision=decision,
+            comment=comment,
+        )
+
+    def list_mapping_knowledge(self) -> tuple[MappingKnowledgeEntry, ...]:
+        return self._many(
+            MappingKnowledgeEntry,
+            "SELECT payload FROM mapping_knowledge ORDER BY rowid DESC",
+        )
+
+    def relevant_mapping_knowledge(
+        self,
+        source_field: str,
+        *,
+        manufacturer: str | None,
+        domain: str | None,
+        template_keys: tuple[str, ...],
+    ) -> tuple[MappingKnowledgeEntry, ...]:
+        label = self._normalize(source_field)
+        return tuple(
+            item
+            for item in self.list_mapping_knowledge()
+            if item.status is MappingKnowledgeStatus.TRUSTED
+            and item.target_template in template_keys
+            and self._normalize(item.source_field) == label
+            and (not item.domain or not domain or item.domain == domain)
+            and (not item.manufacturer or not manufacturer or item.manufacturer == manufacturer)
+        )
+
+    def _upsert_mapping_knowledge(
+        self,
+        mapping: FieldMapping,
+        *,
+        manufacturer: str | None,
+        domain: str | None,
+        product_family: str | None,
+        status: MappingKnowledgeStatus,
+        decision: str | None = None,
+        comment: str | None = None,
+    ) -> MappingKnowledgeEntry:
+        identity = "\0".join(
+            (
+                self._normalize(mapping.source_field),
+                domain or "",
+                mapping.target.template_key,
+                "/".join(mapping.target.template_path),
+            )
+        )
+        entry_id = "knowledge-" + hashlib.sha256(identity.encode()).hexdigest()[:24]
+        existing = self._one(
+            MappingKnowledgeEntry,
+            "SELECT payload FROM mapping_knowledge WHERE id=?",
+            (entry_id,),
+        )
+        now = _now()
+        values = tuple(
+            dict.fromkeys((*((existing.example_values) if existing else ()), mapping.source_value))
+        )[-5:]
+        comments = tuple(
+            dict.fromkeys(
+                (*((existing.human_comments) if existing else ()), *((comment,) if comment else ()))
+            )
+        )
+        entry = MappingKnowledgeEntry(
+            id=entry_id,
+            source_field=mapping.source_field,
+            example_values=values,
+            target_template=mapping.target.template_key,
+            target_path=mapping.target.template_path,
+            semantic_id=mapping.target.semantic_id.primary_value,
+            manufacturer=manufacturer,
+            domain=domain,
+            product_family=product_family,
+            llm_review_summary=(mapping.llm_review.conclusion if mapping.llm_review else None),
+            human_comments=comments,
+            confirmations=(existing.confirmations if existing else 0)
+            + (decision in {"approve", "keep"}),
+            corrections=(existing.corrections if existing else 0)
+            + (decision in {"correct", "change_target"}),
+            rejections=(existing.rejections if existing else 0) + (decision == "reject"),
+            created_at=existing.created_at if existing else now,
+            updated_at=now,
+            status=(
+                status
+                if status is MappingKnowledgeStatus.TRUSTED
+                else (existing.status if existing else status)
+            ),
+        )
+        self._execute(
+            "INSERT INTO mapping_knowledge(id, payload) VALUES(?, ?) "
+            "ON CONFLICT(id) DO UPDATE SET payload=excluded.payload",
+            (entry.id, entry.model_dump_json()),
+        )
+        return entry
 
     def create_dpp_version(
         self,
@@ -477,6 +623,10 @@ class ProductCatalogue:
         self, model: type[ModelT], sql: str, params: tuple[Any, ...] = ()
     ) -> tuple[ModelT, ...]:
         return tuple(model.model_validate_json(row[0]) for row in self._fetchall(sql, params))
+
+    @staticmethod
+    def _normalize(value: str) -> str:
+        return " ".join(value.casefold().split())
 
     @staticmethod
     def _require(value: ModelT | None, key: str) -> ModelT:

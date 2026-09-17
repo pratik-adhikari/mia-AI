@@ -12,7 +12,7 @@ from mia_dpp.domain.evidence import ProductKnowledgePackage
 from mia_dpp.domain.product import RunStatus
 from mia_dpp.workflow.context import MiaContext
 from mia_dpp.workflow.presentation import evidence_text, product_image_url
-from mia_dpp.workflow.state import MiaWorkflowState
+from mia_dpp.workflow.state import MiaWorkflowState, reset_product_state
 from mia_dpp.workflow.workspace import RunWorkspace
 
 
@@ -164,3 +164,13 @@ def _merge_packages(
         acquired_sources=tuple(sources.values()),
         evidence=tuple(evidence.values()),
     )
+
+
+
+def advance_product(state: MiaWorkflowState) -> dict[str, Any]:
+    """Reset run-scoped fields and move to the next selected product URL."""
+
+    queue = state.get("product_queue", ())
+    if not queue:
+        return {}
+    return reset_product_state(product_url=queue[0], product_queue=queue[1:])

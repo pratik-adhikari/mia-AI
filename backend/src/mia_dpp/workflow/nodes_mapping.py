@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
+from urllib.parse import urlsplit
 
 if TYPE_CHECKING:
     from langgraph.runtime import Runtime
@@ -66,7 +67,28 @@ async def semantic_mapping(
     package = work.load_state("evidence_artifact_id", ProductKnowledgePackage)
     index = work.load_state("targets_artifact_id", TemplateIndex)
     deterministic = work.load_state("deterministic_mapping_artifact_id", MappingResult)
-    semantic_run = await mapper.map(package, index, deterministic, reviewed_knowledge=())
+    product = work.ctx.catalogue.get_product(work.product_id)
+    domain = (urlsplit(product.canonical_url).hostname or "") if product else None
+    knowledge = tuple(
+        {
+            "sourceField": item.source_field,
+            "targetTemplate": item.target_template,
+            "targetPath": list(item.target_path),
+            "semanticId": item.semantic_id,
+            "confirmations": item.confirmations,
+            "humanComments": list(item.human_comments),
+        }
+        for record in package.evidence
+        for item in work.ctx.catalogue.relevant_mapping_knowledge(
+            record.source_label or record.predicate,
+            manufacturer=product.manufacturer if product else None,
+            domain=domain,
+            template_keys=state.get("target_submodels", ("digital_nameplate", "technical_data")),
+        )
+    )
+    semantic_run = await mapper.map(
+        package, index, deterministic, reviewed_knowledge=knowledge
+    )
     result = work.ctx.mapping_review.apply_semantic_run(
         package,
         deterministic,
@@ -157,6 +179,17 @@ async def human_review(
             comment=decision.comment,
         )
         reviewed.append(item)
+        if item.mapping is not None:
+            product = work.ctx.catalogue.get_product(work.product_id)
+            domain = (urlsplit(product.canonical_url).hostname or "") if product else None
+            work.ctx.catalogue.remember_mapping_review(
+                item.mapping,
+                decision=decision.decision,
+                manufacturer=product.manufacturer if product else None,
+                domain=domain,
+                product_family=None,
+                comment=decision.comment,
+            )
 
     evidence_id = work.put_model(
         "evidence/product-knowledge-reviewed.json",

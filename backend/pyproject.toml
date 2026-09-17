@@ -18,9 +18,16 @@ dependencies = [
   "uvicorn[standard]>=0.34,<1",
   "pydantic-ai-slim[openai]==2.43.0",
   "ddgs==9.16.0",
+  "langgraph>=1.2,<2",
+  "langgraph-checkpoint-sqlite>=3,<4",
 ]
 
 [project.optional-dependencies]
+production = [
+  "langgraph-checkpoint-postgres>=3.1,<4",
+  "psycopg[binary,pool]>=3.2,<4",
+  "vercel>=0.11.2,<1",
+]
 pdf = [
   "pdf2aas @ git+https://github.com/eclipse-basyx/basyx-pdf-to-aas.git@0111a119e3d75e447c0de4fbaebb93353d647636",
 ]
