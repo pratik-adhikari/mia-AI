@@ -11,7 +11,6 @@ from mia_dpp.aas.build import build_dpp
 from mia_dpp.domain.evidence import ProductKnowledgePackage
 from mia_dpp.domain.mappings import MappingResult, MappingStatus
 from mia_dpp.domain.product import RunStatus
-from mia_dpp.domain.targets import TemplateIndex
 from mia_dpp.workflow.context import MiaContext
 from mia_dpp.workflow.state import MiaWorkflowState
 from mia_dpp.workflow.workspace import RunWorkspace

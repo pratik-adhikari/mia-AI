@@ -60,7 +60,9 @@ class MiaWorkflowState(TypedDict, total=False):
     decision_summary: str
 
 
-def reset_product_state(*, product_url: str = "", product_queue: tuple[str, ...] = ()) -> dict[str, object]:
+def reset_product_state(
+    *, product_url: str = "", product_queue: tuple[str, ...] = ()
+) -> dict[str, object]:
     """Return the run-scoped reset used when starting another product in a thread."""
 
     return {

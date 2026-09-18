@@ -85,9 +85,10 @@ class DeterministicResearchAgent:
         known_urls: tuple[str, ...],
         manufacturer_domain: str | None,
     ) -> ResearchResult:
-        query = " ".join(
-            item.id_short or item.template_path[-1] for item in missing_requirements[:4]
-        ) or "technical datasheet"
+        query = (
+            " ".join(item.id_short or item.template_path[-1] for item in missing_requirements[:4])
+            or "technical datasheet"
+        )
         candidates = await find_product_sources(
             self._search,
             product_id=product_id,

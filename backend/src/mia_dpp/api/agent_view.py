@@ -45,9 +45,7 @@ class AgentResponseView:
                 else str(state.get("reply") or "MIA persisted the current workflow progress.")
             ),
             status=status,
-            decision_summary=str(
-                state.get("decision_summary") or self._decision_summary(status)
-            ),
+            decision_summary=str(state.get("decision_summary") or self._decision_summary(status)),
             company_candidates=tuple(state.get("company_candidates", ())),
             selected_company=state.get("selected_company"),
             product_candidates=tuple(state.get("product_candidates", ())),
@@ -69,8 +67,7 @@ class AgentResponseView:
         )
         mapping = self._load_optional(
             work,
-            state.get("reviewed_mapping_artifact_id")
-            or state.get("semantic_mapping_artifact_id"),
+            state.get("reviewed_mapping_artifact_id") or state.get("semantic_mapping_artifact_id"),
             MappingResult,
         )
         index = self._load_optional(work, state.get("targets_artifact_id"), TemplateIndex)
@@ -86,9 +83,7 @@ class AgentResponseView:
             evidence=package.evidence if package else (),
             mapping_result=mapping,
             template_index=index,
-            pending_reviews=self._review_items(
-                work, state.get("review_items_artifact_id")
-            ),
+            pending_reviews=self._review_items(work, state.get("review_items_artifact_id")),
             mapping_cycle_id=state.get("mapping_cycle_id") or None,
             aas_artifact_sha256=dpp.artifact_sha256 if dpp else None,
             artifact_ids=tuple(item.id for item in artifacts),
@@ -141,9 +136,9 @@ class AgentResponseView:
                 product_id=str(product_id),
                 summary="The complete source-derived mapping needs one human confirmation.",
             )
-        if state.get("required_unresolved", 0) and state.get(
-            "research_attempts", 0
-        ) >= state.get("max_research_attempts", 2):
+        if state.get("required_unresolved", 0) and state.get("research_attempts", 0) >= state.get(
+            "max_research_attempts", 2
+        ):
             missing = tuple(state.get("missing_requirement_ids", ()))
             return HumanRequest(
                 kind=HumanRequestKind.REQUIREMENT_VALUE,

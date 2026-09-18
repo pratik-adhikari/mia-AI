@@ -38,7 +38,9 @@ async def research(
         f"research/attempt-{attempts}.json",
         {
             "query": result.query,
-            "candidates": [item.model_dump(mode="json", by_alias=True) for item in result.candidates],
+            "candidates": [
+                item.model_dump(mode="json", by_alias=True) for item in result.candidates
+            ],
         },
         derived_from=(work.state_id("coverage_artifact_id"),),
     )

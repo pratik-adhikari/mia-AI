@@ -11,12 +11,11 @@ if TYPE_CHECKING:
 from mia_dpp.aas.requirements import build_template_index
 from mia_dpp.agent.models import AgentReviewRequest, AgentValueRequest
 from mia_dpp.domain.evidence import ProductKnowledgePackage
-from mia_dpp.domain.mappings import CoverageStatus, MappingResult, MappingStatus, SemanticReviewItem
+from mia_dpp.domain.mappings import CoverageStatus, MappingResult, SemanticReviewItem
 from mia_dpp.domain.product import RunStatus
 from mia_dpp.domain.targets import RequirementKind, TemplateIndex
 from mia_dpp.tools.mapping.coverage import coverage as calculate_coverage
 from mia_dpp.tools.mapping.mapper import DeterministicWebsiteMapper
-from mia_dpp.tools.mapping.models import SemanticMappingRun
 from mia_dpp.workflow.context import MiaContext
 from mia_dpp.workflow.state import MiaWorkflowState
 from mia_dpp.workflow.workspace import RunWorkspace
@@ -86,9 +85,7 @@ async def semantic_mapping(
             template_keys=state.get("target_submodels", ("digital_nameplate", "technical_data")),
         )
     )
-    semantic_run = await mapper.map(
-        package, index, deterministic, reviewed_knowledge=knowledge
-    )
+    semantic_run = await mapper.map(package, index, deterministic, reviewed_knowledge=knowledge)
     result = work.ctx.mapping_review.apply_semantic_run(
         package,
         deterministic,
@@ -205,7 +202,9 @@ async def human_review(
         "mapping/review-decisions.json",
         {
             "mappingCycleId": state["mapping_cycle_id"],
-            "decisions": [item.model_dump(mode="json", by_alias=True) for item in request.decisions],
+            "decisions": [
+                item.model_dump(mode="json", by_alias=True) for item in request.decisions
+            ],
             "result": [item.model_dump(mode="json", by_alias=True) for item in reviewed],
         },
         derived_from=(mapping_id,),

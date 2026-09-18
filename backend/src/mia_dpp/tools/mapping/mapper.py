@@ -122,8 +122,10 @@ class DeterministicWebsiteMapper:
         accepted_targets = {source, *_ALIASES.get(source, frozenset())}
         if target not in accepted_targets:
             return False
-        if evidence.unit and requirement.unit and _normalize(evidence.unit) != _normalize(
-            requirement.unit
+        if (
+            evidence.unit
+            and requirement.unit
+            and _normalize(evidence.unit) != _normalize(requirement.unit)
         ):
             return False
         return not requirement.allowed_values or str(evidence.value) in requirement.allowed_values

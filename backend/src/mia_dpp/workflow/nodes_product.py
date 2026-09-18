@@ -91,7 +91,11 @@ async def extract_evidence(
     incoming = await work.ctx.web_tool.extract(state["product_url"])
     incoming = incoming.model_copy(update={"product_id": work.product_id})
     prior_id = state.get("evidence_artifact_id")
-    package = incoming if not prior_id else _merge_packages(work.load(prior_id, ProductKnowledgePackage), incoming)
+    package = (
+        incoming
+        if not prior_id
+        else _merge_packages(work.load(prior_id, ProductKnowledgePackage), incoming)
+    )
 
     raw_ids = tuple(
         work.put_bytes(
@@ -109,7 +113,10 @@ async def extract_evidence(
     )
     source_urls = tuple(
         dict.fromkeys(
-            (*state.get("known_source_urls", ()), *(item.final_url for item in package.acquired_sources))
+            (
+                *state.get("known_source_urls", ()),
+                *(item.final_url for item in package.acquired_sources),
+            )
         )
     )
     image_url = product_image_url(package)
@@ -164,7 +171,6 @@ def _merge_packages(
         acquired_sources=tuple(sources.values()),
         evidence=tuple(evidence.values()),
     )
-
 
 
 def advance_product(state: MiaWorkflowState) -> dict[str, Any]:

@@ -251,9 +251,7 @@ class PydanticBatchSemanticMapper:
             raise RuntimeError(
                 f"semantic mapping used {usage.requests} model requests; exactly one is required"
             )
-        result = BatchSemanticMappingResult.model_validate(
-            response.output.model_dump(mode="json")
-        )
+        result = BatchSemanticMappingResult.model_validate(response.output.model_dump(mode="json"))
         validate_batch_result(result, evidence, targets, hints)
         return SemanticMappingRun(
             evidence=evidence,

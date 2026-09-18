@@ -18,7 +18,9 @@ class VercelBlobArtifactStore:
             try:
                 from vercel.blob import BlobClient  # type: ignore[import-not-found]
             except ImportError as error:  # pragma: no cover - production dependency
-                raise RuntimeError("Vercel Blob requires the production dependency group") from error
+                raise RuntimeError(
+                    "Vercel Blob requires the production dependency group"
+                ) from error
             client = BlobClient(token=token) if token else BlobClient()
         self._client = client
 
