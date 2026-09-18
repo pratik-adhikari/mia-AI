@@ -407,3 +407,86 @@ export interface AgentResponse {
   pendingHumanRequest: HumanRequest | null;
   artifactCount: number;
 }
+
+export type ProductRunStatus =
+  | "running"
+  | "awaiting_human"
+  | "completed"
+  | "incomplete"
+  | "failed"
+  | "reused";
+
+export interface ProductRecord {
+  id: string;
+  canonicalUrl: string;
+  originalUrl: string;
+  manufacturer: string | null;
+  name: string | null;
+  manufacturerProductId: string | null;
+  imageUrl: string | null;
+  imageArtifactId: string | null;
+  createdAt: string;
+  updatedAt: string;
+  lastVerifiedAt: string | null;
+}
+
+export interface ProductRun {
+  id: string;
+  productId: string;
+  threadId: string;
+  status: ProductRunStatus;
+  refreshRequested: boolean;
+  reusedFromRunId: string | null;
+  startedAt: string;
+  finishedAt: string | null;
+  error: string | null;
+  metrics: Record<string, string | number | boolean | null>;
+}
+
+export interface DppVersionRecord {
+  id: string;
+  productId: string;
+  runId: string;
+  version: number;
+  dppArtifactId: string;
+  aasArtifactId: string | null;
+  validationArtifactId: string | null;
+  sourceFingerprint: string | null;
+  deployable: boolean;
+  createdAt: string;
+}
+
+export interface StoredArtifact {
+  id: string;
+  key: string;
+  contentType: string;
+  sha256: string;
+  size: number;
+  storageUri: string;
+  productId: string | null;
+  runId: string | null;
+  derivedFrom: string[];
+  createdAt: string;
+}
+
+export interface ProductLibraryItem {
+  product: ProductRecord;
+  latestDpp: DppVersionRecord | null;
+  runCount: number;
+}
+
+export interface ProductDetail {
+  product: ProductRecord;
+  runs: ProductRun[];
+  dppVersions: DppVersionRecord[];
+  artifacts: StoredArtifact[];
+}
+
+export interface StoredChatMessage {
+  id: string;
+  threadId: string;
+  runId: string | null;
+  role: "user" | "assistant" | "system";
+  content: string;
+  timestamp: string;
+}

@@ -21,6 +21,9 @@ export default function Home() {
             <a href="#graph" className="transition-colors hover:text-ink">
               Integration Graph
             </a>
+            <Link href="/products" className="transition-colors hover:text-ink">
+              Products
+            </Link>
           </nav>
           <Link
             href="/workspace"

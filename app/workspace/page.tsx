@@ -540,6 +540,9 @@ export default function Workspace() {
           </span>
         </div>
         <div className="flex items-center gap-2">
+          <Link href="/products" className="hidden text-[13px] text-muted hover:text-ink sm:inline">
+            Products
+          </Link>
           <span className="rounded-full bg-signalDim px-2.5 py-1 font-mono text-[11px] text-signal">
             Autonomous agent
           </span>
