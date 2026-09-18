@@ -1,5 +1,6 @@
 """Canonical ASGI entrypoint for MIA."""
 
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -16,7 +17,7 @@ def create_app(mia: Mia | None = None) -> FastAPI:
     application = mia or Mia()
 
     @asynccontextmanager
-    async def lifespan(_: FastAPI):
+    async def lifespan(_: FastAPI) -> AsyncIterator[None]:
         try:
             yield
         finally:

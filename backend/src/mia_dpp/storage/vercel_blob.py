@@ -68,7 +68,7 @@ class VercelBlobArtifactStore:
         if isinstance(value, bytes):
             return value
         if hasattr(value, "read"):
-            return value.read()
+            return bytes(value.read())
         if hasattr(value, "content"):
             return bytes(value.content)
         return bytes(value)

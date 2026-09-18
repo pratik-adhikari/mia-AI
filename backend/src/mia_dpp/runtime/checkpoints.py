@@ -2,13 +2,19 @@
 
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from typing import Any
+
+from langgraph.checkpoint.base import BaseCheckpointSaver
 
 from mia_dpp.config import Settings
 
 
 @asynccontextmanager
-async def open_checkpointer(settings: Settings):
+async def open_checkpointer(
+    settings: Settings,
+) -> AsyncIterator[BaseCheckpointSaver[Any]]:
     if settings.database_url:
         from langgraph.checkpoint.postgres.aio import (  # type: ignore[import-not-found]
             AsyncPostgresSaver,
@@ -19,7 +25,7 @@ async def open_checkpointer(settings: Settings):
             yield saver
         return
 
-    from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver  # type: ignore[import-not-found]
+    from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 
     settings.thread_store_path.parent.mkdir(parents=True, exist_ok=True)
     async with AsyncSqliteSaver.from_conn_string(str(settings.thread_store_path)) as saver:

@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Iterator
+from typing import Any
 from urllib.parse import urljoin
 
 from bs4 import BeautifulSoup
@@ -52,7 +54,7 @@ def product_image_url(package: ProductKnowledgePackage) -> str | None:
     return None
 
 
-def _json_objects(value: object):
+def _json_objects(value: object) -> Iterator[dict[str, Any]]:
     if isinstance(value, dict):
         yield value
         graph = value.get("@graph")

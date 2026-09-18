@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Hashable
 from typing import Literal
 
 from mia_dpp.workflow.state import MiaWorkflowState
@@ -35,9 +36,13 @@ def after_product_done(state: MiaWorkflowState) -> Literal["next", "done"]:
     return "next" if state.get("product_queue") else "done"
 
 
-DISCOVERY_ROUTES = {"process": "resolve_product", "wait": "__end__"}
-PRODUCT_ROUTES = {"reuse": "reuse_existing_dpp", "extract": "extract_evidence"}
-SEMANTIC_ROUTES = {"review": "human_review", "coverage": "coverage"}
-COVERAGE_ROUTES = {"build": "build_aas", "research": "research", "human": "human_value"}
-RESEARCH_ROUTES = {"extract": "extract_evidence", "human": "human_value"}
-DONE_ROUTES = {"next": "advance_product", "done": "__end__"}
+DISCOVERY_ROUTES: dict[Hashable, str] = {"process": "resolve_product", "wait": "__end__"}
+PRODUCT_ROUTES: dict[Hashable, str] = {"reuse": "reuse_existing_dpp", "extract": "extract_evidence"}
+SEMANTIC_ROUTES: dict[Hashable, str] = {"review": "human_review", "coverage": "coverage"}
+COVERAGE_ROUTES: dict[Hashable, str] = {
+    "build": "build_aas",
+    "research": "research",
+    "human": "human_value",
+}
+RESEARCH_ROUTES: dict[Hashable, str] = {"extract": "extract_evidence", "human": "human_value"}
+DONE_ROUTES: dict[Hashable, str] = {"next": "advance_product", "done": "__end__"}

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 from langgraph.graph import START, StateGraph
 
 from mia_dpp.workflow.context import MiaContext
@@ -39,7 +41,7 @@ from mia_dpp.workflow.routing import (
 from mia_dpp.workflow.state import MiaWorkflowState
 
 
-def create_graph(checkpointer):
+def create_graph(checkpointer: Any) -> Any:
     graph = StateGraph(MiaWorkflowState, context_schema=MiaContext)
     for node in (
         discover_product,
