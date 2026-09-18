@@ -61,11 +61,7 @@ class HumanRequest(WireModel):
 
 
 class AgentTraceEvent(WireModel):
-    """Safe activity record shown by the frontend.
-
-    Tools append these events to ``MiaState`` when work starts, completes, or
-    fails. They summarize observable actions and never contain hidden reasoning.
-    """
+    """Safe persisted workflow activity shown by the frontend."""
 
     id: str
     thread_id: str
@@ -83,11 +79,7 @@ class AgentTraceEvent(WireModel):
 
 
 class ProductWork(WireModel):
-    """All trusted working data accumulated for one selected product.
-
-    Agent tools update its sources, evidence resolution, pending reviews, and
-    artifact identity as the autonomous loop progresses.
-    """
+    """Compatibility view of durable graph state for one selected product."""
 
     product_id: str
     status: ProductStatus = ProductStatus.QUEUED
@@ -129,28 +121,6 @@ class ProductWork(WireModel):
         if package is None or self.mapping_result is None or self.template_index is None:
             return None
         return coverage(package, self.template_index, mapping_result=self.mapping_result)
-
-
-class MiaState(WireModel):
-    """Trusted workflow state for one DPP job/thread.
-
-    Tools mutate this state as companies, products, evidence, reviews, and
-    artifacts are discovered. PydanticAI message history is stored separately:
-    it records the conversation, while this model records the job's facts.
-    """
-
-    thread_id: str
-    user_goal: str = ""
-    company_candidates: tuple[CompanyCandidate, ...] = ()
-    selected_company: CompanyCandidate | None = None
-    product_candidates: tuple[ProductCandidate, ...] = ()
-    selected_product_ids: tuple[str, ...] = ()
-    current_product_id: str | None = None
-    product_queue: tuple[str, ...] = ()
-    products: dict[str, ProductWork] = Field(default_factory=dict)
-    target_submodels: tuple[str, ...] = ("digital_nameplate", "technical_data")
-    status: AgentStatus = AgentStatus.RUNNING
-    pending_human_request: HumanRequest | None = None
 
 
 class AgentRunOutput(WireModel):
