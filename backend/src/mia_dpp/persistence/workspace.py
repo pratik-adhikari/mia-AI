@@ -11,6 +11,7 @@ from mia_dpp.agent.models import AgentTraceEvent, TraceStatus
 from mia_dpp.persistence.catalogue import ProductCatalogue
 from mia_dpp.storage.base import ArtifactStore
 from mia_dpp.storage.models import ArtifactKind, StoredArtifact, WorkspaceArtifact
+from mia_dpp.tools.mapping.models import MappingKnowledgeEntry
 
 
 class WorkspaceView:
@@ -61,10 +62,16 @@ class WorkspaceView:
         with zipfile.ZipFile(output, "w", zipfile.ZIP_DEFLATED) as archive:
             archive.writestr(
                 "manifest.json",
-                json.dumps([self._view(item).model_dump(mode="json") for item in artifacts], indent=2),
+                json.dumps(
+                    [self._view(item).model_dump(mode="json") for item in artifacts],
+                    indent=2,
+                ),
             )
+            names: set[str] = set()
             for artifact in artifacts:
-                archive.writestr(artifact.key, self._artifacts.get(artifact))
+                name = self._archive_name(artifact, names)
+                names.add(name)
+                archive.writestr(name, self._artifacts.get(artifact))
         return output.getvalue()
 
     def combined_export(self, thread_id: str) -> dict[str, object]:
@@ -78,16 +85,12 @@ class WorkspaceView:
             "jsonArtifacts": contents,
         }
 
-    def list_mapping_knowledge(self):
+    def list_mapping_knowledge(self) -> tuple[MappingKnowledgeEntry, ...]:
         return self._catalogue.list_mapping_knowledge()
 
     def _stored(self, thread_id: str) -> tuple[StoredArtifact, ...]:
-        run_ids = {run.id for run in self._catalogue.list_runs_for_thread(thread_id)}
-        return tuple(
-            item
-            for item in self._catalogue.list_artifacts()
-            if item.run_id in run_ids
-        )
+        run_ids = tuple(run.id for run in self._catalogue.list_runs_for_thread(thread_id))
+        return self._catalogue.list_artifacts_for_runs(run_ids)
 
     @staticmethod
     def _view(artifact: StoredArtifact) -> WorkspaceArtifact:
@@ -122,6 +125,19 @@ class WorkspaceView:
         if key.startswith("research/"):
             return ArtifactKind.SEARCH
         return ArtifactKind.RAW
+
+    @staticmethod
+    def _archive_name(artifact: StoredArtifact, used: set[str]) -> str:
+        parts = tuple(
+            part for part in PurePosixPath(artifact.key).parts if part not in {"", ".", "..", "/"}
+        )
+        path = PurePosixPath(*parts) if parts else PurePosixPath(artifact.id)
+        name = path.as_posix()
+        if name not in used:
+            return name
+        suffix = path.suffix
+        stem = path.name.removesuffix(suffix)
+        return path.with_name(f"{stem}-{artifact.id[:17]}{suffix}").as_posix()
 
     @staticmethod
     def _scalar(value: object) -> str | int | float | bool | None:

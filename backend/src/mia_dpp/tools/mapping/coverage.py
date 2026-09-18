@@ -74,17 +74,8 @@ def coverage(
         mapping_result,
         matches,
     )
-    excluded = (
-        set(mapping_result.irrelevant_evidence_ids)
-        | set(mapping_result.rejected_evidence_ids)
-        if mapping_result is not None
-        else set()
-    )
-    _add_label_matches(
-        tuple(item for item in package.evidence if item.id not in excluded),
-        inventory.requirements,
-        matches,
-    )
+    if mapping_result is None:
+        _add_label_matches(package.evidence, inventory.requirements, matches)
 
     candidate_concepts: dict[str, set[str]] = defaultdict(set)
     for (requirement_id, evidence_id), match in matches.items():

@@ -1,5 +1,7 @@
 """Legacy workspace API views backed by the new durable stores."""
 
+import zipfile
+from io import BytesIO
 from pathlib import Path
 
 from mia_dpp.persistence.catalogue import ProductCatalogue
@@ -52,3 +54,28 @@ def test_workspace_view_isolates_threads(tmp_path: Path) -> None:
     workspace = WorkspaceView(catalogue, storage)
     assert [item.product_id for item in workspace.list_artifacts("thread-first")] == [first.id]
     assert [item.product_id for item in workspace.list_artifacts("thread-second")] == [second.id]
+
+
+def test_workspace_zip_keeps_repeated_logical_artifact_names(tmp_path: Path) -> None:
+    catalogue = ProductCatalogue(tmp_path / "catalogue.sqlite3")
+    storage = LocalArtifactStore(tmp_path / "artifacts")
+    product, _ = catalogue.get_or_create_product("https://example.com/versioned")
+    for index in range(2):
+        run = catalogue.start_run(product.id, "thread-versioned")
+        artifact = storage.put(
+            "mapping/coverage.json",
+            f'{{"attempt":{index}}}'.encode(),
+            content_type="application/json",
+            product_id=product.id,
+            run_id=run.id,
+        )
+        catalogue.register_artifact(artifact)
+
+    archive = zipfile.ZipFile(
+        BytesIO(WorkspaceView(catalogue, storage).export_zip("thread-versioned"))
+    )
+    names = archive.namelist()
+
+    assert len(names) == len(set(names)) == 3
+    assert names[0] == "manifest.json"
+    assert {archive.read(name) for name in names[1:]} == {b'{"attempt":0}', b'{"attempt":1}'}

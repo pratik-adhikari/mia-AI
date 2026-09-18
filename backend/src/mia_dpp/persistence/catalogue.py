@@ -9,10 +9,11 @@ from datetime import UTC, datetime
 from pathlib import Path
 from threading import Lock
 from types import TracebackType
-from typing import Any, Protocol, TypeVar
+from typing import Any, Protocol, TypeVar, cast
 
 from pydantic import BaseModel
 
+from mia_dpp.domain.mappings import FieldMapping
 from mia_dpp.domain.product import (
     ChatMessage,
     DppVersion,
@@ -22,7 +23,6 @@ from mia_dpp.domain.product import (
     RunEvent,
     RunStatus,
 )
-from mia_dpp.domain.mappings import FieldMapping
 from mia_dpp.storage.models import StoredArtifact
 from mia_dpp.tools.mapping.models import MappingKnowledgeEntry, MappingKnowledgeStatus
 from mia_dpp.workflow.identity import canonical_product_url
@@ -100,9 +100,9 @@ def _new_id(prefix: str) -> str:
 class _Cursor(Protocol):
     rowcount: int
 
-    def fetchone(self): ...
+    def fetchone(self) -> tuple[Any, ...] | None: ...
 
-    def fetchall(self): ...
+    def fetchall(self) -> list[tuple[Any, ...]]: ...
 
 
 class _Connection:
@@ -129,7 +129,7 @@ class _Connection:
     def execute(self, sql: str, params: tuple[Any, ...] = ()) -> _Cursor:
         if self._postgres:
             sql = sql.replace("?", "%s")
-        return self._raw.execute(sql, params)
+        return cast(_Cursor, self._raw.execute(sql, params))
 
     def executescript(self, script: str) -> None:
         if not self._postgres:
@@ -145,9 +145,7 @@ class ProductCatalogue:
 
     def __init__(self, location: Path | str) -> None:
         raw = str(location)
-        self._database_url = (
-            raw if raw.startswith(("postgres://", "postgresql://")) else None
-        )
+        self._database_url = raw if raw.startswith(("postgres://", "postgresql://")) else None
         self._path = None if self._database_url else Path(location)
         self._lock = Lock()
         self._ready = False
@@ -158,23 +156,22 @@ class ProductCatalogue:
 
     def get_or_create_product(self, url: str) -> tuple[ProductRecord, bool]:
         canonical = canonical_product_url(url)
-        found = self._one(
-            ProductRecord,
-            "SELECT payload FROM products WHERE canonical_url=?",
-            (canonical,),
-        )
-        if found is not None:
-            return found, False
         product = ProductRecord(
             id=_new_id("product"),
             canonical_url=canonical,
             original_url=url,
         )
-        self._execute(
-            "INSERT INTO products(id, canonical_url, payload, updated_at) VALUES(?,?,?,?)",
+        inserted = self._execute(
+            "INSERT INTO products(id, canonical_url, payload, updated_at) VALUES(?,?,?,?) "
+            "ON CONFLICT(canonical_url) DO NOTHING",
             (product.id, canonical, product.model_dump_json(), _now().isoformat()),
         )
-        return product, True
+        if inserted == 1:
+            return product, True
+        found = self.find_product_by_url(canonical)
+        if found is None:  # pragma: no cover - a database invariant failed
+            raise RuntimeError("product insert conflicted but no existing product was found")
+        return found, False
 
     def update_product(self, product: ProductRecord) -> ProductRecord:
         product = product.model_copy(update={"updated_at": _now()})
@@ -313,9 +310,23 @@ class ProductCatalogue:
     def list_messages(self, thread_id: str) -> tuple[ChatMessage, ...]:
         return self._many(
             ChatMessage,
-            "SELECT payload FROM messages WHERE thread_id=? ORDER BY timestamp, rowid",
+            "SELECT payload FROM messages WHERE thread_id=? ORDER BY timestamp, id",
             (thread_id,),
         )
+
+    def assign_message_to_run(self, message_id: str, run_id: str) -> ChatMessage:
+        message = self._require(
+            self._one(ChatMessage, "SELECT payload FROM messages WHERE id=?", (message_id,)),
+            message_id,
+        )
+        message = message.model_copy(update={"run_id": run_id})
+        changed = self._execute(
+            "UPDATE messages SET run_id=?, payload=? WHERE id=?",
+            (run_id, message.model_dump_json(), message_id),
+        )
+        if changed != 1:  # pragma: no cover - message was removed concurrently
+            raise KeyError(message_id)
+        return message
 
     def add_event(
         self,
@@ -341,7 +352,7 @@ class ProductCatalogue:
     def list_events(self, run_id: str) -> tuple[RunEvent, ...]:
         return self._many(
             RunEvent,
-            "SELECT payload FROM events WHERE run_id=? ORDER BY timestamp, rowid",
+            "SELECT payload FROM events WHERE run_id=? ORDER BY timestamp, id",
             (run_id,),
         )
 
@@ -384,6 +395,19 @@ class ProductCatalogue:
                 (run_id,),
             )
         return self._many(StoredArtifact, "SELECT payload FROM artifacts ORDER BY created_at")
+
+    def list_artifacts_for_runs(self, run_ids: tuple[str, ...]) -> tuple[StoredArtifact, ...]:
+        """Return artifacts for a thread's runs without scanning the global manifest."""
+
+        if not run_ids:
+            return ()
+        placeholders = ",".join("?" for _ in run_ids)
+        return self._many(
+            StoredArtifact,
+            f"SELECT payload FROM artifacts WHERE run_id IN ({placeholders}) "
+            "ORDER BY created_at, id",
+            run_ids,
+        )
 
     def remember_mapping_candidate(
         self,
@@ -429,7 +453,7 @@ class ProductCatalogue:
     def list_mapping_knowledge(self) -> tuple[MappingKnowledgeEntry, ...]:
         return self._many(
             MappingKnowledgeEntry,
-            "SELECT payload FROM mapping_knowledge ORDER BY rowid DESC",
+            "SELECT payload FROM mapping_knowledge ORDER BY id DESC",
         )
 
     def relevant_mapping_knowledge(
@@ -528,35 +552,52 @@ class ProductCatalogue:
         source_fingerprint: str | None = None,
         deployable: bool,
     ) -> DppVersion:
-        row = self._fetchone(
-            "SELECT COALESCE(MAX(version), 0) FROM dpp_versions WHERE product_id=?",
-            (product_id,),
-        )
-        version = int(row[0]) + 1
-        record = DppVersion(
-            id=_new_id("dpp"),
-            product_id=product_id,
-            run_id=run_id,
-            version=version,
-            dpp_artifact_id=dpp_artifact_id,
-            aas_artifact_id=aas_artifact_id,
-            validation_artifact_id=validation_artifact_id,
-            source_fingerprint=source_fingerprint,
-            deployable=deployable,
-        )
-        self._execute(
-            "INSERT INTO dpp_versions(id, product_id, run_id, version, payload, created_at) "
-            "VALUES(?,?,?,?,?,?)",
-            (
-                record.id,
-                product_id,
-                run_id,
-                version,
-                record.model_dump_json(),
-                record.created_at.isoformat(),
-            ),
-        )
-        return record
+        for _ in range(3):
+            try:
+                with self._connect() as db:
+                    if self._database_url is None:
+                        db.execute("BEGIN IMMEDIATE")
+                    else:
+                        db.execute(
+                            "SELECT id FROM products WHERE id=? FOR UPDATE",
+                            (product_id,),
+                        )
+                    row = db.execute(
+                        "SELECT COALESCE(MAX(version), 0) FROM dpp_versions WHERE product_id=?",
+                        (product_id,),
+                    ).fetchone()
+                    if row is None:  # pragma: no cover - aggregate queries return one row
+                        raise RuntimeError("database did not return a DPP version")
+                    version = int(row[0]) + 1
+                    record = DppVersion(
+                        id=_new_id("dpp"),
+                        product_id=product_id,
+                        run_id=run_id,
+                        version=version,
+                        dpp_artifact_id=dpp_artifact_id,
+                        aas_artifact_id=aas_artifact_id,
+                        validation_artifact_id=validation_artifact_id,
+                        source_fingerprint=source_fingerprint,
+                        deployable=deployable,
+                    )
+                    db.execute(
+                        "INSERT INTO dpp_versions"
+                        "(id, product_id, run_id, version, payload, created_at) "
+                        "VALUES(?,?,?,?,?,?)",
+                        (
+                            record.id,
+                            product_id,
+                            run_id,
+                            version,
+                            record.model_dump_json(),
+                            record.created_at.isoformat(),
+                        ),
+                    )
+                return record
+            except Exception as error:
+                if not self._is_unique_violation(error):
+                    raise
+        raise RuntimeError("could not allocate a unique DPP version after three attempts")
 
     def list_dpp_versions(self, product_id: str) -> tuple[DppVersion, ...]:
         return self._many(
@@ -597,15 +638,20 @@ class ProductCatalogue:
                 self._path.parent.mkdir(parents=True, exist_ok=True)
             with self._raw_connect() as db:
                 if self._database_url is None:
-                    db.execute("PRAGMA journal_mode=WAL")
+                    try:
+                        db.execute("PRAGMA journal_mode=WAL")
+                    except sqlite3.OperationalError as error:
+                        # Another process may be enabling WAL for this database.
+                        if "database is locked" not in str(error):
+                            raise
                 db.executescript(SCHEMA)
             self._ready = True
 
-    def _fetchone(self, sql: str, params: tuple[Any, ...] = ()):
+    def _fetchone(self, sql: str, params: tuple[Any, ...] = ()) -> tuple[Any, ...] | None:
         with self._connect() as db:
             return db.execute(sql, params).fetchone()
 
-    def _fetchall(self, sql: str, params: tuple[Any, ...] = ()):
+    def _fetchall(self, sql: str, params: tuple[Any, ...] = ()) -> list[tuple[Any, ...]]:
         with self._connect() as db:
             return db.execute(sql, params).fetchall()
 
@@ -613,9 +659,7 @@ class ProductCatalogue:
         with self._connect() as db:
             return db.execute(sql, params).rowcount
 
-    def _one(
-        self, model: type[ModelT], sql: str, params: tuple[Any, ...] = ()
-    ) -> ModelT | None:
+    def _one(self, model: type[ModelT], sql: str, params: tuple[Any, ...] = ()) -> ModelT | None:
         row = self._fetchone(sql, params)
         return model.model_validate_json(row[0]) if row else None
 
@@ -627,6 +671,12 @@ class ProductCatalogue:
     @staticmethod
     def _normalize(value: str) -> str:
         return " ".join(value.casefold().split())
+
+    @staticmethod
+    def _is_unique_violation(error: Exception) -> bool:
+        if isinstance(error, sqlite3.IntegrityError):
+            return "UNIQUE constraint failed" in str(error)
+        return getattr(error, "sqlstate", None) == "23505"
 
     @staticmethod
     def _require(value: ModelT | None, key: str) -> ModelT:

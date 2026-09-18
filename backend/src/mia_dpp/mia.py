@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import uuid
-from typing import Any
+from typing import Any, cast
 
 from pydantic_ai.models import Model
 from pydantic_ai.models.openrouter import OpenRouterModel
@@ -22,7 +22,7 @@ from mia_dpp.agents.research import DeterministicResearchAgent, PydanticResearch
 from mia_dpp.agents.semantic_mapping import PydanticBatchSemanticMapper
 from mia_dpp.api.agent_view import AgentResponseView
 from mia_dpp.config import Settings
-from mia_dpp.domain.product import MessageRole
+from mia_dpp.domain.product import MessageRole, ProductRun, RunStatus
 from mia_dpp.integrations.crawl4ai import Crawl4AIPageLoader
 from mia_dpp.integrations.ddgs import DdgsSearchProvider
 from mia_dpp.persistence.workspace import WorkspaceView
@@ -34,7 +34,6 @@ from mia_dpp.tools.search import SearchProvider
 from mia_dpp.tools.web.tool import WebExtractionTool
 from mia_dpp.workflow.context import MiaContext
 from mia_dpp.workflow.graph import create_graph
-from mia_dpp.workflow.state import MiaWorkflowState
 
 
 class Mia:
@@ -92,11 +91,14 @@ class Mia:
         graph = await self._ensure_graph()
         config = self._config(thread_id)
         snapshot = await graph.aget_state(config)
-        if self._snapshot_interrupt(snapshot) is not None:
-            return self._response_view.build(dict(snapshot.values), trace_offset=0)
-
         trace_offset = len(self.store.list_events(thread_id))
-        self.context.catalogue.add_message(thread_id, MessageRole.USER, request.message)
+        message = self.context.catalogue.add_message(thread_id, MessageRole.USER, request.message)
+        if self._snapshot_interrupt(snapshot) is not None:
+            self._assign_message_to_latest_run(message.id, thread_id)
+            response = self._response_view.build(dict(snapshot.values), trace_offset=trace_offset)
+            self._record_assistant(response)
+            return response
+
         initial = not bool(snapshot.values)
         update: dict[str, Any] = {
             "thread_id": thread_id,
@@ -122,7 +124,13 @@ class Mia:
             self._record_assistant(response)
             return response
 
-        result = await graph.ainvoke(update, config=config, context=self.context)
+        try:
+            result = await graph.ainvoke(update, config=config, context=self.context)
+        except Exception as error:
+            self._assign_message_to_latest_run(message.id, thread_id)
+            self._record_failure(thread_id, error)
+            raise
+        self._assign_message_to_latest_run(message.id, thread_id)
         response = self._response_view.build(dict(result), trace_offset=trace_offset)
         self._record_assistant(response)
         return response
@@ -159,17 +167,25 @@ class Mia:
         graph = await self._ensure_graph()
         config = self._config(thread_id)
         trace_offset = len(self.store.list_events(thread_id))
-        self.context.catalogue.add_message(thread_id, MessageRole.USER, message)
-        result = await graph.ainvoke(
-            Command(resume=payload),
-            config=config,
-            context=self.context,
-        )
+        user_message = self.context.catalogue.add_message(thread_id, MessageRole.USER, message)
+        self._assign_message_to_latest_run(user_message.id, thread_id)
+        try:
+            result = await graph.ainvoke(
+                Command(resume=payload),
+                config=config,
+                context=self.context,
+            )
+        except ValueError as error:
+            self._record_rejected_input(thread_id, error)
+            raise
+        except Exception as error:
+            self._record_failure(thread_id, error)
+            raise
         response = self._response_view.build(dict(result), trace_offset=trace_offset)
         self._record_assistant(response)
         return response
 
-    async def _ensure_graph(self):
+    async def _ensure_graph(self) -> Any:
         if self._graph is None:
             self._checkpoint_cm = open_checkpointer(self.settings)
             checkpointer = await self._checkpoint_cm.__aenter__()
@@ -189,20 +205,63 @@ class Mia:
         )
 
     def _record_assistant(self, response: AgentResponse) -> None:
-        runs = self.context.catalogue.list_runs_for_thread(response.thread_id)
+        run = self._latest_run(response.thread_id)
         self.context.catalogue.add_message(
             response.thread_id,
             MessageRole.ASSISTANT,
             response.reply,
-            run_id=runs[-1].id if runs else None,
+            run_id=run.id if run else None,
         )
+
+    def _assign_message_to_latest_run(self, message_id: str, thread_id: str) -> None:
+        run = self._latest_run(thread_id)
+        if run is not None:
+            self.context.catalogue.assign_message_to_run(message_id, run.id)
+
+    def _record_failure(self, thread_id: str, error: Exception) -> None:
+        run = self._latest_active_run(thread_id)
+        if run is None:
+            return
+        detail = str(error) or type(error).__name__
+        self.context.catalogue.add_event(
+            run.id,
+            "workflow.failed",
+            "Workflow execution failed.",
+            metadata={"error": detail, "errorType": type(error).__name__},
+        )
+        self.context.catalogue.finish_run(run.id, RunStatus.FAILED, error=detail)
+
+    def _record_rejected_input(self, thread_id: str, error: ValueError) -> None:
+        run = self._latest_active_run(thread_id)
+        if run is not None:
+            self.context.catalogue.add_event(
+                run.id,
+                "workflow.input_rejected",
+                "Rejected invalid human input without advancing the workflow.",
+                metadata={"error": str(error)},
+            )
+
+    def _latest_active_run(self, thread_id: str) -> ProductRun | None:
+        active = {RunStatus.RUNNING, RunStatus.AWAITING_HUMAN}
+        return next(
+            (
+                run
+                for run in reversed(self.context.catalogue.list_runs_for_thread(thread_id))
+                if run.status in active
+            ),
+            None,
+        )
+
+    def _latest_run(self, thread_id: str) -> ProductRun | None:
+        runs = self.context.catalogue.list_runs_for_thread(thread_id)
+        return runs[-1] if runs else None
 
     @staticmethod
     def _snapshot_interrupt(snapshot: Any) -> object | None:
         for task in getattr(snapshot, "tasks", ()):
             interrupts = getattr(task, "interrupts", ())
             if interrupts:
-                return interrupts[0]
+                return cast(object, interrupts[0])
         return None
 
     @staticmethod
