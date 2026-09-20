@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from enum import StrEnum
+from typing import Literal
 
 from pydantic import AwareDatetime, Field, JsonValue, model_validator
 
@@ -78,6 +79,10 @@ class ProductKnowledgePackage(WireModel):
     product_name: str = Field(min_length=1)
     source_artifact_ids: tuple[str, ...] = ()
     acquired_sources: tuple[AcquiredSource, ...] = ()
+    # Optional exploration failures remain auditable without discarding valid seed evidence.
+    source_failures: tuple[SourceAcquisitionFailure, ...] = ()
+    # Retain the readable hierarchy separately from flattened EvidenceRecords for audits/UI use.
+    extracted_pages: tuple[ExtractedProductPage, ...] = ()
     evidence: tuple[EvidenceRecord, ...]
 
     @model_validator(mode="after")
@@ -96,6 +101,77 @@ class AcquiredSource(WireModel):
     rendered_html: str = Field(min_length=1)
     content_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     acquired_at: AwareDatetime
+
+
+class SourceAcquisitionFailure(WireModel):
+    """One non-fatal failure while acquiring an LLM-selected secondary source."""
+
+    url: str = Field(min_length=1)
+    error: str = Field(min_length=1, max_length=2000)
+
+
+class ExtractedProperty(WireModel):
+    """One human-readable label/value pair before evidence normalization."""
+
+    label: str = Field(
+        min_length=1,
+        max_length=200,
+        description="The visible fact or bullet label, without its parent heading.",
+    )
+    value: str = Field(
+        min_length=1,
+        max_length=4000,
+        description="The visible value or explanation, without repeating the label.",
+    )
+    unit: str | None = Field(default=None, max_length=100)
+    source_excerpt: str | None = Field(default=None, max_length=1000)
+
+
+class ExtractedSection(WireModel):
+    """Facts grouped by their visible outer-to-inner page hierarchy."""
+
+    context_path: tuple[str, ...] = Field(
+        description=(
+            "Complete outer-to-inner visible hierarchy. Create a separate section for every "
+            "heading/subheading path, including empty product tabs."
+        )
+    )
+    properties: tuple[ExtractedProperty, ...] = ()
+
+
+class ExtractedAsset(WireModel):
+    """A source-observed image or document and its local audit reference."""
+
+    url: str = Field(
+        min_length=1,
+        description="Exact image or document URL copied verbatim from the rendered page.",
+    )
+    kind: Literal["image", "document"]
+    label: str = Field(min_length=1, max_length=300)
+    context_path: tuple[str, ...] = ()
+    # The workflow assigns image roles after downloads reveal which candidate is usable/largest.
+    role: Literal["main", "supporting"] | None = None
+    # This remains unset during extraction and is filled only after durable artifact storage.
+    workspace_path: str | None = None
+
+
+class ExtractedProductPage(WireModel):
+    """Strict, source-neutral representation shared by Crawl4AI and the HTML fallback."""
+
+    source_url: str = Field(min_length=1)
+    product_name: str = Field(min_length=1, max_length=300)
+    product_type: str | None = Field(
+        default=None,
+        max_length=300,
+        description="Visible product category/type directly beneath or beside the product name.",
+    )
+    summary: str | None = Field(
+        default=None,
+        max_length=2000,
+        description="Visible introductory product description copied faithfully.",
+    )
+    sections: tuple[ExtractedSection, ...]
+    assets: tuple[ExtractedAsset, ...] = ()
 
 
 class DocumentReference(WireModel):

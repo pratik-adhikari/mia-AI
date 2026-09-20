@@ -10,7 +10,14 @@ from typing import Any
 
 from bs4 import BeautifulSoup, Tag
 
-from mia_dpp.domain.evidence import EvidenceRecord, EvidenceStatus, SourceLocation
+from mia_dpp.domain.evidence import (
+    EvidenceRecord,
+    EvidenceStatus,
+    ExtractedProductPage,
+    ExtractedProperty,
+    ExtractedSection,
+    SourceLocation,
+)
 from mia_dpp.tools.web.models import RenderedPage
 
 EXTRACTOR_NAME = "mia-website-fact-extractor"
@@ -33,6 +40,79 @@ class WebsiteFactExtractor:
     """Retain useful labelled facts found in common product-page structures."""
 
     def extract(self, source: RenderedPage) -> tuple[tuple[EvidenceRecord, ...], str]:
+        facts, product_name, _ = self.extract_structured(source)
+        return facts, product_name
+
+    def extract_structured(
+        self, source: RenderedPage
+    ) -> tuple[tuple[EvidenceRecord, ...], str, ExtractedProductPage | None]:
+        """Return canonical evidence plus the readable hierarchy used to produce it.
+
+        Crawl4AI's strict schema is preferred when configured. The existing deterministic HTML
+        parser remains available for local/offline diagnostics and produces the same domain type.
+        """
+
+        if source.extracted_content:
+            # Normalize exactly one validated page shape instead of interpreting arbitrary JSON.
+            page = self._validated_page(source)
+            facts: list[EvidenceRecord] = []
+            for label, value in (
+                ("Product name", page.product_name),
+                ("Product type", page.product_type),
+                ("Description", page.summary),
+            ):
+                if value:
+                    self._append(
+                        facts,
+                        source,
+                        label=label,
+                        value=value,
+                        method="crawl4ai_schema",
+                        location=SourceLocation(excerpt=value[:1000]),
+                    )
+            for section in page.sections:
+                context = tuple(part.strip() for part in section.context_path if part.strip())
+                for prop in section.properties:
+                    self._append(
+                        facts,
+                        source,
+                        label=prop.label,
+                        value=prop.value,
+                        unit=prop.unit,
+                        method="crawl4ai_schema",
+                        context_path=context,
+                        location=SourceLocation(
+                            excerpt=(prop.source_excerpt or f"{prop.label}: {prop.value}")[:1000]
+                        ),
+                    )
+            return tuple(self._deduplicate(facts)), page.product_name, page
+
+        # Project legacy deterministic facts into the same hierarchy so downstream storage/UI
+        # never needs to know which extraction mode produced the page.
+        fallback_facts, product_name = self._extract_html(source)
+        grouped: dict[tuple[str, ...], list[ExtractedProperty]] = {}
+        for fact in fallback_facts:
+            if fact.source_label and isinstance(fact.value, (str, int, float, bool)):
+                grouped.setdefault(fact.context_path, []).append(
+                    ExtractedProperty(
+                        label=fact.source_label,
+                        value=str(fact.value),
+                        unit=fact.unit,
+                        source_excerpt=fact.source_location.excerpt,
+                    )
+                )
+        page = ExtractedProductPage(
+            source_url=source.url,
+            product_name=product_name,
+            sections=tuple(
+                ExtractedSection(context_path=context, properties=tuple(properties))
+                for context, properties in grouped.items()
+            ),
+            assets=source.observed_assets,
+        )
+        return fallback_facts, product_name, page
+
+    def _extract_html(self, source: RenderedPage) -> tuple[tuple[EvidenceRecord, ...], str]:
         """Extract normalized, provenance-rich evidence directly from one page."""
 
         soup = BeautifulSoup(source.html, "html.parser")
@@ -127,6 +207,38 @@ class WebsiteFactExtractor:
         facts = self._deduplicate(facts)
         product_name = self._first_value(facts, "Product name", "Model", "Page title")
         return tuple(facts), (product_name or source.url)[:120]
+
+    @staticmethod
+    def _validated_page(source: RenderedPage) -> ExtractedProductPage:
+        """Reject malformed output and asset URLs not grounded in retained source content."""
+
+        payload = json.loads(source.extracted_content or "")
+        if not isinstance(payload, list) or len(payload) != 1 or not isinstance(payload[0], dict):
+            raise ValueError("Crawl4AI structured extraction must return exactly one product page")
+        page_data = {key: value for key, value in payload[0].items() if key != "error"}
+        # Some providers still emit schema-shaped placeholders with blank label/value strings.
+        # They contain no evidence, so remove only those placeholders before strict validation.
+        for section in page_data.get("sections", []):
+            if isinstance(section, dict) and isinstance(section.get("properties"), list):
+                section["properties"] = [
+                    item
+                    for item in section["properties"]
+                    if isinstance(item, dict)
+                    and str(item.get("label") or "").strip()
+                    and str(item.get("value") or "").strip()
+                ]
+        page_data["sourceUrl"] = source.url
+        page = ExtractedProductPage.model_validate(page_data)
+        unknown_assets = [
+            asset.url
+            for asset in page.assets
+            if asset.url not in source.html and asset.url not in source.markdown
+        ]
+        if unknown_assets:
+            raise ValueError(
+                f"structured extraction returned unobserved asset URLs: {sorted(unknown_assets)}"
+            )
+        return page
 
     def _append_json_product(
         self,

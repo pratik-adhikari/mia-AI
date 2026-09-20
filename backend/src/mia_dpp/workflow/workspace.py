@@ -57,7 +57,8 @@ class RunWorkspace:
     ) -> str:
         return self.put_bytes(
             key,
-            value.model_dump_json(by_alias=True).encode(),
+            # Workspace JSON is an audit artifact, so optimize it for human review, not bytes.
+            value.model_dump_json(by_alias=True, indent=2).encode(),
             content_type="application/json",
             derived_from=derived_from,
         )
@@ -71,7 +72,10 @@ class RunWorkspace:
     ) -> str:
         return self.put_bytes(
             key,
-            json.dumps(value, ensure_ascii=False, sort_keys=True, default=str).encode(),
+            # Keep deterministic key ordering while writing readable multi-line manifests.
+            json.dumps(
+                value, ensure_ascii=False, sort_keys=True, indent=2, default=str
+            ).encode(),
             content_type="application/json",
             derived_from=derived_from,
         )

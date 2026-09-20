@@ -2,18 +2,24 @@
 
 from __future__ import annotations
 
+import hashlib
+import mimetypes
+import re
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from langgraph.runtime import Runtime
 
 from mia_dpp.canonical import sha256_json
-from mia_dpp.domain.evidence import ProductKnowledgePackage
+from mia_dpp.domain.evidence import ExtractedAsset, ProductKnowledgePackage
 from mia_dpp.domain.product import RunStatus
+from mia_dpp.tools.web.models import DownloadedSource
 from mia_dpp.workflow.context import MiaContext
 from mia_dpp.workflow.presentation import evidence_text, product_image_url
 from mia_dpp.workflow.state import MiaWorkflowState, reset_product_state
 from mia_dpp.workflow.workspace import RunWorkspace
+
+_SAFE_FILENAME = re.compile(r"[^A-Za-z0-9._-]+")
 
 
 async def resolve_product(
@@ -106,10 +112,112 @@ async def extract_evidence(
         )
         for source in incoming.acquired_sources
     )
+    # Store the readable pre-normalization view beside raw HTML and canonical evidence.
+    structured_ids = tuple(
+        work.put_model(
+            f"extraction/structured-page-{index}.json",
+            page,
+            derived_from=raw_ids,
+        )
+        for index, page in enumerate(incoming.extracted_pages, start=1)
+    )
+    source_assets = tuple(asset for page in incoming.extracted_pages for asset in page.assets)
+    # Download images once up front: byte size is used to choose a stable main product image and
+    # the cached bytes are then persisted without a second network request.
+    image_downloads: dict[str, DownloadedSource] = {}
+    download_errors: dict[str, str] = {}
+    for asset in source_assets:
+        if asset.kind != "image" or asset.url in image_downloads:
+            continue
+        try:
+            image_downloads[asset.url] = await work.ctx.web_tool.download_source(asset.url)
+        except Exception as error:
+            download_errors[asset.url] = str(error)[:500]
+    # Prefer an image at the product-page root, then the largest usable candidate. Contextual
+    # diagrams remain supporting images even if they have more pixels/bytes.
+    main_image_url = max(
+        image_downloads,
+        key=lambda url: (
+            not next(asset.context_path for asset in source_assets if asset.url == url),
+            image_downloads[url].size,
+        ),
+        default=None,
+    )
+
+    # The manifest connects source URL -> hierarchy -> local path -> content hash/artifact ID.
+    asset_manifest: list[dict[str, object]] = []
+    asset_ids: list[str] = []
+    stored_assets: dict[str, ExtractedAsset] = {}
+    for asset in source_assets:
+        role = (
+            "main" if asset.kind == "image" and asset.url == main_image_url else "supporting"
+        ) if asset.kind == "image" else None
+        record: dict[str, object] = asset.model_dump(mode="json", by_alias=True)
+        try:
+            # Documents are intentionally downloaded only after discovery; all downloads still
+            # pass through WebExtractionTool's URL, redirect, size, and MIME checks.
+            downloaded = (
+                image_downloads[asset.url]
+                if asset.kind == "image"
+                else await work.ctx.web_tool.download_source(asset.url)
+            )
+            workspace_path = _asset_workspace_path(asset, downloaded.media_type)
+            artifact_id = work.put_bytes(
+                workspace_path,
+                downloaded.content,
+                content_type=downloaded.media_type,
+                derived_from=raw_ids,
+            )
+            asset_ids.append(artifact_id)
+            stored_assets[asset.url] = asset.model_copy(
+                update={"role": role, "workspace_path": workspace_path}
+            )
+            record.update(
+                {
+                    "role": role,
+                    "workspacePath": workspace_path,
+                    "artifactId": artifact_id,
+                    "mediaType": downloaded.media_type,
+                    "contentSha256": downloaded.content_sha256,
+                    "size": downloaded.size,
+                }
+            )
+        except Exception as error:
+            # One unavailable optional asset must not discard otherwise valid page evidence.
+            message = download_errors.get(asset.url, str(error)[:500])
+            stored_assets[asset.url] = asset.model_copy(update={"role": role})
+            record.update({"role": role, "downloadError": message})
+        asset_manifest.append(record)
+    # Replace source-only assets with their durable role/path references before saving evidence.
+    package = package.model_copy(
+        update={
+            "extracted_pages": tuple(
+                page.model_copy(
+                    update={
+                        "assets": tuple(stored_assets.get(asset.url, asset) for asset in page.assets)
+                    }
+                )
+                for page in package.extracted_pages
+            )
+        }
+    )
+    asset_manifest_id = (
+        work.put_json(
+            "extraction/assets.json",
+            asset_manifest,
+            derived_from=(*raw_ids, *asset_ids),
+        )
+        if asset_manifest
+        else None
+    )
     evidence_id = work.put_model(
         "evidence/product-knowledge.json",
         package,
-        derived_from=tuple(item for item in (prior_id, *raw_ids) if item),
+        derived_from=tuple(
+            item
+            for item in (prior_id, *raw_ids, *structured_ids, *asset_ids, asset_manifest_id)
+            if item
+        ),
     )
     source_urls = tuple(
         dict.fromkeys(
@@ -154,6 +262,26 @@ async def extract_evidence(
     }
 
 
+def _asset_workspace_path(
+    asset: ExtractedAsset,
+    media_type: str,
+) -> str:
+    """Build a readable, collision-resistant path under images/ or documents/."""
+
+    suffix = mimetypes.guess_extension(media_type) or {
+        "image/webp": ".webp",
+        "model/step": ".step",
+    }.get(media_type, ".bin")
+    stem = _SAFE_FILENAME.sub("-", asset.label).strip("-.").casefold() or asset.kind
+    # URL-derived labels can already contain the MIME suffix; avoid names like file.pdf.pdf.
+    if stem.endswith(suffix.casefold()):
+        stem = stem[: -len(suffix)]
+    identifier = hashlib.sha256(asset.url.encode()).hexdigest()[:8]
+    if asset.kind == "image":
+        return f"images/{stem}-{identifier}{suffix}"
+    return f"documents/{stem}-{identifier}{suffix}"
+
+
 def _merge_packages(
     existing: ProductKnowledgePackage,
     incoming: ProductKnowledgePackage,
@@ -169,6 +297,9 @@ def _merge_packages(
             dict.fromkeys((*existing.source_artifact_ids, *incoming.source_artifact_ids))
         ),
         acquired_sources=tuple(sources.values()),
+        source_failures=(*existing.source_failures, *incoming.source_failures),
+        # Preserve each source hierarchy when research adds another product page later.
+        extracted_pages=(*existing.extracted_pages, *incoming.extracted_pages),
         evidence=tuple(evidence.values()),
     )
 

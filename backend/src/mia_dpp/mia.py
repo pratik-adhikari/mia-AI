@@ -20,6 +20,7 @@ from mia_dpp.agent.models import (
 from mia_dpp.agents.discovery import PydanticDiscoveryAgent
 from mia_dpp.agents.research import DeterministicResearchAgent, PydanticResearchAgent
 from mia_dpp.agents.semantic_mapping import PydanticBatchSemanticMapper
+from mia_dpp.agents.source_exploration import PydanticSourceExplorationPlanner
 from mia_dpp.api.agent_view import AgentResponseView
 from mia_dpp.config import Settings
 from mia_dpp.domain.product import MessageRole, ProductRun, RunStatus
@@ -50,13 +51,28 @@ class Mia:
     ) -> None:
         self.settings = settings or Settings()
         self.templates = OfficialTemplateRepository(self.settings.standards_root)
-        self.web_tool = web_tool or WebExtractionTool(loader=Crawl4AIPageLoader())
+        agent_model = model or self._configured_model()
+        # Credentials stay inside the Crawl4AI adapter; callers still receive only MIA models.
+        self.web_tool = web_tool or WebExtractionTool(
+            loader=Crawl4AIPageLoader(
+                model=self.settings.agent_model,
+                api_token=(
+                    self.settings.openrouter_api_key.get_secret_value()
+                    if self.settings.openrouter_api_key is not None
+                    else None
+                ),
+            ),
+            source_planner=(
+                PydanticSourceExplorationPlanner(agent_model)
+                if agent_model is not None
+                else None
+            ),
+        )
         search = search_provider or DdgsSearchProvider()
         catalogue = create_catalogue(self.settings)
         artifacts = create_artifact_store(self.settings)
         mapping_review = MappingReviewService(self.templates)
 
-        agent_model = model or self._configured_model()
         semantic = semantic_mapper or (
             PydanticBatchSemanticMapper(agent_model) if agent_model is not None else None
         )

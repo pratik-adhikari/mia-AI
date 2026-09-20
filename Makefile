@@ -11,8 +11,8 @@ COMPOSE ?= docker compose
 STANDARDS_DIR := standards/idta-submodel-templates
 STANDARDS_COMMIT := a9664731a903b29ac5f45e23ab3a25c581f3d92f
 
-.PHONY: help install crawl-setup refs refs-check backend frontend dev lint format typecheck \
-	test build check docker-build up down smoke
+.PHONY: help install crawl-setup refs refs-check backend frontend dev extract lint format \
+	typecheck test build check docker-build up down smoke
 
 help: ## Show the available commands.
 	@awk 'BEGIN {FS = ":.*## "; print "MIA DPP commands\n"} /^[a-zA-Z0-9_.-]+:.*## / {printf "  %-14s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -52,6 +52,15 @@ dev: ## Run the Python backend and Next.js frontend together.
 	trap 'kill "$$backend_pid" 2>/dev/null || true; wait "$$backend_pid" 2>/dev/null || true' EXIT INT TERM
 	NEXT_PUBLIC_MIA_API_URL="$(API_URL)" \
 		npm run dev -- --hostname 127.0.0.1 --port $(FRONTEND_PORT)
+
+# Keep the diagnostic extraction path reproducible without starting either application server.
+extract: ## Extract one URL; pass URL=..., OUTPUT=..., and optionally LLM=1.
+	@test -n "$(URL)" || { printf 'Usage: make extract URL=https://... [OUTPUT=...] [LLM=1]\n' >&2; exit 2; }
+	args=()
+	# LLM extraction is opt-in so maintainers can inspect Crawl4AI-only behavior independently.
+	if [[ "$(LLM)" = "1" ]]; then args+=(--llm); fi
+	$(UV) run --project backend --no-sync python backend/scripts/extract_url.py \
+		"$(URL)" --output "$(or $(OUTPUT),test-output/extraction)" "$${args[@]}"
 
 lint: ## Check Python and TypeScript style and Python formatting.
 	cd backend

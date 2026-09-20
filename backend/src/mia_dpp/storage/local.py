@@ -24,11 +24,16 @@ class LocalArtifactStore:
         derived_from: tuple[str, ...] = (),
     ) -> StoredArtifact:
         artifact_id = f"artifact-{uuid.uuid4().hex}"
-        relative = Path(run_id or "shared") / artifact_id / self._safe_key(key)
+        # Preserve logical keys (images/, documents/, evidence/) so humans can browse a run.
+        relative = Path(run_id or "shared") / self._safe_key(key)
         path = (self._root / relative).resolve()
         if self._root not in path.parents:
             raise ValueError("artifact path escapes storage root")
         path.parent.mkdir(parents=True, exist_ok=True)
+        if path.exists():
+            # Artifacts are immutable; retain both versions instead of overwriting an earlier file.
+            path = path.with_name(f"{path.stem}-{artifact_id}{path.suffix}")
+            relative = path.relative_to(self._root)
         path.write_bytes(data)
         return StoredArtifact(
             id=artifact_id,
@@ -49,5 +54,7 @@ class LocalArtifactStore:
         return path.read_bytes()
 
     @staticmethod
-    def _safe_key(key: str) -> str:
-        return "-".join(part for part in Path(key).parts if part not in {"", ".", ".."})
+    def _safe_key(key: str) -> Path:
+        """Keep useful subdirectories while removing path-traversal components."""
+
+        return Path(*(part for part in Path(key).parts if part not in {"", ".", "..", "/"}))
