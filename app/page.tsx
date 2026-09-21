@@ -1,7 +1,10 @@
 import Link from "next/link";
+import { UserButton } from "@clerk/nextjs";
+import { auth } from "@clerk/nextjs/server";
 import { Nameplate } from "@/components/Nameplate";
 
-export default function Home() {
+export default async function Home() {
+  const { userId } = await auth();
   return (
     <main className="min-h-screen bg-paper">
       {/* Nav */}
@@ -25,12 +28,29 @@ export default function Home() {
               Products
             </Link>
           </nav>
-          <Link
-            href="/workspace"
-            className="rounded-full bg-ink px-4 py-1.5 text-[13px] font-medium text-white transition-opacity hover:opacity-85"
-          >
-            Try for free
-          </Link>
+          {userId ? (
+            <div className="flex items-center gap-3">
+              <Link
+                href="/workspace"
+                className="rounded-full bg-ink px-4 py-1.5 text-[13px] font-medium text-white transition-opacity hover:opacity-85"
+              >
+                Open workspace
+              </Link>
+              <UserButton />
+            </div>
+          ) : (
+            <div className="flex items-center gap-3">
+              <Link href="/login" className="text-[13px] font-medium text-muted hover:text-ink">
+                Sign in
+              </Link>
+              <Link
+                href="/signup"
+                className="rounded-full bg-ink px-4 py-1.5 text-[13px] font-medium text-white transition-opacity hover:opacity-85"
+              >
+                Get started
+              </Link>
+            </div>
+          )}
         </div>
       </header>
 
@@ -64,7 +84,7 @@ export default function Home() {
               style={{ animationDelay: "180ms" }}
             >
               <Link
-                href="/workspace"
+                href={userId ? "/workspace" : "/signup"}
                 className="rounded-full bg-signal px-6 py-3 text-[15px] font-medium text-white transition-transform hover:scale-[1.02] active:scale-[0.99]"
               >
                 Try for free
@@ -80,7 +100,7 @@ export default function Home() {
               className="mt-4 animate-rise text-[13px] text-muted"
               style={{ animationDelay: "220ms" }}
             >
-              No account. Runs in your browser.
+              Your chats, evidence, and passports remain available in your account.
             </p>
           </div>
 

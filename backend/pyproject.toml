@@ -9,6 +9,7 @@ requires-python = ">=3.12,<3.13"
 dependencies = [
   "aas-core3.0==1.1.4",
   "beautifulsoup4>=4.12,<5",
+  "clerk-backend-api>=6,<7",
   "crawl4ai==0.9.3",
   "fastapi>=0.115,<1",
   "httpx>=0.28,<1",
