@@ -267,10 +267,13 @@ class ProductCatalogue:
         )
 
     def user_owns_product(self, user_id: str, product_id: str) -> bool:
-        return self._fetchone(
-            "SELECT 1 FROM user_products WHERE user_id=? AND product_id=?",
-            (user_id, product_id),
-        ) is not None
+        return (
+            self._fetchone(
+                "SELECT 1 FROM user_products WHERE user_id=? AND product_id=?",
+                (user_id, product_id),
+            )
+            is not None
+        )
 
     def _associate_product(self, user_id: str, product_id: str) -> None:
         self._execute(
@@ -947,8 +950,7 @@ class ProductCatalogue:
             }
         )
         self._execute(
-            "UPDATE background_jobs SET status=?,payload=?,updated_at=? "
-            "WHERE id=? AND user_id=?",
+            "UPDATE background_jobs SET status=?,payload=?,updated_at=? WHERE id=? AND user_id=?",
             (
                 status.value,
                 finished.model_dump_json(),
@@ -1024,9 +1026,7 @@ class ProductCatalogue:
     def _backfill_legacy_local_ownership(db: _Connection) -> None:
         """Keep pre-auth development history reachable only by the explicit local account."""
 
-        for product_id, updated_at in db.execute(
-            "SELECT id,updated_at FROM products"
-        ).fetchall():
+        for product_id, updated_at in db.execute("SELECT id,updated_at FROM products").fetchall():
             db.execute(
                 "INSERT INTO user_products(user_id,product_id,created_at) VALUES(?,?,?) "
                 "ON CONFLICT(user_id,product_id) DO NOTHING",

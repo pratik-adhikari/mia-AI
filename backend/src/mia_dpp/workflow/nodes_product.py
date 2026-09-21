@@ -167,8 +167,10 @@ async def extract_evidence(
     stored_assets: dict[str, ExtractedAsset] = {}
     for asset in source_assets:
         role = (
-            "main" if asset.kind == "image" and asset.url == main_image_url else "supporting"
-        ) if asset.kind == "image" else None
+            ("main" if asset.kind == "image" and asset.url == main_image_url else "supporting")
+            if asset.kind == "image"
+            else None
+        )
         record: dict[str, object] = asset.model_dump(mode="json", by_alias=True)
         try:
             # Documents are intentionally downloaded only after discovery; all downloads still

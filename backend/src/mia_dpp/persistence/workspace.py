@@ -112,8 +112,7 @@ class WorkspaceView:
 
     def _stored(self, thread_id: str, *, user_id: str) -> tuple[StoredArtifact, ...]:
         run_ids = tuple(
-            run.id
-            for run in self._catalogue.list_runs_for_thread(thread_id, user_id=user_id)
+            run.id for run in self._catalogue.list_runs_for_thread(thread_id, user_id=user_id)
         )
         return self._catalogue.list_artifacts_for_runs(run_ids, user_id=user_id)
 

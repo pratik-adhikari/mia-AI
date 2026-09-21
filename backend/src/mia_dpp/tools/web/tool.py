@@ -30,8 +30,22 @@ _MAX_DOWNLOAD_BYTES = 25 * 1024 * 1024
 # not implicitly fetch arbitrary page resources.
 _DOWNLOAD_SUFFIXES = frozenset(
     {
-        ".pdf", ".doc", ".docx", ".xls", ".xlsx", ".csv", ".zip", ".step", ".stp",
-        ".dxf", ".png", ".jpg", ".jpeg", ".webp", ".gif", ".svg",
+        ".pdf",
+        ".doc",
+        ".docx",
+        ".xls",
+        ".xlsx",
+        ".csv",
+        ".zip",
+        ".step",
+        ".stp",
+        ".dxf",
+        ".png",
+        ".jpg",
+        ".jpeg",
+        ".webp",
+        ".gif",
+        ".svg",
     }
 )
 _DOWNLOAD_MEDIA_TYPES = frozenset(
@@ -112,9 +126,9 @@ class WebExtractionTool:
         if not evidence:
             raise ExtractionError("the product page contained no useful structured facts")
         source_id = f"source-web-{page.content_sha256[:24]}"
-        product_id = "product-" + hashlib.sha256(
-            f"{page.url}\0{product_name}".encode()
-        ).hexdigest()[:24]
+        product_id = (
+            "product-" + hashlib.sha256(f"{page.url}\0{product_name}".encode()).hexdigest()[:24]
+        )
         return ProductKnowledgePackage(
             product_id=product_id,
             product_name=product_name,

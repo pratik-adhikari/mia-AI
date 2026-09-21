@@ -20,11 +20,11 @@ from mia_dpp.workflow.workspace import RunWorkspace
 def merge_mapping_results(existing: MappingResult, incoming: MappingResult) -> MappingResult:
     """Append outcomes for new evidence while preserving every existing human decision."""
 
-    known = {
-        item.evidence_id
-        for item in (*existing.mapped, *existing.ambiguous, *existing.rejected)
-    } | set(existing.unmatched_evidence_ids) | set(existing.irrelevant_evidence_ids) | set(
-        existing.rejected_evidence_ids
+    known = (
+        {item.evidence_id for item in (*existing.mapped, *existing.ambiguous, *existing.rejected)}
+        | set(existing.unmatched_evidence_ids)
+        | set(existing.irrelevant_evidence_ids)
+        | set(existing.rejected_evidence_ids)
     )
 
     def new_mappings(items: tuple[Any, ...]) -> tuple[Any, ...]:
@@ -118,8 +118,7 @@ class DeepResearchService:
                 "jobId": job.id,
                 "seedUrl": job.metadata["seedUrl"],
                 "sources": [
-                    {"url": item.url, "text": item.text, "title": item.title}
-                    for item in links
+                    {"url": item.url, "text": item.text, "title": item.title} for item in links
                 ],
             },
             derived_from=(seed_id,),

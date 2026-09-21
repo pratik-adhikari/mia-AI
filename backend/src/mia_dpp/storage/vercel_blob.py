@@ -34,9 +34,9 @@ class VercelBlobArtifactStore:
         derived_from: tuple[str, ...] = (),
     ) -> StoredArtifact:
         digest = hashlib.sha256(data).hexdigest()
-        identity = hashlib.sha256(
-            f"{run_id or 'shared'}\0{key}\0{digest}".encode()
-        ).hexdigest()[:24]
+        identity = hashlib.sha256(f"{run_id or 'shared'}\0{key}\0{digest}".encode()).hexdigest()[
+            :24
+        ]
         artifact_id = f"artifact-{identity}"
         path = "/".join(
             (

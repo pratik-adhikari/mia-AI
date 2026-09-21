@@ -308,9 +308,7 @@ class Crawl4AIPageLoader:
                 item = {
                     **item,
                     "label": (
-                        observed.label
-                        if observed
-                        else str(item.get("kind") or "Asset").title()
+                        observed.label if observed else str(item.get("kind") or "Asset").title()
                     ),
                 }
             try:

@@ -88,9 +88,9 @@ class WebsiteFactExtractor:
                             method="crawl4ai_schema",
                             context_path=context,
                             location=SourceLocation(
-                                excerpt=(
-                                    prop.source_excerpt or f"{prop.label}: {prop.value}"
-                                )[:1000]
+                                excerpt=(prop.source_excerpt or f"{prop.label}: {prop.value}")[
+                                    :1000
+                                ]
                             ),
                         )
                 return tuple(self._deduplicate(facts)), page.product_name, page

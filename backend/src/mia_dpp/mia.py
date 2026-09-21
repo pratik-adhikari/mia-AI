@@ -65,9 +65,7 @@ class Mia:
                 ),
             ),
             source_planner=(
-                PydanticSourceExplorationPlanner(agent_model)
-                if agent_model is not None
-                else None
+                PydanticSourceExplorationPlanner(agent_model) if agent_model is not None else None
             ),
         )
         search = search_provider or DdgsSearchProvider()

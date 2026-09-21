@@ -342,9 +342,13 @@ async def execute_background_job(job_id: str, http_request: Request) -> Backgrou
     mia = _application(http_request)
     configured = mia.settings.workflow_secret
     supplied = http_request.headers.get("x-mia-workflow-secret")
-    if configured is None or supplied is None or not secrets.compare_digest(
-        supplied,
-        configured.get_secret_value(),
+    if (
+        configured is None
+        or supplied is None
+        or not secrets.compare_digest(
+            supplied,
+            configured.get_secret_value(),
+        )
     ):
         raise HTTPException(status_code=401, detail="invalid workflow credential")
     job = mia.context.catalogue.get_background_job_internal(job_id)

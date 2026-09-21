@@ -23,9 +23,9 @@ class LocalArtifactStore:
         derived_from: tuple[str, ...] = (),
     ) -> StoredArtifact:
         digest = hashlib.sha256(data).hexdigest()
-        identity = hashlib.sha256(
-            f"{run_id or 'shared'}\0{key}\0{digest}".encode()
-        ).hexdigest()[:24]
+        identity = hashlib.sha256(f"{run_id or 'shared'}\0{key}\0{digest}".encode()).hexdigest()[
+            :24
+        ]
         artifact_id = f"artifact-{identity}"
         # Preserve logical keys (images/, documents/, evidence/) so humans can browse a run.
         relative = Path(run_id or "shared") / self._safe_key(key)
