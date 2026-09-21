@@ -77,7 +77,7 @@ typecheck: ## Run strict Python and TypeScript type checking.
 	cd backend
 	$(UV) run --project . --no-sync mypy
 	cd ..
-	npm exec -- tsc --noEmit
+	./node_modules/.bin/tsc --noEmit
 
 test: refs-check ## Run the deterministic Python test suite.
 	cd backend
