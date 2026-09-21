@@ -13,6 +13,10 @@ from mia_dpp.domain.evidence import (
 from mia_dpp.domain.mappings import (
     CoverageReport,
     CoverageStatus,
+    EvidenceOutcome,
+    EvidenceOutcomeStatus,
+    MappingOrigin,
+    MappingResult,
     RequirementCoverage,
 )
 from mia_dpp.domain.targets import Requirement
@@ -160,3 +164,31 @@ def test_conflicting_exact_values_are_ambiguous_instead_of_selected() -> None:
     assert item.status is CoverageStatus.AMBIGUOUS
     assert item.match_method == "conflicting_deterministic_evidence"
     assert set(item.candidate_evidence_ids) == {first.id, second.id}
+
+
+def test_reviewed_unmapped_evidence_is_not_remapped_by_label_heuristics() -> None:
+    repository = OfficialTemplateRepository()
+    inventory = build_template_index([repository.load("digital_nameplate")])
+    manufacturer = evidence("ev-manufacturer", "Manufacturer", "Example GmbH")
+    package = ProductKnowledgePackage(
+        product_id="product-reviewed",
+        product_name="Reviewed product",
+        evidence=(manufacturer,),
+    )
+    mapping = MappingResult(
+        unmatched_evidence_ids=(manufacturer.id,),
+        outcomes=(
+            EvidenceOutcome(
+                evidence_id=manufacturer.id,
+                status=EvidenceOutcomeStatus.UNMAPPED,
+                reason="The human kept this evidence unmapped.",
+                mapping_origin=MappingOrigin.HUMAN,
+            ),
+        ),
+    )
+
+    report = coverage(package, inventory, mapping_result=mapping)
+    _, item = coverage_for(report, "digital_nameplate", "ManufacturerName")
+
+    assert item.status is CoverageStatus.MISSING
+    assert report.unmatched_evidence_ids == (manufacturer.id,)

@@ -11,10 +11,9 @@ import pytest
 from pydantic_ai.exceptions import UnexpectedModelBehavior
 
 from mia_dpp.aas.templates import OfficialTemplateRepository
-from mia_dpp.agent.models import AgentResponse, AgentStatus, MiaState
+from mia_dpp.agent.models import AgentResponse, AgentStatus
 from mia_dpp.domain.mappings import MappingStatus
 from mia_dpp.main import app
-from mia_dpp.store import ArtifactKind
 from mia_dpp.tools.mapping.text_mapping import propose_text_mappings
 
 
@@ -58,7 +57,7 @@ def test_agent_message_endpoint_returns_a_resumable_thread(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     class Agent:
-        async def message(self, request: object) -> AgentResponse:
+        async def message(self, request: object, *, user_id: str) -> AgentResponse:
             return AgentResponse(
                 thread_id="thread-api-test",
                 reply="Please provide a product URL.",
@@ -82,7 +81,7 @@ def test_agent_endpoint_accepts_only_a_thread_and_new_message(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     class Agent:
-        async def message(self, request: object) -> AgentResponse:
+        async def message(self, request: object, *, user_id: str) -> AgentResponse:
             return AgentResponse(
                 thread_id="thread-agent-api-test",
                 reply="I need the exact company.",
@@ -112,16 +111,14 @@ def test_agent_endpoint_accepts_only_a_thread_and_new_message(
 def test_agent_model_contract_failure_returns_json_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    async def fail_message(request: object) -> AgentResponse:
+    async def fail_message(request: object, *, user_id: str) -> AgentResponse:
         raise UnexpectedModelBehavior("semantic output did not match its schema")
 
     monkeypatch.setattr(app.state.mia, "message", fail_message)
     response = request("POST", "/api/agent/messages", {"message": "Import product website"})
 
     assert response.status_code == 502
-    assert response.json() == {
-        "detail": "agent failed: semantic output did not match its schema"
-    }
+    assert response.json() == {"detail": "agent failed: semantic output did not match its schema"}
 
 
 def test_dpp_endpoint_returns_full_verified_environment_and_reports() -> None:
@@ -186,20 +183,24 @@ def test_pydantic_rejects_unknown_request_fields() -> None:
 
 
 def test_workspace_artifact_api_lists_reads_and_exports_thread_files() -> None:
-    workspace = app.state.mia.store
-    artifact = workspace.write_json(
-        "thread-api-workspace",
-        ArtifactKind.EVIDENCE,
-        "evidence.json",
-        {"fact": "24 V"},
+    mia = app.state.mia
+    thread_id = "thread-api-workspace"
+    product, _ = mia.context.catalogue.get_or_create_product(
+        "https://example.com/api-workspace-product"
     )
+    run = mia.context.catalogue.start_run(product.id, thread_id)
+    artifact = mia.context.artifacts.put(
+        "evidence/evidence.json",
+        b'{"fact":"24 V"}',
+        content_type="application/json",
+        product_id=product.id,
+        run_id=run.id,
+    )
+    mia.context.catalogue.register_artifact(artifact)
 
-    listed = request("GET", "/api/workspaces/thread-api-workspace/artifacts")
-    viewed = request(
-        "GET",
-        f"/api/workspaces/thread-api-workspace/artifacts/{artifact.id}",
-    )
-    exported = request("GET", "/api/workspaces/thread-api-workspace/download")
+    listed = request("GET", f"/api/workspaces/{thread_id}/artifacts")
+    viewed = request("GET", f"/api/workspaces/{thread_id}/artifacts/{artifact.id}")
+    exported = request("GET", f"/api/workspaces/{thread_id}/download")
 
     assert listed.status_code == 200
     assert listed.json()[-1]["id"] == artifact.id
@@ -209,10 +210,12 @@ def test_workspace_artifact_api_lists_reads_and_exports_thread_files() -> None:
 
 
 def test_trace_endpoint_returns_normalized_events() -> None:
-    workspace = app.state.mia.store
-    state = MiaState(thread_id=f"thread-api-trace-{uuid.uuid4().hex}")
-    event = workspace.add_event(state.thread_id, "tool.started", "Extracting the product page.")
-    response = request("GET", f"/api/workspaces/{state.thread_id}/trace")
+    mia = app.state.mia
+    thread_id = f"thread-api-trace-{uuid.uuid4().hex}"
+    product, _ = mia.context.catalogue.get_or_create_product(f"https://example.com/{thread_id}")
+    run = mia.context.catalogue.start_run(product.id, thread_id)
+    event = mia.context.catalogue.add_event(run.id, "tool.started", "Extracting the product page.")
+    response = request("GET", f"/api/workspaces/{thread_id}/trace")
 
     assert response.status_code == 200
     assert [item["id"] for item in response.json()] == [event.id]

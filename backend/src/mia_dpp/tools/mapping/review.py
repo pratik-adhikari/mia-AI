@@ -201,8 +201,7 @@ class MappingReviewService:
         outcomes = {item.evidence_id: item for item in mapping_result.outcomes}
         return tuple(
             SemanticReviewItem(
-                id="review-"
-                + hashlib.sha256(f"{cycle_id}\0{record.id}".encode()).hexdigest()[:24],
+                id="review-" + hashlib.sha256(f"{cycle_id}\0{record.id}".encode()).hexdigest()[:24],
                 evidence_id=record.id,
                 status=outcomes[record.id].status,
                 requirement_id=outcomes[record.id].requirement_id,

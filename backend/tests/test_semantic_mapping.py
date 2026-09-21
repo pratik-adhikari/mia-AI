@@ -199,9 +199,7 @@ def test_real_pydanticai_semantic_mapper_makes_one_structured_request() -> None:
     source = package()
     target_inventory = inventory()
     decisions = [item.model_dump(mode="json") for item in unmapped_result().decisions]
-    mapper = PydanticBatchSemanticMapper(
-        TestModel(custom_output_args={"decisions": decisions})
-    )
+    mapper = PydanticBatchSemanticMapper(TestModel(custom_output_args={"decisions": decisions}))
 
     result = asyncio.run(mapper.map(source, target_inventory, MappingResult()))
 

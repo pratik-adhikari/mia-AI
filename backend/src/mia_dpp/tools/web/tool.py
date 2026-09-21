@@ -10,15 +10,43 @@ from urllib.parse import urlsplit
 
 import httpx
 
-from mia_dpp.domain.evidence import AcquiredSource, ProductKnowledgePackage
+from mia_dpp.domain.evidence import (
+    AcquiredSource,
+    ProductKnowledgePackage,
+)
 from mia_dpp.errors import ExtractionError
 from mia_dpp.tools.web.generic import WebsiteFactExtractor
-from mia_dpp.tools.web.models import DownloadedSource, PageLoader, SourceLink
+from mia_dpp.tools.web.models import (
+    DownloadedSource,
+    PageLoader,
+    RenderedPage,
+    SourceExplorationPlanner,
+    SourceLink,
+)
 from mia_dpp.tools.web.url_policy import ProductUrlPolicy
 
 _MAX_DOWNLOAD_BYTES = 25 * 1024 * 1024
+# Images use the same explicit, SSRF-checked downloader as technical documents; extraction does
+# not implicitly fetch arbitrary page resources.
 _DOWNLOAD_SUFFIXES = frozenset(
-    {".pdf", ".doc", ".docx", ".xls", ".xlsx", ".csv", ".zip", ".step", ".stp", ".dxf"}
+    {
+        ".pdf",
+        ".doc",
+        ".docx",
+        ".xls",
+        ".xlsx",
+        ".csv",
+        ".zip",
+        ".step",
+        ".stp",
+        ".dxf",
+        ".png",
+        ".jpg",
+        ".jpeg",
+        ".webp",
+        ".gif",
+        ".svg",
+    }
 )
 _DOWNLOAD_MEDIA_TYPES = frozenset(
     {
@@ -31,6 +59,11 @@ _DOWNLOAD_MEDIA_TYPES = frozenset(
         "application/octet-stream",
         "model/step",
         "text/csv",
+        "image/gif",
+        "image/jpeg",
+        "image/png",
+        "image/svg+xml",
+        "image/webp",
     }
 )
 
@@ -49,26 +82,55 @@ class WebExtractionTool:
         loader: PageLoader,
         url_policy: ProductUrlPolicy | None = None,
         fact_extractor: WebsiteFactExtractor | None = None,
+        source_planner: SourceExplorationPlanner | None = None,
     ) -> None:
         self._loader = loader
         self._url_policy = url_policy or ProductUrlPolicy()
         self._fact_extractor = fact_extractor or WebsiteFactExtractor()
+        self._source_planner = source_planner
 
     async def extract(self, url: str) -> ProductKnowledgePackage:
-        """Acquire, extract, and normalize one page into a product knowledge package."""
+        """Return the seed product page immediately; deep research is a separate durable job."""
 
         requested_url = await self._url_policy.validate(url)
-        page = await self._loader.load(requested_url)
-        final_url = await self._url_policy.validate(page.url)
-        if final_url != page.url:
-            page = replace(page, url=final_url)
-        evidence, product_name = self._fact_extractor.extract(page)
+        seed_page = await self._validated_page(await self._loader.load(requested_url))
+        return self._package(seed_page)
+
+    async def extract_source(self, url: str) -> ProductKnowledgePackage:
+        """Acquire one selected secondary source without another semantic extraction request."""
+
+        requested_url = await self._url_policy.validate(url)
+        secondary_loader = getattr(self._loader, "load_source", self._loader.load)
+        page = await self._validated_page(await secondary_loader(requested_url))
+        return self._package(page)
+
+    async def select_deep_sources(
+        self,
+        *,
+        seed_url: str,
+        product_name: str,
+    ) -> tuple[SourceLink, ...]:
+        """Discover through Crawl4AI, then optionally apply the existing bounded LLM selector."""
+
+        candidates = await self.discover_sources(seed_url)
+        if self._source_planner is None:
+            return candidates
+        return await self._source_planner.select(
+            seed_url=seed_url,
+            product_name=product_name,
+            candidates=candidates,
+        )
+
+    def _package(self, page: RenderedPage) -> ProductKnowledgePackage:
+        evidence, product_name, extracted_page = self._fact_extractor.extract_structured(page)
         if not evidence:
             raise ExtractionError("the product page contained no useful structured facts")
         source_id = f"source-web-{page.content_sha256[:24]}"
+        product_id = (
+            "product-" + hashlib.sha256(f"{page.url}\0{product_name}".encode()).hexdigest()[:24]
+        )
         return ProductKnowledgePackage(
-            product_id="product-"
-            + hashlib.sha256(f"{page.url}\0{product_name}".encode()).hexdigest()[:24],
+            product_id=product_id,
             product_name=product_name,
             source_artifact_ids=(source_id,),
             acquired_sources=(
@@ -76,15 +138,22 @@ class WebExtractionTool:
                     id=source_id,
                     final_url=page.url,
                     rendered_html=page.html,
+                    markdown=page.markdown,
+                    structured_content=page.extracted_content,
                     content_sha256=page.content_sha256,
                     acquired_at=page.acquired_at,
                 ),
             ),
+            extracted_pages=(extracted_page,) if extracted_page is not None else (),
             evidence=evidence,
         )
 
+    async def _validated_page(self, page: RenderedPage) -> RenderedPage:
+        final_url = await self._url_policy.validate(page.url)
+        return replace(page, url=final_url) if final_url != page.url else page
+
     async def discover_sources(self, url: str) -> tuple[SourceLink, ...]:
-        """Discover bounded related pages without changing normal extraction."""
+        """Discover a bounded set of related pages through the configured page loader."""
 
         requested = await self._url_policy.validate(url)
         discovered = await self._loader.discover(requested)

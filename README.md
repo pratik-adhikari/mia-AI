@@ -26,25 +26,27 @@ make dev
 Open `http://127.0.0.1:3000`. `Ctrl-C` stops both processes started by
 `make dev`.
 
-The deterministic `/api/dpp` capability does not need an API key. The autonomous
-workspace does: copy `.env.example` to `.env.local` and set
-`OPENROUTER_API_KEY`. Crawl4AI uses locally installed Chromium to render pages.
-The model can choose actions and propose bounded mappings, but it cannot invent
-authoritative semantic IDs, set confidence, compile AAS JSON, or bypass validation.
+The deterministic `/api/dpp` capability does not need an API key. The interactive
+workspace does: copy `.env.example` to `.env.local` and set `OPENROUTER_API_KEY`. Crawl4AI uses
+locally installed Chromium to render pages.
 
-With an OpenRouter key, the workspace uses a persistent PydanticAI decision loop:
+The workspace is orchestrated by LangGraph. Product discovery, semantic mapping, and gap-driven
+source research use focused PydanticAI agents; extraction, official-template resolution, mapping
+acceptance, coverage, AAS compilation, validation, and deployment gates remain trusted Python.
+Human review/value collection uses native graph interrupts.
 
 ```text
-conversation ↔ autonomous agent ↔ discovery/extraction/mapping/AAS tools
-                              ↓
-                  typed state + trusted history
+conversation -> product discovery -> extract -> deterministic map -> semantic map -> review
+                                                         |                         |
+                                                         +---- durable state ------+
+                                                                    |
+                                                          coverage -> research/build
 ```
 
-The chat accepts a company name, product choice, or direct URL. Website acquisition,
-fact extraction, mapping assessment, coverage, compilation, and validation remain deterministic.
-Semantic proposals are constrained to retained evidence and official requirement IDs.
-Trusted PydanticAI message history and typed workflow state are stored server-side in
-SQLite for local development.
+Every attempt is persisted. A canonical product URL identifies a durable product record with
+timestamped chat history, run events, artifacts, and versioned successful DPPs. Repeating a known
+product URL reuses the latest successful DPP unless a refresh is requested. The `/products` UI
+shows the accumulated catalogue.
 
 Run `make help` to see the short command list. The most useful checks are:
 
@@ -74,28 +76,26 @@ MIA does not present handcrafted scores as statistical confidence.
 ## Repository map
 
 ```text
-app/, components/                 Next.js structured-agent interface
-backend/src/mia_dpp/mia.py       PydanticAI autonomy and trusted defer/resume
-backend/src/mia_dpp/agent/       model-visible tools, state, prompts, dependencies
-backend/src/mia_dpp/store.py     sessions, deferrals, reviewed knowledge, artifacts
+app/, components/                  Next.js workspace + durable product library
+backend/src/mia_dpp/mia.py        small application/composition façade
+backend/src/mia_dpp/workflow/     LangGraph state, routing, nodes, HITL
+backend/src/mia_dpp/agents/       focused discovery, research, semantic agents
+backend/src/mia_dpp/persistence/  products, runs, chat, events, DPP versions
+backend/src/mia_dpp/storage/      filesystem / Vercel Blob artifact adapters
+backend/src/mia_dpp/runtime/      SQLite/Postgres checkpoint composition
 backend/src/mia_dpp/tools/web/    provenance-aware generic evidence extraction
-backend/src/mia_dpp/tools/mapping/
-                                  mapping, confidence, coverage, review
+backend/src/mia_dpp/tools/mapping/ mapping, coverage, review
 backend/src/mia_dpp/aas/          official templates, compiler, validator
 backend/src/mia_dpp/domain/       framework-neutral Pydantic concepts
 backend/src/mia_dpp/integrations/ vendor-specific adapters
-backend/tests/                    deterministic and autonomous-loop tests
-standards/idta-submodel-templates/
-                                  unmodified, commit-pinned standards data
+backend/tests/                     deterministic + workflow/persistence tests
+standards/idta-submodel-templates/ unmodified, commit-pinned standards data
 ```
 
-MIA does not copy upstream application source into its own package. `aas-core`
-and Crawl4AI are locked Python dependencies behind small MIA boundaries. BaSyx
-PDF-to-AAS remains optional, and BaSyx is an external runtime. PydanticAI owns
-tool selection and deferred human calls; MIA validates and persists trusted
-resume results server-side.
-
-See `docs/deterministic-backend.md` for the validation layers.
+MIA does not copy upstream application source into its own package. `aas-core` and Crawl4AI stay
+behind small MIA boundaries. LangGraph owns workflow ordering/checkpoints; PydanticAI is used only
+inside reasoning-heavy nodes. See `docs/architecture.md` for the complete responsibility map and
+`docs/deterministic-backend.md` for validation layers.
 
 ## Local deployment
 
@@ -107,6 +107,9 @@ make down
 
 The frontend runs on port 3000 and the Python API on port 8000 by default.
 Override them with `FRONTEND_PORT`, `BACKEND_PORT`, and `API_URL` when needed.
+
+Local durable data is written under `.mia-data/`. On Vercel, configure PostgreSQL plus Vercel Blob;
+MIA intentionally refuses ephemeral production persistence.
 
 Current limits are explicit: generic website ingestion recognizes common
 schema.org Product data and labelled specification tables. A generated

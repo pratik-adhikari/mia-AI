@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
+import { UserButton } from "@clerk/nextjs";
 import type {
   AgentTraceEvent,
   AgentReviewDecision,
@@ -19,6 +20,8 @@ import type {
   ProductCandidate,
   WorkspaceArtifact,
   MappingKnowledgeEntry,
+  BackgroundJob,
+  ThreadRecord,
 } from "@/lib/types";
 import { CoveragePanel } from "@/components/CoveragePanel";
 import { EvidencePanel } from "@/components/EvidencePanel";
@@ -29,6 +32,7 @@ import { ChatMarkdown } from "@/components/ChatMarkdown";
 import { LiveActivity } from "@/components/LiveActivity";
 import { WorkspaceExplorer } from "@/components/WorkspaceExplorer";
 import { IntegrationGraph } from "@/components/IntegrationGraph";
+import { useAuthenticatedFetch } from "@/lib/use-authenticated-fetch";
 
 const API_URL = process.env.NEXT_PUBLIC_MIA_API_URL ?? "";
 type WorkspaceTab =
@@ -55,7 +59,9 @@ const SAMPLES = [
 ];
 
 export default function Workspace() {
+  const authenticatedFetch = useAuthenticatedFetch();
   const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [threads, setThreads] = useState<ThreadRecord[]>([]);
   const [input, setInput] = useState("");
   const [websiteUrl, setWebsiteUrl] = useState("");
   const [busy, setBusy] = useState(false);
@@ -74,6 +80,7 @@ export default function Workspace() {
   const [mappingCycleId, setMappingCycleId] = useState<string | null>(null);
   const [agentActivity, setAgentActivity] = useState<AgentTraceEvent[]>([]);
   const [artifacts, setArtifacts] = useState<WorkspaceArtifact[]>([]);
+  const [backgroundJob, setBackgroundJob] = useState<BackgroundJob | null>(null);
   const [semanticReview, setSemanticReview] = useState<SemanticReviewItem[]>([]);
   const [humanRequest, setHumanRequest] = useState<HumanRequest | null>(null);
   const [humanValue, setHumanValue] = useState("");
@@ -82,6 +89,7 @@ export default function Workspace() {
   >({});
   const [tab, setTab] = useState<WorkspaceTab>("mappings");
   const endRef = useRef<HTMLDivElement>(null);
+  const dispatchedJobs = useRef(new Set<string>());
 
   const mergeActivity = useCallback((events: AgentTraceEvent[]) => {
     setAgentActivity((previous) => {
@@ -90,6 +98,35 @@ export default function Workspace() {
     });
   }, []);
 
+  const dispatchBackgroundJob = useCallback(async (jobId: string) => {
+    if (dispatchedJobs.current.has(jobId)) return;
+    dispatchedJobs.current.add(jobId);
+    const response = await authenticatedFetch("/research/start", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ jobId }),
+    });
+    if (!response.ok) dispatchedJobs.current.delete(jobId);
+  }, [authenticatedFetch]);
+
+  const refreshArtifacts = useCallback(async (activeThreadId: string) => {
+    const response = await authenticatedFetch(
+      `${API_URL}/api/workspaces/${encodeURIComponent(activeThreadId)}/artifacts`
+    );
+    if (response.ok) setArtifacts((await response.json()) as WorkspaceArtifact[]);
+  }, [authenticatedFetch]);
+
+  const refreshBackgroundJobs = useCallback(async (activeThreadId: string) => {
+    const response = await authenticatedFetch(
+      `${API_URL}/api/threads/${encodeURIComponent(activeThreadId)}/background-jobs`
+    );
+    if (!response.ok) return;
+    const jobs = (await response.json()) as BackgroundJob[];
+    const latest = jobs.at(-1) ?? null;
+    setBackgroundJob(latest);
+    if (latest?.status === "queued") void dispatchBackgroundJob(latest.id);
+  }, [authenticatedFetch, dispatchBackgroundJob]);
+
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, busy, agentActivity]);
@@ -97,7 +134,7 @@ export default function Workspace() {
   useEffect(() => {
     const load = async () => {
       try {
-        const response = await fetch(`${API_URL}/api/mapping-knowledge`);
+        const response = await authenticatedFetch(`${API_URL}/api/mapping-knowledge`);
         if (response.ok) {
           setMappingKnowledge((await response.json()) as MappingKnowledgeEntry[]);
         }
@@ -106,17 +143,28 @@ export default function Workspace() {
       }
     };
     void load();
-  }, []);
+  }, [authenticatedFetch]);
 
   useEffect(() => {
-    if (!busy || !threadId) return;
+    const loadThreads = async () => {
+      const response = await authenticatedFetch(`${API_URL}/api/threads`);
+      if (response.ok) setThreads((await response.json()) as ThreadRecord[]);
+    };
+    void loadThreads();
+  }, [authenticatedFetch]);
+
+  useEffect(() => {
+    const researchActive = backgroundJob?.status === "queued" || backgroundJob?.status === "running";
+    if ((!busy && !researchActive) || !threadId) return;
     let cancelled = false;
     const poll = async () => {
-      const response = await fetch(
-        `${API_URL}/api/workspaces/${encodeURIComponent(threadId)}/trace`
-      );
-      if (!cancelled && response.ok) {
-        mergeActivity((await response.json()) as AgentTraceEvent[]);
+      const [traceResponse] = await Promise.all([
+        authenticatedFetch(`${API_URL}/api/workspaces/${encodeURIComponent(threadId)}/trace`),
+        refreshArtifacts(threadId),
+        refreshBackgroundJobs(threadId),
+      ]);
+      if (!cancelled && traceResponse.ok) {
+        mergeActivity((await traceResponse.json()) as AgentTraceEvent[]);
       }
     };
     void poll();
@@ -125,12 +173,30 @@ export default function Workspace() {
       cancelled = true;
       window.clearInterval(interval);
     };
-  }, [busy, threadId, mergeActivity]);
+  }, [
+    busy,
+    backgroundJob?.status,
+    threadId,
+    mergeActivity,
+    authenticatedFetch,
+    refreshArtifacts,
+    refreshBackgroundJobs,
+  ]);
 
   function activeThread(): string {
     const active = threadId ?? `thread-${crypto.randomUUID()}`;
     if (!threadId) setThreadId(active);
     return active;
+  }
+
+  async function openThread(selectedThreadId: string) {
+    setThreadId(selectedThreadId);
+    const response = await authenticatedFetch(
+      `${API_URL}/api/threads/${encodeURIComponent(selectedThreadId)}/messages`
+    );
+    if (response.ok) setMessages((await response.json()) as ChatMessage[]);
+    void refreshArtifacts(selectedThreadId);
+    void refreshBackgroundJobs(selectedThreadId);
   }
 
   async function send(text: string) {
@@ -144,7 +210,7 @@ export default function Workspace() {
     setBusy(true);
 
     try {
-      const res = await fetch(`${API_URL}/api/agent/messages`, {
+      const res = await authenticatedFetch(`${API_URL}/api/agent/messages`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ threadId: activeThreadId, message: t }),
@@ -185,7 +251,7 @@ export default function Workspace() {
     ]);
 
     try {
-      const response = await fetch(`${API_URL}/api/agent/messages`, {
+      const response = await authenticatedFetch(`${API_URL}/api/agent/messages`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -242,6 +308,8 @@ export default function Workspace() {
     setHumanRequest(data.pendingHumanRequest);
     mergeActivity(data.traceEvents);
     void refreshArtifacts(data.threadId);
+    void refreshBackgroundJobs(data.threadId);
+    if (data.backgroundJobId) void dispatchBackgroundJob(data.backgroundJobId);
     void refreshMappingKnowledge();
     const product = data.currentProduct;
     if (product?.mappingResult && product.coverageReport) {
@@ -257,7 +325,7 @@ export default function Workspace() {
     if (!threadId || !humanRequest?.requirementId || !humanValue.trim() || busy) return;
     setBusy(true);
     try {
-      const response = await fetch(`${API_URL}/api/agent/value`, {
+      const response = await authenticatedFetch(`${API_URL}/api/agent/value`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -290,15 +358,8 @@ export default function Workspace() {
     }
   }
 
-  async function refreshArtifacts(activeThreadId: string) {
-    const response = await fetch(
-      `${API_URL}/api/workspaces/${encodeURIComponent(activeThreadId)}/artifacts`
-    );
-    if (response.ok) setArtifacts((await response.json()) as WorkspaceArtifact[]);
-  }
-
   async function refreshMappingKnowledge() {
-    const response = await fetch(`${API_URL}/api/mapping-knowledge`);
+    const response = await authenticatedFetch(`${API_URL}/api/mapping-knowledge`);
     if (response.ok) {
       setMappingKnowledge((await response.json()) as MappingKnowledgeEntry[]);
     }
@@ -355,7 +416,7 @@ export default function Workspace() {
     setBusy(true);
     try {
       if (!currentProductId) throw new Error("No active product is available for review.");
-      const response = await fetch(`${API_URL}/api/agent/review`, {
+      const response = await authenticatedFetch(`${API_URL}/api/agent/review`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -468,7 +529,7 @@ export default function Workspace() {
     selectedEvidence = evidence
   ) {
     try {
-      const response = await fetch(`${API_URL}/api/dpp`, {
+      const response = await authenticatedFetch(`${API_URL}/api/dpp`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -540,6 +601,24 @@ export default function Workspace() {
           </span>
         </div>
         <div className="flex items-center gap-2">
+          {threads.length > 0 && (
+            <select
+              aria-label="Conversation history"
+              value={threadId ?? ""}
+              onChange={(event) => void openThread(event.target.value)}
+              className="hidden max-w-44 rounded-lg border border-hairline bg-white px-2 py-1.5 text-[12px] text-ink sm:block"
+            >
+              <option value="" disabled>Conversation history</option>
+              {threads.map((thread) => (
+                <option key={thread.id} value={thread.id}>
+                  {thread.title || thread.id}
+                </option>
+              ))}
+            </select>
+          )}
+          <Link href="/products" className="hidden text-[13px] text-muted hover:text-ink sm:inline">
+            Products
+          </Link>
           <span className="rounded-full bg-signalDim px-2.5 py-1 font-mono text-[11px] text-signal">
             Autonomous agent
           </span>
@@ -550,6 +629,7 @@ export default function Workspace() {
           >
             Generate passport
           </button>
+          <UserButton />
         </div>
       </header>
 
@@ -813,14 +893,21 @@ export default function Workspace() {
                 </button>
               ))}
             </div>
-            {tab === "mappings" && pending > 0 && (
-              <button
-                onClick={approveAll}
-                className="rounded-full border border-hairline px-4 py-1.5 text-[12px] font-medium transition-all hover:bg-mist hover:shadow-sm"
-              >
-                Approve all
-              </button>
-            )}
+            <div className="flex items-center gap-3">
+              {(backgroundJob?.status === "queued" || backgroundJob?.status === "running") && (
+                <span className="text-[11px] font-medium text-signal">
+                  Deep research running · {Number(backgroundJob.metadata.processedSources ?? 0)} / {Number(backgroundJob.metadata.totalSources ?? 0)} sources
+                </span>
+              )}
+              {tab === "mappings" && pending > 0 && (
+                <button
+                  onClick={approveAll}
+                  className="rounded-full border border-hairline px-4 py-1.5 text-[12px] font-medium transition-all hover:bg-mist hover:shadow-sm"
+                >
+                  Approve all
+                </button>
+              )}
+            </div>
           </div>
 
           <div className="scroll-quiet min-h-0 flex-1 overflow-y-auto p-5">

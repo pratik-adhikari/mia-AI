@@ -10,6 +10,7 @@ from typing import Protocol
 from pydantic import Field
 
 from mia_dpp.domain.base import WireModel
+from mia_dpp.domain.evidence import ExtractedAsset
 from mia_dpp.errors import ExtractionError
 
 
@@ -32,6 +33,18 @@ class SourceLink:
     title: str = ""
 
 
+class SourceExplorationPlanner(Protocol):
+    """Select Crawl4AI-grounded pages worth acquiring for the product package."""
+
+    async def select(
+        self,
+        *,
+        seed_url: str,
+        product_name: str,
+        candidates: tuple[SourceLink, ...],
+    ) -> tuple[SourceLink, ...]: ...
+
+
 class DownloadedSource(WireModel):
     """One explicitly downloaded technical source file."""
 
@@ -44,8 +57,16 @@ class DownloadedSource(WireModel):
 
 @dataclass(frozen=True)
 class RenderedPage:
+    """Framework-neutral acquisition result kept behind the web-tool boundary."""
+
     url: str
     html: str
+    # Markdown is the compact semantic input; HTML remains the exact retained ground truth.
+    markdown: str = ""
+    # Raw typed-extraction JSON is validated by WebsiteFactExtractor, not trusted here.
+    extracted_content: str | None = None
+    # Browser observation retains assets from dynamic tabs that later disappear from the DOM.
+    observed_assets: tuple[ExtractedAsset, ...] = ()
     acquired_at: datetime = field(default_factory=lambda: datetime.now(UTC))
 
     def __post_init__(self) -> None:
