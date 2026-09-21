@@ -271,6 +271,13 @@ export interface ChatMessage {
   content: string;
 }
 
+export interface ThreadRecord {
+  id: string;
+  title: string | null;
+  updatedAt: string;
+  lastMessageAt: string | null;
+}
+
 export interface SemanticReviewItem {
   id: string;
   evidenceId: string;
@@ -406,6 +413,14 @@ export interface AgentResponse {
   traceEvents: AgentTraceEvent[];
   pendingHumanRequest: HumanRequest | null;
   artifactCount: number;
+  backgroundJobId: string | null;
+}
+
+export interface BackgroundJob {
+  id: string;
+  status: "queued" | "running" | "completed" | "failed" | "cancelled";
+  metadata: Record<string, unknown>;
+  error: string | null;
 }
 
 export type ProductRunStatus =
