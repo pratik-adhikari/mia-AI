@@ -81,7 +81,8 @@ typecheck: ## Run strict Python and TypeScript type checking.
 
 test: refs-check ## Run the deterministic Python test suite.
 	cd backend
-	PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 $(UV) run --project . --no-sync pytest
+	PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 $(UV) run --project . --no-sync pytest \
+		-p pytest_asyncio.plugin
 
 build: ## Build the production frontend bundle.
 	NEXT_PUBLIC_MIA_API_URL="$(API_URL)" npm run build
