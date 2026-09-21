@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useEffect, useState } from "react";
 import type { ProductDetail, ProductRun } from "@/lib/types";
+import { useAuthenticatedFetch } from "@/lib/use-authenticated-fetch";
 
 const API_URL = process.env.NEXT_PUBLIC_MIA_API_URL ?? "";
 
@@ -21,6 +22,7 @@ function statusClass(status: ProductRun["status"]) {
 }
 
 export default function ProductDetailPage() {
+  const authenticatedFetch = useAuthenticatedFetch();
   const params = useParams<{ id: string }>();
   const [detail, setDetail] = useState<ProductDetail | null>(null);
   const [error, setError] = useState("");
@@ -28,7 +30,9 @@ export default function ProductDetailPage() {
   useEffect(() => {
     const load = async () => {
       try {
-        const response = await fetch(`${API_URL}/api/products/${encodeURIComponent(params.id)}`);
+        const response = await authenticatedFetch(
+          `${API_URL}/api/products/${encodeURIComponent(params.id)}`
+        );
         if (!response.ok) throw new Error(`Backend returned ${response.status}`);
         setDetail((await response.json()) as ProductDetail);
       } catch (reason) {
@@ -36,7 +40,7 @@ export default function ProductDetailPage() {
       }
     };
     void load();
-  }, [params.id]);
+  }, [params.id, authenticatedFetch]);
 
   if (error) {
     return <main className="min-h-screen bg-mist p-8 text-sm text-red-700">{error}</main>;

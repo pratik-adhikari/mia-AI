@@ -3,7 +3,7 @@
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
-from mia_dpp.domain.product import MessageRole, RunStatus
+from mia_dpp.domain.product import BackgroundJobStatus, MessageRole, RunStatus
 from mia_dpp.persistence.catalogue import ProductCatalogue
 from mia_dpp.workflow.identity import canonical_product_url
 
@@ -83,3 +83,53 @@ def test_concurrent_dpp_versions_are_unique_and_sequential(tmp_path: Path) -> No
         versions = tuple(executor.map(create, range(len(runs))))
 
     assert sorted(item.version for item in versions) == list(range(1, len(runs) + 1))
+
+
+def test_account_ownership_hides_threads_products_and_messages(tmp_path: Path) -> None:
+    catalogue = ProductCatalogue(tmp_path / "catalogue.sqlite3")
+    catalogue.get_or_create_thread("thread-user-a", "user-a")
+    product, _ = catalogue.get_or_create_product("https://example.com/private", user_id="user-a")
+    run = catalogue.start_run(product.id, "thread-user-a", user_id="user-a")
+    catalogue.add_message(
+        "thread-user-a",
+        MessageRole.USER,
+        "private message",
+        run_id=run.id,
+        user_id="user-a",
+    )
+
+    assert catalogue.get_thread("thread-user-a", user_id="user-b") is None
+    assert catalogue.get_product(product.id, user_id="user-b") is None
+    assert catalogue.list_messages("thread-user-a", user_id="user-b") == ()
+    assert catalogue.list_products(user_id="user-b") == ()
+
+
+def test_background_job_claim_and_retry_are_idempotent(tmp_path: Path) -> None:
+    catalogue = ProductCatalogue(tmp_path / "catalogue.sqlite3")
+    catalogue.get_or_create_thread("thread-jobs", "user-a")
+    product, _ = catalogue.get_or_create_product("https://example.com/job", user_id="user-a")
+    run = catalogue.start_run(product.id, "thread-jobs", user_id="user-a")
+    first = catalogue.create_background_job(
+        user_id="user-a",
+        thread_id="thread-jobs",
+        product_id=product.id,
+        run_id=run.id,
+    )
+    duplicate = catalogue.create_background_job(
+        user_id="user-a",
+        thread_id="thread-jobs",
+        product_id=product.id,
+        run_id=run.id,
+    )
+
+    assert duplicate.id == first.id
+    assert catalogue.claim_background_job(first.id, user_id="user-a") is not None
+    assert catalogue.claim_background_job(first.id, user_id="user-a") is None
+    failed = catalogue.finish_background_job(
+        first.id,
+        user_id="user-a",
+        status=BackgroundJobStatus.FAILED,
+        error="retry fixture",
+    )
+    assert failed.status is BackgroundJobStatus.FAILED
+    assert catalogue.claim_background_job(first.id, user_id="user-a") is not None

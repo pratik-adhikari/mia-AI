@@ -7,6 +7,9 @@ import asyncio
 from pathlib import Path
 from types import SimpleNamespace
 
+from pydantic_ai.models.openrouter import OpenRouterModel
+from pydantic_ai.providers.openrouter import OpenRouterProvider
+
 from mia_dpp.agents.source_exploration import PydanticSourceExplorationPlanner
 from mia_dpp.config import Settings
 from mia_dpp.integrations.crawl4ai import Crawl4AIPageLoader
@@ -14,8 +17,6 @@ from mia_dpp.persistence.catalogue import ProductCatalogue
 from mia_dpp.storage.local import LocalArtifactStore
 from mia_dpp.tools.web.tool import WebExtractionTool
 from mia_dpp.workflow.nodes_product import extract_evidence
-from pydantic_ai.models.openrouter import OpenRouterModel
-from pydantic_ai.providers.openrouter import OpenRouterProvider
 
 
 async def extract(url: str, output: Path, *, use_llm: bool) -> None:

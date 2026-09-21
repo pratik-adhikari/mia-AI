@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useEffect, useState } from "react";
 import type { ProductLibraryItem } from "@/lib/types";
+import { useAuthenticatedFetch } from "@/lib/use-authenticated-fetch";
 
 const API_URL = process.env.NEXT_PUBLIC_MIA_API_URL ?? "";
 
@@ -11,6 +12,7 @@ function productTitle(item: ProductLibraryItem) {
 }
 
 export default function ProductsPage() {
+  const authenticatedFetch = useAuthenticatedFetch();
   const [items, setItems] = useState<ProductLibraryItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -18,7 +20,7 @@ export default function ProductsPage() {
   useEffect(() => {
     const load = async () => {
       try {
-        const response = await fetch(`${API_URL}/api/products`);
+        const response = await authenticatedFetch(`${API_URL}/api/products`);
         if (!response.ok) throw new Error(`Backend returned ${response.status}`);
         setItems((await response.json()) as ProductLibraryItem[]);
       } catch (reason) {
@@ -28,7 +30,7 @@ export default function ProductsPage() {
       }
     };
     void load();
-  }, []);
+  }, [authenticatedFetch]);
 
   return (
     <main className="min-h-screen bg-mist">

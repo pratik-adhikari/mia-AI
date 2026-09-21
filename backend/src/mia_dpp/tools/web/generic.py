@@ -53,39 +53,47 @@ class WebsiteFactExtractor:
         """
 
         if source.extracted_content:
-            # Normalize exactly one validated page shape instead of interpreting arbitrary JSON.
-            page = self._validated_page(source)
-            facts: list[EvidenceRecord] = []
-            for label, value in (
-                ("Product name", page.product_name),
-                ("Product type", page.product_type),
-                ("Description", page.summary),
-            ):
-                if value:
-                    self._append(
-                        facts,
-                        source,
-                        label=label,
-                        value=value,
-                        method="crawl4ai_schema",
-                        location=SourceLocation(excerpt=value[:1000]),
-                    )
-            for section in page.sections:
-                context = tuple(part.strip() for part in section.context_path if part.strip())
-                for prop in section.properties:
-                    self._append(
-                        facts,
-                        source,
-                        label=prop.label,
-                        value=prop.value,
-                        unit=prop.unit,
-                        method="crawl4ai_schema",
-                        context_path=context,
-                        location=SourceLocation(
-                            excerpt=(prop.source_excerpt or f"{prop.label}: {prop.value}")[:1000]
-                        ),
-                    )
-            return tuple(self._deduplicate(facts)), page.product_name, page
+            try:
+                # Normalize exactly one validated page shape instead of interpreting arbitrary JSON.
+                page = self._validated_page(source)
+            except (TypeError, ValueError):
+                # Rendered HTML is still authoritative when a provider emits malformed JSON.
+                # Falling through keeps acquisition useful without accepting unvalidated facts.
+                pass
+            else:
+                facts: list[EvidenceRecord] = []
+                for label, value in (
+                    ("Product name", page.product_name),
+                    ("Product type", page.product_type),
+                    ("Description", page.summary),
+                ):
+                    if value:
+                        self._append(
+                            facts,
+                            source,
+                            label=label,
+                            value=value,
+                            method="crawl4ai_schema",
+                            location=SourceLocation(excerpt=value[:1000]),
+                        )
+                for section in page.sections:
+                    context = tuple(part.strip() for part in section.context_path if part.strip())
+                    for prop in section.properties:
+                        self._append(
+                            facts,
+                            source,
+                            label=prop.label,
+                            value=prop.value,
+                            unit=prop.unit,
+                            method="crawl4ai_schema",
+                            context_path=context,
+                            location=SourceLocation(
+                                excerpt=(prop.source_excerpt or f"{prop.label}: {prop.value}")[
+                                    :1000
+                                ]
+                            ),
+                        )
+                return tuple(self._deduplicate(facts)), page.product_name, page
 
         # Project legacy deterministic facts into the same hierarchy so downstream storage/UI
         # never needs to know which extraction mode produced the page.

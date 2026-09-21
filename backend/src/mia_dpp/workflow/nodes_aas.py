@@ -100,7 +100,7 @@ async def store_result(
         source_fingerprint=state.get("source_fingerprint") or None,
         deployable=True,
     )
-    product = work.ctx.catalogue.get_product(work.product_id)
+    product = work.ctx.catalogue.get_product(work.product_id, user_id=work.user_id)
     if product is not None:
         from mia_dpp.domain.base import utc_now
 

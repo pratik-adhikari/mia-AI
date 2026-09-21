@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import hashlib
-import uuid
 from pathlib import Path
 
 from mia_dpp.storage.models import StoredArtifact
@@ -23,14 +22,18 @@ class LocalArtifactStore:
         run_id: str | None = None,
         derived_from: tuple[str, ...] = (),
     ) -> StoredArtifact:
-        artifact_id = f"artifact-{uuid.uuid4().hex}"
+        digest = hashlib.sha256(data).hexdigest()
+        identity = hashlib.sha256(f"{run_id or 'shared'}\0{key}\0{digest}".encode()).hexdigest()[
+            :24
+        ]
+        artifact_id = f"artifact-{identity}"
         # Preserve logical keys (images/, documents/, evidence/) so humans can browse a run.
         relative = Path(run_id or "shared") / self._safe_key(key)
         path = (self._root / relative).resolve()
         if self._root not in path.parents:
             raise ValueError("artifact path escapes storage root")
         path.parent.mkdir(parents=True, exist_ok=True)
-        if path.exists():
+        if path.exists() and path.read_bytes() != data:
             # Artifacts are immutable; retain both versions instead of overwriting an earlier file.
             path = path.with_name(f"{path.stem}-{artifact_id}{path.suffix}")
             relative = path.relative_to(self._root)
@@ -39,7 +42,7 @@ class LocalArtifactStore:
             id=artifact_id,
             key=key,
             content_type=content_type,
-            sha256=hashlib.sha256(data).hexdigest(),
+            sha256=digest,
             size=len(data),
             storage_uri=relative.as_posix(),
             product_id=product_id,

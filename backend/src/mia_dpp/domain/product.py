@@ -25,6 +25,24 @@ class MessageRole(StrEnum):
     SYSTEM = "system"
 
 
+class BackgroundJobStatus(StrEnum):
+    QUEUED = "queued"
+    RUNNING = "running"
+    COMPLETED = "completed"
+    FAILED = "failed"
+    CANCELLED = "cancelled"
+
+
+class ThreadRecord(WireModel):
+    id: str
+    user_id: str
+    title: str | None = None
+    active_product_id: str | None = None
+    created_at: AwareDatetime = Field(default_factory=utc_now)
+    updated_at: AwareDatetime = Field(default_factory=utc_now)
+    last_message_at: AwareDatetime | None = None
+
+
 class ProductRecord(WireModel):
     id: str
     canonical_url: str
@@ -81,3 +99,19 @@ class DppVersion(WireModel):
     source_fingerprint: str | None = None
     deployable: bool = False
     created_at: AwareDatetime = Field(default_factory=utc_now)
+
+
+class BackgroundJob(WireModel):
+    id: str
+    user_id: str
+    thread_id: str
+    product_id: str
+    run_id: str
+    job_type: str = "deep_crawl"
+    status: BackgroundJobStatus = BackgroundJobStatus.QUEUED
+    created_at: AwareDatetime = Field(default_factory=utc_now)
+    started_at: AwareDatetime | None = None
+    updated_at: AwareDatetime = Field(default_factory=utc_now)
+    completed_at: AwareDatetime | None = None
+    error: str | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)

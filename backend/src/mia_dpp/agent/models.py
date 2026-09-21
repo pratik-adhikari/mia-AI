@@ -197,3 +197,4 @@ class AgentResponse(WireModel):
     pending_human_request: HumanRequest | None = None
     trace_events: tuple[AgentTraceEvent, ...] = ()
     artifact_count: int = 0
+    background_job_id: str | None = None

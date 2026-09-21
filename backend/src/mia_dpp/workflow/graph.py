@@ -15,6 +15,7 @@ from mia_dpp.workflow.nodes_mapping import (
     deterministic_mapping,
     human_review,
     human_value,
+    integrate_background_research,
     semantic_mapping,
 )
 from mia_dpp.workflow.nodes_product import (
@@ -52,6 +53,7 @@ def create_graph(checkpointer: Any) -> Any:
         deterministic_mapping,
         semantic_mapping,
         human_review,
+        integrate_background_research,
         coverage,
         research,
         human_value,
@@ -68,7 +70,8 @@ def create_graph(checkpointer: Any) -> Any:
     graph.add_edge("build_targets", "deterministic_mapping")
     graph.add_edge("deterministic_mapping", "semantic_mapping")
     graph.add_conditional_edges("semantic_mapping", after_semantic_mapping, SEMANTIC_ROUTES)
-    graph.add_edge("human_review", "coverage")
+    graph.add_edge("human_review", "integrate_background_research")
+    graph.add_edge("integrate_background_research", "coverage")
     graph.add_conditional_edges("coverage", after_coverage, COVERAGE_ROUTES)
     graph.add_conditional_edges("research", after_research, RESEARCH_ROUTES)
     graph.add_edge("human_value", "coverage")

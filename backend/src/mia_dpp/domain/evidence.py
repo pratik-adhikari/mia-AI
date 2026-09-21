@@ -99,6 +99,8 @@ class AcquiredSource(WireModel):
     id: str = Field(pattern=r"^source-[a-z]+-[0-9a-f]{24}$")
     final_url: str = Field(min_length=1)
     rendered_html: str = Field(min_length=1)
+    markdown: str = ""
+    structured_content: str | None = None
     content_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     acquired_at: AwareDatetime
 

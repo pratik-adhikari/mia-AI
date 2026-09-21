@@ -2,6 +2,7 @@
 
 import { useMemo, useState } from "react";
 import type { WorkspaceArtifact } from "@/lib/types";
+import { useAuthenticatedFetch } from "@/lib/use-authenticated-fetch";
 
 const GROUP_LABELS: Record<string, string> = {
   search: "Sources", source: "Sources", raw: "Raw", evidence: "Evidence",
@@ -12,6 +13,7 @@ const GROUP_LABELS: Record<string, string> = {
 export function WorkspaceExplorer({ apiUrl, threadId, artifacts }: {
   apiUrl: string; threadId: string | null; artifacts: WorkspaceArtifact[];
 }) {
+  const authenticatedFetch = useAuthenticatedFetch();
   const [selected, setSelected] = useState<WorkspaceArtifact | null>(null);
   const [preview, setPreview] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -31,7 +33,7 @@ export function WorkspaceExplorer({ apiUrl, threadId, artifacts }: {
     if (!artifact.contentType.includes("json") && !artifact.contentType.startsWith("text/")) return;
     setLoading(true);
     try {
-      const response = await fetch(`${apiUrl}/api/workspaces/${encodeURIComponent(threadId)}/artifacts/${artifact.id}`);
+      const response = await authenticatedFetch(`${apiUrl}/api/workspaces/${encodeURIComponent(threadId)}/artifacts/${artifact.id}`);
       const text = await response.text();
       setPreview(artifact.contentType.includes("json") ? JSON.stringify(JSON.parse(text), null, 2) : text);
     } finally {

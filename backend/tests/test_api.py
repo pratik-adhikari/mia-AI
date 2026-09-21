@@ -57,7 +57,7 @@ def test_agent_message_endpoint_returns_a_resumable_thread(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     class Agent:
-        async def message(self, request: object) -> AgentResponse:
+        async def message(self, request: object, *, user_id: str) -> AgentResponse:
             return AgentResponse(
                 thread_id="thread-api-test",
                 reply="Please provide a product URL.",
@@ -81,7 +81,7 @@ def test_agent_endpoint_accepts_only_a_thread_and_new_message(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     class Agent:
-        async def message(self, request: object) -> AgentResponse:
+        async def message(self, request: object, *, user_id: str) -> AgentResponse:
             return AgentResponse(
                 thread_id="thread-agent-api-test",
                 reply="I need the exact company.",
@@ -111,7 +111,7 @@ def test_agent_endpoint_accepts_only_a_thread_and_new_message(
 def test_agent_model_contract_failure_returns_json_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    async def fail_message(request: object) -> AgentResponse:
+    async def fail_message(request: object, *, user_id: str) -> AgentResponse:
         raise UnexpectedModelBehavior("semantic output did not match its schema")
 
     monkeypatch.setattr(app.state.mia, "message", fail_message)

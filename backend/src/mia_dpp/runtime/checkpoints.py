@@ -16,7 +16,7 @@ async def open_checkpointer(
     settings: Settings,
 ) -> AsyncIterator[BaseCheckpointSaver[Any]]:
     if settings.database_url:
-        from langgraph.checkpoint.postgres.aio import (  # type: ignore[import-not-found]
+        from langgraph.checkpoint.postgres.aio import (
             AsyncPostgresSaver,
         )
 

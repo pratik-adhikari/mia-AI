@@ -10,6 +10,7 @@ from mia_dpp.domain.discovery import CompanyCandidate, ProductCandidate
 class MiaWorkflowState(TypedDict, total=False):
     # Conversation / identity
     thread_id: str
+    user_id: str
     user_message: str
     discovery_history_json: str
     company_candidates: tuple[CompanyCandidate, ...]
@@ -42,6 +43,7 @@ class MiaWorkflowState(TypedDict, total=False):
     dpp_artifact_id: str
     aas_artifact_id: str
     validation_artifact_id: str
+    background_job_id: str
 
     # Routing summaries
     mapping_cycle_id: str
@@ -86,6 +88,7 @@ def reset_product_state(
         "dpp_artifact_id": "",
         "aas_artifact_id": "",
         "validation_artifact_id": "",
+        "background_job_id": "",
         "mapping_cycle_id": "",
         "review_required": False,
         "required_unresolved": 0,

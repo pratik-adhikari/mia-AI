@@ -27,6 +27,10 @@ class RunWorkspace:
     def run_id(self) -> str:
         return self.state["run_id"]
 
+    @property
+    def user_id(self) -> str:
+        return self.state["user_id"]
+
     def state_id(self, key: str) -> str:
         artifact_id = self.state.get(key)
         if not artifact_id:
@@ -73,9 +77,7 @@ class RunWorkspace:
         return self.put_bytes(
             key,
             # Keep deterministic key ordering while writing readable multi-line manifests.
-            json.dumps(
-                value, ensure_ascii=False, sort_keys=True, indent=2, default=str
-            ).encode(),
+            json.dumps(value, ensure_ascii=False, sort_keys=True, indent=2, default=str).encode(),
             content_type="application/json",
             derived_from=derived_from,
         )
