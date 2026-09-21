@@ -35,6 +35,7 @@ class AgentResponseView:
 
     def build(self, state: dict[str, Any], *, trace_offset: int = 0) -> AgentResponse:
         thread_id = str(state.get("thread_id", ""))
+        user_id = str(state.get("user_id", "local-development"))
         pending = self._pending_request(state)
         status = self._status(state, pending)
         return AgentResponse(
@@ -52,8 +53,13 @@ class AgentResponseView:
             selected_product_ids=tuple(state.get("selected_product_ids", ())),
             current_product=self._current_product(state),
             pending_human_request=pending,
-            trace_events=self._workspace.list_events(thread_id, trace_offset),
-            artifact_count=len(self._workspace.list_artifacts(thread_id)),
+            trace_events=self._workspace.list_events(
+                thread_id,
+                trace_offset,
+                user_id=user_id,
+            ),
+            artifact_count=len(self._workspace.list_artifacts(thread_id, user_id=user_id)),
+            background_job_id=state.get("background_job_id") or None,
         )
 
     def _current_product(self, state: dict[str, Any]) -> ProductWork | None:
@@ -72,7 +78,10 @@ class AgentResponseView:
         )
         index = self._load_optional(work, state.get("targets_artifact_id"), TemplateIndex)
         dpp = self._load_optional(work, state.get("dpp_artifact_id"), DppPackage)
-        artifacts = self._context.catalogue.list_artifacts(run_id=str(run_id))
+        artifacts = self._context.catalogue.list_artifacts(
+            run_id=str(run_id),
+            user_id=str(state.get("user_id", "local-development")),
+        )
         return ProductWork(
             product_id=str(product_id),
             status=self._product_status(str(state.get("status", "running"))),

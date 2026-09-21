@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import hashlib
 import re
-import uuid
 from typing import Any
 
 from mia_dpp.storage.models import StoredArtifact
@@ -16,7 +15,7 @@ class VercelBlobArtifactStore:
     def __init__(self, *, token: str | None = None, client: Any | None = None) -> None:
         if client is None:
             try:
-                from vercel.blob import BlobClient  # type: ignore[import-not-found]
+                from vercel.blob import BlobClient
             except ImportError as error:  # pragma: no cover - production dependency
                 raise RuntimeError(
                     "Vercel Blob requires the production dependency group"
@@ -34,7 +33,11 @@ class VercelBlobArtifactStore:
         run_id: str | None = None,
         derived_from: tuple[str, ...] = (),
     ) -> StoredArtifact:
-        artifact_id = f"artifact-{uuid.uuid4().hex}"
+        digest = hashlib.sha256(data).hexdigest()
+        identity = hashlib.sha256(
+            f"{run_id or 'shared'}\0{key}\0{digest}".encode()
+        ).hexdigest()[:24]
+        artifact_id = f"artifact-{identity}"
         path = "/".join(
             (
                 "mia",
@@ -55,7 +58,7 @@ class VercelBlobArtifactStore:
             id=artifact_id,
             key=key,
             content_type=content_type,
-            sha256=hashlib.sha256(data).hexdigest(),
+            sha256=digest,
             size=len(data),
             storage_uri=uploaded.url,
             product_id=product_id,

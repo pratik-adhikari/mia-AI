@@ -71,7 +71,8 @@ collectAssets(document);
 // ARIA tabs are the portable signal for hidden/lazy product sections across different sites.
 const tabs = Array.from(document.querySelectorAll('[role="tab"][aria-controls]'))
   .filter((tab, index, all) => all.findIndex(other =>
-    other.getAttribute('aria-controls') === tab.getAttribute('aria-controls')) === index);
+    other.getAttribute('aria-controls') === tab.getAttribute('aria-controls')) === index)
+  .slice(0, 40);
 for (const tab of tabs) {
   const targetId = tab.getAttribute('aria-controls');
   const panel = targetId ? document.getElementById(targetId) : null;
@@ -271,7 +272,14 @@ class Crawl4AIPageLoader:
         results = execution_result.get("results")
         if not isinstance(results, list) or not results or not isinstance(results[0], list):
             return ()
-        return tuple(ExtractedAsset.model_validate(item) for item in results[0])
+        assets: list[ExtractedAsset] = []
+        for item in results[0]:
+            try:
+                assets.append(ExtractedAsset.model_validate(item))
+            except (TypeError, ValueError):
+                # A malformed optional asset must not discard otherwise valid rendered HTML.
+                continue
+        return tuple(assets)
 
     @staticmethod
     def _include_observed_assets(
@@ -282,7 +290,11 @@ class Crawl4AIPageLoader:
 
         if not extracted_content:
             return None
-        payload = json.loads(extracted_content)
+        try:
+            payload = json.loads(extracted_content)
+        except (TypeError, ValueError):
+            # WebsiteFactExtractor will use retained HTML when structured provider output is bad.
+            return extracted_content
         if not isinstance(payload, list) or len(payload) != 1 or not isinstance(payload[0], dict):
             return extracted_content
         existing = payload[0].get("assets", [])
@@ -295,9 +307,16 @@ class Crawl4AIPageLoader:
                 observed = observed_by_url.get(str(item.get("url") or ""))
                 item = {
                     **item,
-                    "label": observed.label if observed else str(item.get("kind") or "Asset").title(),
+                    "label": (
+                        observed.label
+                        if observed
+                        else str(item.get("kind") or "Asset").title()
+                    ),
                 }
-            assets.append(ExtractedAsset.model_validate(item))
+            try:
+                assets.append(ExtractedAsset.model_validate(item))
+            except (TypeError, ValueError):
+                continue
         known = {asset.url for asset in assets}
         for asset in observed_assets:
             if asset.url not in known:

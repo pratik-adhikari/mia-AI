@@ -9,7 +9,7 @@ from pydantic_ai import Agent
 from pydantic_ai.models import Model
 
 from mia_dpp.domain.base import WireModel
-from mia_dpp.tools.web.models import SourceLink, SourceExplorationPlanner
+from mia_dpp.tools.web.models import SourceLink
 
 _INSTRUCTIONS = """Select every discovered page that may expose additional public product facts,
 variant data, images, datasheets, drawings, manuals, certificates, CAD files, or download previews.

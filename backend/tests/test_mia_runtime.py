@@ -15,7 +15,7 @@ from mia_dpp.persistence.catalogue import ProductCatalogue
 
 
 class _Store:
-    def list_events(self, thread_id: str):
+    def list_events(self, thread_id: str, *, user_id: str):
         return ()
 
 

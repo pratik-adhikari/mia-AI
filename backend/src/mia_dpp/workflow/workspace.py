@@ -27,6 +27,10 @@ class RunWorkspace:
     def run_id(self) -> str:
         return self.state["run_id"]
 
+    @property
+    def user_id(self) -> str:
+        return self.state["user_id"]
+
     def state_id(self, key: str) -> str:
         artifact_id = self.state.get(key)
         if not artifact_id:

@@ -13,7 +13,6 @@ import httpx
 from mia_dpp.domain.evidence import (
     AcquiredSource,
     ProductKnowledgePackage,
-    SourceAcquisitionFailure,
 )
 from mia_dpp.errors import ExtractionError
 from mia_dpp.tools.web.generic import WebsiteFactExtractor
@@ -77,65 +76,62 @@ class WebExtractionTool:
         self._source_planner = source_planner
 
     async def extract(self, url: str) -> ProductKnowledgePackage:
-        """Extract the seed page and any Crawl4AI-discovered sources selected by the planner."""
+        """Return the seed product page immediately; deep research is a separate durable job."""
 
         requested_url = await self._url_policy.validate(url)
         seed_page = await self._validated_page(await self._loader.load(requested_url))
-        seed_evidence, product_name, seed_extracted = self._fact_extractor.extract_structured(
-            seed_page
-        )
-        pages = [seed_page]
-        source_failures: list[SourceAcquisitionFailure] = []
-        if self._source_planner is not None:
-            candidates = await self.discover_sources(requested_url)
-            selected = await self._source_planner.select(
-                seed_url=seed_page.url,
-                product_name=product_name,
-                candidates=candidates,
-            )
-            secondary_loader = getattr(self._loader, "load_source", self._loader.load)
-            for link in selected:
-                try:
-                    pages.append(await self._validated_page(await secondary_loader(link.url)))
-                except ExtractionError as exc:
-                    # Exploration is additive: retain the failure for audit, but do not throw
-                    # away already-valid seed evidence because one optional page timed out.
-                    source_failures.append(
-                        SourceAcquisitionFailure(url=link.url, error=str(exc)[:2000])
-                    )
+        return self._package(seed_page)
 
-        evidence = list(seed_evidence)
-        extracted_pages = [seed_extracted] if seed_extracted is not None else []
-        sources: list[AcquiredSource] = []
-        source_ids: list[str] = []
-        for index, page in enumerate(pages):
-            if index:
-                page_evidence, _, extracted_page = self._fact_extractor.extract_structured(page)
-                evidence.extend(page_evidence)
-                if extracted_page is not None:
-                    extracted_pages.append(extracted_page)
-            source_id = f"source-web-{page.content_sha256[:24]}"
-            source_ids.append(source_id)
-            sources.append(
+    async def extract_source(self, url: str) -> ProductKnowledgePackage:
+        """Acquire one selected secondary source without another semantic extraction request."""
+
+        requested_url = await self._url_policy.validate(url)
+        secondary_loader = getattr(self._loader, "load_source", self._loader.load)
+        page = await self._validated_page(await secondary_loader(requested_url))
+        return self._package(page)
+
+    async def select_deep_sources(
+        self,
+        *,
+        seed_url: str,
+        product_name: str,
+    ) -> tuple[SourceLink, ...]:
+        """Discover through Crawl4AI, then optionally apply the existing bounded LLM selector."""
+
+        candidates = await self.discover_sources(seed_url)
+        if self._source_planner is None:
+            return candidates
+        return await self._source_planner.select(
+            seed_url=seed_url,
+            product_name=product_name,
+            candidates=candidates,
+        )
+
+    def _package(self, page: RenderedPage) -> ProductKnowledgePackage:
+        evidence, product_name, extracted_page = self._fact_extractor.extract_structured(page)
+        if not evidence:
+            raise ExtractionError("the product page contained no useful structured facts")
+        source_id = f"source-web-{page.content_sha256[:24]}"
+        product_id = "product-" + hashlib.sha256(
+            f"{page.url}\0{product_name}".encode()
+        ).hexdigest()[:24]
+        return ProductKnowledgePackage(
+            product_id=product_id,
+            product_name=product_name,
+            source_artifact_ids=(source_id,),
+            acquired_sources=(
                 AcquiredSource(
                     id=source_id,
                     final_url=page.url,
                     rendered_html=page.html,
+                    markdown=page.markdown,
+                    structured_content=page.extracted_content,
                     content_sha256=page.content_sha256,
                     acquired_at=page.acquired_at,
-                )
-            )
-        if not evidence:
-            raise ExtractionError("the product page contained no useful structured facts")
-        return ProductKnowledgePackage(
-            product_id="product-"
-            + hashlib.sha256(f"{seed_page.url}\0{product_name}".encode()).hexdigest()[:24],
-            product_name=product_name,
-            source_artifact_ids=tuple(source_ids),
-            acquired_sources=tuple(sources),
-            source_failures=tuple(source_failures),
-            extracted_pages=tuple(extracted_pages),
-            evidence=tuple({item.id: item for item in evidence}.values()),
+                ),
+            ),
+            extracted_pages=(extracted_page,) if extracted_page is not None else (),
+            evidence=evidence,
         )
 
     async def _validated_page(self, page: RenderedPage) -> RenderedPage:

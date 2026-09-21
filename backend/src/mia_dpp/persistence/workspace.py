@@ -8,7 +8,7 @@ from io import BytesIO
 from pathlib import PurePosixPath
 
 from mia_dpp.agent.models import AgentTraceEvent, TraceStatus
-from mia_dpp.persistence.catalogue import ProductCatalogue
+from mia_dpp.persistence.catalogue import LOCAL_USER_ID, ProductCatalogue
 from mia_dpp.storage.base import ArtifactStore
 from mia_dpp.storage.models import ArtifactKind, StoredArtifact, WorkspaceArtifact
 from mia_dpp.tools.mapping.models import MappingKnowledgeEntry
@@ -21,11 +21,22 @@ class WorkspaceView:
         self._catalogue = catalogue
         self._artifacts = artifacts
 
-    def list_artifacts(self, thread_id: str) -> tuple[WorkspaceArtifact, ...]:
-        return tuple(self._view(item) for item in self._stored(thread_id))
+    def list_artifacts(
+        self,
+        thread_id: str,
+        *,
+        user_id: str = LOCAL_USER_ID,
+    ) -> tuple[WorkspaceArtifact, ...]:
+        return tuple(self._view(item) for item in self._stored(thread_id, user_id=user_id))
 
-    def read_artifact(self, thread_id: str, artifact_id: str) -> tuple[WorkspaceArtifact, bytes]:
-        allowed = {item.id for item in self._stored(thread_id)}
+    def read_artifact(
+        self,
+        thread_id: str,
+        artifact_id: str,
+        *,
+        user_id: str = LOCAL_USER_ID,
+    ) -> tuple[WorkspaceArtifact, bytes]:
+        allowed = {item.id for item in self._stored(thread_id, user_id=user_id)}
         if artifact_id not in allowed:
             raise KeyError("unknown artifact")
         artifact = self._catalogue.get_artifact(artifact_id)
@@ -33,11 +44,17 @@ class WorkspaceView:
             raise KeyError("unknown artifact")
         return self._view(artifact), self._artifacts.get(artifact)
 
-    def list_events(self, thread_id: str, offset: int = 0) -> tuple[AgentTraceEvent, ...]:
+    def list_events(
+        self,
+        thread_id: str,
+        offset: int = 0,
+        *,
+        user_id: str = LOCAL_USER_ID,
+    ) -> tuple[AgentTraceEvent, ...]:
         events = [
             event
-            for run in self._catalogue.list_runs_for_thread(thread_id)
-            for event in self._catalogue.list_events(run.id)
+            for run in self._catalogue.list_runs_for_thread(thread_id, user_id=user_id)
+            for event in self._catalogue.list_events(run.id, user_id=user_id)
         ][offset:]
         result = []
         for event in events:
@@ -56,8 +73,8 @@ class WorkspaceView:
             )
         return tuple(result)
 
-    def export_zip(self, thread_id: str) -> bytes:
-        artifacts = self._stored(thread_id)
+    def export_zip(self, thread_id: str, *, user_id: str = LOCAL_USER_ID) -> bytes:
+        artifacts = self._stored(thread_id, user_id=user_id)
         output = BytesIO()
         with zipfile.ZipFile(output, "w", zipfile.ZIP_DEFLATED) as archive:
             archive.writestr(
@@ -74,8 +91,13 @@ class WorkspaceView:
                 archive.writestr(name, self._artifacts.get(artifact))
         return output.getvalue()
 
-    def combined_export(self, thread_id: str) -> dict[str, object]:
-        artifacts = self._stored(thread_id)
+    def combined_export(
+        self,
+        thread_id: str,
+        *,
+        user_id: str = LOCAL_USER_ID,
+    ) -> dict[str, object]:
+        artifacts = self._stored(thread_id, user_id=user_id)
         contents: dict[str, object] = {}
         for artifact in artifacts:
             if "json" in artifact.content_type:
@@ -88,9 +110,12 @@ class WorkspaceView:
     def list_mapping_knowledge(self) -> tuple[MappingKnowledgeEntry, ...]:
         return self._catalogue.list_mapping_knowledge()
 
-    def _stored(self, thread_id: str) -> tuple[StoredArtifact, ...]:
-        run_ids = tuple(run.id for run in self._catalogue.list_runs_for_thread(thread_id))
-        return self._catalogue.list_artifacts_for_runs(run_ids)
+    def _stored(self, thread_id: str, *, user_id: str) -> tuple[StoredArtifact, ...]:
+        run_ids = tuple(
+            run.id
+            for run in self._catalogue.list_runs_for_thread(thread_id, user_id=user_id)
+        )
+        return self._catalogue.list_artifacts_for_runs(run_ids, user_id=user_id)
 
     @staticmethod
     def _view(artifact: StoredArtifact) -> WorkspaceArtifact:

@@ -22,7 +22,7 @@ async def research(
     index = work.load_state("targets_artifact_id", TemplateIndex)
     missing = set(state.get("missing_requirement_ids", ()))
     requirements = tuple(item for item in index.requirements if item.id in missing)
-    product = work.ctx.catalogue.get_product(work.product_id)
+    product = work.ctx.catalogue.get_product(work.product_id, user_id=work.user_id)
     domain = None
     if product is not None:
         domain = (urlsplit(product.canonical_url).hostname or "").removeprefix("www.")

@@ -12,11 +12,13 @@ from mia_dpp.aas.requirements import build_template_index
 from mia_dpp.agent.models import AgentReviewRequest, AgentValueRequest
 from mia_dpp.domain.evidence import ProductKnowledgePackage
 from mia_dpp.domain.mappings import CoverageStatus, MappingResult, SemanticReviewItem
-from mia_dpp.domain.product import RunStatus
+from mia_dpp.domain.product import BackgroundJobStatus, RunStatus
 from mia_dpp.domain.targets import RequirementKind, TemplateIndex
+from mia_dpp.services.deep_research import merge_mapping_results
 from mia_dpp.tools.mapping.coverage import coverage as calculate_coverage
 from mia_dpp.tools.mapping.mapper import DeterministicWebsiteMapper
 from mia_dpp.workflow.context import MiaContext
+from mia_dpp.workflow.nodes_product import merge_packages
 from mia_dpp.workflow.state import MiaWorkflowState
 from mia_dpp.workflow.workspace import RunWorkspace
 
@@ -66,7 +68,7 @@ async def semantic_mapping(
     package = work.load_state("evidence_artifact_id", ProductKnowledgePackage)
     index = work.load_state("targets_artifact_id", TemplateIndex)
     deterministic = work.load_state("deterministic_mapping_artifact_id", MappingResult)
-    product = work.ctx.catalogue.get_product(work.product_id)
+    product = work.ctx.catalogue.get_product(work.product_id, user_id=work.user_id)
     domain = (urlsplit(product.canonical_url).hostname or "") if product else None
     knowledge = tuple(
         {
@@ -177,7 +179,7 @@ async def human_review(
         )
         reviewed.append(item)
         if item.mapping is not None:
-            product = work.ctx.catalogue.get_product(work.product_id)
+            product = work.ctx.catalogue.get_product(work.product_id, user_id=work.user_id)
             domain = (urlsplit(product.canonical_url).hostname or "") if product else None
             work.ctx.catalogue.remember_mapping_review(
                 item.mapping,
@@ -256,6 +258,92 @@ async def coverage(
         "required_unresolved": len(unresolved),
         "missing_requirement_ids": unresolved,
     }
+
+
+async def integrate_background_research(
+    state: MiaWorkflowState,
+    runtime: Runtime[MiaContext],
+) -> dict[str, Any]:
+    """Adopt completed research artifacts without waiting for the background worker."""
+
+    job_id = state.get("background_job_id")
+    if not job_id:
+        return {}
+    work = RunWorkspace(state, runtime.context)
+    job = work.ctx.catalogue.get_background_job(job_id, user_id=work.user_id)
+    if job is None or job.status is not BackgroundJobStatus.COMPLETED:
+        return {}
+    evidence_artifact = job.metadata.get("researchEvidenceArtifactId")
+    if not isinstance(evidence_artifact, str):
+        return {}
+    existing_package = work.load_state("evidence_artifact_id", ProductKnowledgePackage)
+    research_package = work.load(evidence_artifact, ProductKnowledgePackage)
+    merged_package = merge_packages(existing_package, research_package, preserve_existing=True)
+    known_ids = {item.id for item in existing_package.evidence}
+    new_ids = {item.id for item in merged_package.evidence} - known_ids
+    if not new_ids:
+        return {}
+
+    current_mapping_id = state.get("reviewed_mapping_artifact_id") or work.state_id(
+        "semantic_mapping_artifact_id"
+    )
+    current_mapping = work.load(current_mapping_id, MappingResult)
+    incremental_mapping_id = job.metadata.get("newMappingArtifactId")
+    if isinstance(incremental_mapping_id, str):
+        incremental_mapping = work.load(incremental_mapping_id, MappingResult)
+    else:
+        mapper = work.ctx.semantic_mapper
+        if mapper is None:
+            return {}
+        index = work.load_state("targets_artifact_id", TemplateIndex)
+        incremental = merged_package.model_copy(
+            update={
+                "evidence": tuple(item for item in merged_package.evidence if item.id in new_ids)
+            }
+        )
+        deterministic = await DeterministicWebsiteMapper(work.ctx.templates, index).propose(
+            incremental.evidence
+        )
+        semantic = await mapper.map(incremental, index, deterministic)
+        incremental_mapping = work.ctx.mapping_review.apply_semantic_run(
+            incremental,
+            deterministic,
+            index,
+            semantic,
+        )
+    merged_mapping = merge_mapping_results(current_mapping, incremental_mapping)
+    merged_evidence_id = work.put_model(
+        "evidence/product-knowledge-integrated.json",
+        merged_package,
+        derived_from=(work.state_id("evidence_artifact_id"), evidence_artifact),
+    )
+    merged_mapping_id = work.put_model(
+        "mapping/research-integrated.json",
+        merged_mapping,
+        derived_from=(current_mapping_id,),
+    )
+    work.event(
+        "research.integrated",
+        f"Integrated {len(new_ids)} new background evidence records "
+        "without replacing review state.",
+        metadata={"jobId": job.id, "evidenceAdded": len(new_ids)},
+    )
+    update: dict[str, Any] = {
+        "evidence_artifact_id": merged_evidence_id,
+        "known_source_urls": tuple(
+            dict.fromkeys(
+                (
+                    *state.get("known_source_urls", ()),
+                    *(source.final_url for source in merged_package.acquired_sources),
+                )
+            )
+        ),
+    }
+    if state.get("reviewed_mapping_artifact_id"):
+        update["reviewed_mapping_artifact_id"] = merged_mapping_id
+    else:
+        update["semantic_mapping_artifact_id"] = merged_mapping_id
+    return update
 
 
 async def human_value(
