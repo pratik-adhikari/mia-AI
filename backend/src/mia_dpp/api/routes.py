@@ -29,6 +29,7 @@ from mia_dpp.api.schemas import (
     HealthResponse,
     ProductDetail,
     ProductLibraryItem,
+    StorageStatus,
 )
 from mia_dpp.domain.product import BackgroundJob, ChatMessage, ThreadRecord
 from mia_dpp.domain.targets import TemplateSummary
@@ -71,6 +72,35 @@ async def health(http_request: Request) -> HealthResponse:
         version=__version__,
         standards_ready=True,
         standards_commit=STANDARDS_REPOSITORY_COMMIT,
+    )
+
+
+@router.get("/api/runtime/storage", response_model=StorageStatus)
+async def runtime_storage(
+    http_request: Request,
+    _user_id: AuthenticatedUser,
+) -> StorageStatus:
+    """Report which durable storage adapters the running deployment actually selected."""
+
+    application = _application(http_request)
+    database_url = application.settings.database_url or ""
+    database_backend = application.context.catalogue.backend
+    provider = (
+        "supabase"
+        if "supabase.com" in database_url.casefold()
+        else ("postgres" if database_backend == "postgres" else "local")
+    )
+    artifact_backend = (
+        "vercel_blob"
+        if application.context.artifacts.__class__.__name__ == "VercelBlobArtifactStore"
+        else "filesystem"
+    )
+    return StorageStatus(
+        database_backend=database_backend,
+        database_provider=provider,
+        artifact_backend=artifact_backend,
+        durable_metadata=database_backend == "postgres",
+        durable_artifacts=artifact_backend == "vercel_blob",
     )
 
 
