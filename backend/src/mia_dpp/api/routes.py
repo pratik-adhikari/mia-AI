@@ -32,7 +32,7 @@ from mia_dpp.api.schemas import (
     ProductLibraryItem,
     StorageStatus,
 )
-from mia_dpp.domain.product import BackgroundJob, ChatMessage, ThreadRecord
+from mia_dpp.domain.product import BackgroundJob, ChatMessage, RunStatus, ThreadRecord
 from mia_dpp.domain.targets import TemplateSummary
 from mia_dpp.errors import MiaError
 from mia_dpp.mia import Mia
@@ -357,7 +357,7 @@ async def create_dpp(
         return package
     except TemplateRepositoryError as error:
         raise HTTPException(status_code=503, detail=str(error)) from error
-    except MiaError as error:
+    except (MiaError, ValueError) as error:
         raise HTTPException(status_code=422, detail=str(error)) from error
 
 
