@@ -36,6 +36,48 @@ body {
   background: transparent;
 }
 
+/* ── Auth page blob animations ── */
+@keyframes blob-drift {
+  0%, 100% { transform: translate(0, 0) scale(1); }
+  33%       { transform: translate(40px, -60px) scale(1.12); }
+  66%       { transform: translate(-30px, 30px) scale(0.92); }
+}
+
+.blob {
+  position: absolute;
+  border-radius: 50%;
+  filter: blur(80px);
+  opacity: 0.18;
+  animation: blob-drift 18s ease-in-out infinite;
+}
+
+.blob-1 {
+  width: 520px;
+  height: 520px;
+  background: #0B5FD0;
+  top: -120px;
+  left: -80px;
+  animation-delay: 0s;
+}
+
+.blob-2 {
+  width: 420px;
+  height: 420px;
+  background: #1B8A5A;
+  bottom: 60px;
+  right: -60px;
+  animation-delay: -6s;
+}
+
+.blob-3 {
+  width: 340px;
+  height: 340px;
+  background: #6E6E73;
+  top: 40%;
+  left: 30%;
+  animation-delay: -12s;
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,
