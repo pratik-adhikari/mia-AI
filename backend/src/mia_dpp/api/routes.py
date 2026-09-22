@@ -271,6 +271,20 @@ async def create_dpp(
         raise HTTPException(status_code=422, detail=str(error)) from error
 
 
+@router.get("/api/threads/{thread_id}", response_model=AgentResponse)
+async def thread_state(
+    thread_id: str,
+    http_request: Request,
+    user_id: AuthenticatedUser,
+) -> AgentResponse:
+    """Restore the checkpoint-backed workspace state for an owned conversation."""
+
+    try:
+        return await _application(http_request).thread_state(thread_id, user_id=user_id)
+    except KeyError as error:
+        raise HTTPException(status_code=404, detail="unknown thread") from error
+
+
 @router.get(
     "/api/threads/{thread_id}/messages",
     response_model=tuple[ChatMessage, ...],
