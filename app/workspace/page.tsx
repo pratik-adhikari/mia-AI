@@ -604,7 +604,7 @@ export default function Workspace() {
     ) ?? [];
 
   return (
-    <div className="flex h-screen flex-col bg-mist">
+    <div className="flex h-full flex-col bg-mist">
       {/* Top bar */}
       <header className="relative z-10 flex h-14 shrink-0 items-center justify-between border-b border-hairline bg-paper px-5 shadow-sm">
         <div className="flex items-center gap-3">
