@@ -15,9 +15,11 @@ export async function POST(request: Request) {
     return NextResponse.json({ detail: "jobId is required" }, { status: 422 });
   }
   const token = await session.getToken();
-  const origin = new URL(request.url).origin;
+  const configured =
+    process.env.MIA_BACKEND_URL ?? process.env.NEXT_PUBLIC_MIA_API_URL;
+  const backend = configured ? new URL(configured) : new URL(request.url).origin;
   const ownership = await fetch(
-    new URL(`/api/background-jobs/${encodeURIComponent(body.jobId)}`, origin),
+    new URL(`/api/background-jobs/${encodeURIComponent(body.jobId)}`, backend),
     { headers: token ? { Authorization: `Bearer ${token}` } : {} },
   );
   if (!ownership.ok) {
@@ -26,6 +28,6 @@ export async function POST(request: Request) {
       { status: ownership.status },
     );
   }
-  const run = await start(runDeepResearch, [body.jobId, origin]);
+  const run = await start(runDeepResearch, [body.jobId, backend.toString()]);
   return NextResponse.json({ jobId: body.jobId, workflowRunId: run.runId }, { status: 202 });
 }
