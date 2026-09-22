@@ -35,3 +35,13 @@ class ProductDetail(WireModel):
     runs: tuple[ProductRun, ...] = ()
     dpp_versions: tuple[DppVersion, ...] = ()
     artifacts: tuple[StoredArtifact, ...] = ()
+
+
+class StorageStatus(WireModel):
+    """Safe runtime persistence diagnostics without exposing credentials."""
+
+    database_backend: Literal["sqlite", "postgres"]
+    database_provider: Literal["local", "postgres", "supabase"]
+    artifact_backend: Literal["filesystem", "vercel_blob"]
+    durable_metadata: bool
+    durable_artifacts: bool
