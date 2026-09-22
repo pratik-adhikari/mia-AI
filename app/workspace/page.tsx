@@ -554,6 +554,8 @@ export default function Workspace() {
           productName: selectedProduct || "Product",
           mappings: selectedMappings,
           evidence: selectedEvidence,
+          threadId,
+          productId: currentProductId,
         }),
       });
       if (!response.ok) {
