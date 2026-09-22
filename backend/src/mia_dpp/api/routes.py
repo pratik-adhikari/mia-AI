@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import secrets
 
@@ -284,17 +285,76 @@ async def mapping_knowledge(
 async def create_dpp(
     payload: DppBuildRequest,
     http_request: Request,
-    _user_id: AuthenticatedUser,
+    user_id: AuthenticatedUser,
 ) -> DppPackage:
-    """Build and validate an official-template-backed AAS environment."""
+    """Build, validate, and when scoped to a workspace, durably persist the DPP."""
 
     try:
-        return build_dpp(
+        application = _application(http_request)
+        package = build_dpp(
             payload.product_name,
             list(payload.mappings),
-            repository=_application(http_request).templates,
+            repository=application.templates,
             evidence=payload.evidence,
         )
+        if payload.thread_id and payload.product_id:
+            catalogue = application.context.catalogue
+            if catalogue.get_thread(payload.thread_id, user_id=user_id) is None:
+                raise ValueError("unknown thread")
+            product = catalogue.get_product(payload.product_id, user_id=user_id)
+            if product is None:
+                raise ValueError("unknown product")
+            run = catalogue.start_run(
+                product.id,
+                payload.thread_id,
+                user_id=user_id,
+                refresh_requested=True,
+            )
+
+            def persist(key: str, data: bytes, content_type: str) -> str:
+                artifact = application.context.artifacts.put(
+                    key,
+                    data,
+                    content_type=content_type,
+                    product_id=product.id,
+                    run_id=run.id,
+                )
+                catalogue.register_artifact(artifact)
+                return artifact.id
+
+            dpp_id = persist(
+                "dpp/manual-package.json",
+                package.model_dump_json(by_alias=True, indent=2).encode(),
+                "application/json",
+            )
+            aas_id = persist(
+                "aas/manual-environment.json",
+                json.dumps(package.environment, indent=2, default=str).encode(),
+                "application/json",
+            )
+            validation_id = persist(
+                "aas/manual-validation.json",
+                package.validation_report.model_dump_json(by_alias=True, indent=2).encode(),
+                "application/json",
+            )
+            catalogue.finish_run(
+                run.id,
+                RunStatus.COMPLETED if package.deployable else RunStatus.FAILED,
+                error=None if package.deployable else "Manual DPP validation blocked deployment",
+            )
+            if package.deployable:
+                catalogue.create_dpp_version(
+                    product.id,
+                    run.id,
+                    dpp_artifact_id=dpp_id,
+                    aas_artifact_id=aas_id,
+                    validation_artifact_id=validation_id,
+                    source_fingerprint=hashlib.sha256(
+                        package.model_dump_json(by_alias=True).encode()
+                    ).hexdigest(),
+                    deployable=True,
+                )
+        return package
     except TemplateRepositoryError as error:
         raise HTTPException(status_code=503, detail=str(error)) from error
     except MiaError as error:
