@@ -2,7 +2,6 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import type cytoscape from "cytoscape";
-import type dagre from "cytoscape-dagre";
 import type { useAuthenticatedFetch } from "@/lib/use-authenticated-fetch";
 
 type AuthenticatedFetch = ReturnType<typeof useAuthenticatedFetch>;
@@ -48,6 +47,7 @@ export function LiveGraphDebugPanel({
   const [layoutReady, setLayoutReady] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
   const cyRef = useRef<cytoscape.Core | null>(null);
+  const directionRef = useRef<"RIGHT" | "DOWN">("RIGHT");
   const stateRef = useRef(state);
   stateRef.current = state;
 
@@ -155,23 +155,24 @@ export function LiveGraphDebugPanel({
       cy.getElementById(id).addClass(status);
     }
     cy.resize();
-    cy.fit(undefined, 28);
   }, [state.statuses]);
 
   useEffect(() => {
     let destroyed = false;
     async function createGraph() {
       if (!containerRef.current || state.nodes.length === 0) return;
-      const [cytoscapeModule, dagreModule] = await Promise.all([
+      const [cytoscapeModule, elkModule] = await Promise.all([
         import("cytoscape"),
-        import("cytoscape-dagre"),
+        import("cytoscape-elk"),
       ]);
       if (destroyed || !containerRef.current) return;
       const cytoscape = cytoscapeModule.default;
-      cytoscape.use(dagreModule.default);
+      cytoscape.use(elkModule.default);
       cyRef.current?.destroy();
+      directionRef.current = layoutDirection(containerRef.current);
       cyRef.current = cytoscape({
         container: containerRef.current,
+        layout: { name: "preset" },
         elements: [
           ...state.nodes.map((node) => ({
             data: {
@@ -191,20 +192,19 @@ export function LiveGraphDebugPanel({
             classes: edge.conditional ? "conditional" : "",
           })),
         ],
-        layout: { name: "dagre", rankDir: "LR", rankSep: 40, nodeSep: 38, padding: 24 } as dagre.DagreLayoutOptions,
         style: [
           {
             selector: "node",
             style: {
               label: "data(label)",
               "font-family": "Inter, sans-serif",
-              "font-size": 11,
+              "font-size": 13,
               color: "#172033",
               "text-wrap": "wrap",
-              "text-max-width": "136px",
+              "text-max-width": "190px",
               width: "label",
               height: "label",
-              padding: "12px",
+              padding: "14px",
               shape: "round-rectangle",
               "background-color": "#e8edf5",
               "border-width": 1,
@@ -238,7 +238,7 @@ export function LiveGraphDebugPanel({
               "target-arrow-shape": "triangle",
               "curve-style": "bezier",
               label: "data(label)",
-              "font-size": 8,
+              "font-size": 10,
               color: "#667085",
               "text-background-color": "#fff",
               "text-background-opacity": 0.9,
@@ -248,11 +248,12 @@ export function LiveGraphDebugPanel({
           { selector: "edge.conditional", style: { "line-style": "dashed" } },
         ],
       });
+      cyRef.current.one("layoutstop", () => setLayoutReady(true));
+      cyRef.current.layout(elkLayout(directionRef.current)).run();
       cyRef.current?.nodes().removeClass("running completed waiting failed");
       for (const [id, status] of Object.entries(stateRef.current.statuses)) {
         cyRef.current?.getElementById(id).addClass(status);
       }
-      setLayoutReady(true);
     }
     setLayoutReady(false);
     void createGraph();
@@ -262,6 +263,22 @@ export function LiveGraphDebugPanel({
       cyRef.current = null;
     };
   }, [state.edges, state.nodes]);
+
+  useEffect(() => {
+    const container = containerRef.current;
+    const cy = cyRef.current;
+    if (!container || !cy || !layoutReady) return;
+    const observer = new ResizeObserver(() => {
+      cy.resize();
+      const direction = layoutDirection(container);
+      if (direction !== directionRef.current) {
+        directionRef.current = direction;
+        cy.layout(elkLayout(direction)).run();
+      }
+    });
+    observer.observe(container);
+    return () => observer.disconnect();
+  }, [layoutReady]);
 
   useEffect(() => applyNodeStates(), [applyNodeStates]);
 
@@ -282,7 +299,7 @@ export function LiveGraphDebugPanel({
   return (
     <>
       <button aria-label="Close workflow debug panel" onClick={onClose} className="fixed inset-0 z-40 cursor-default bg-slate-950/25" />
-      <aside className="fixed inset-y-14 right-0 z-50 flex w-[min(920px,96vw)] flex-col border-l border-slate-200 bg-white shadow-2xl">
+      <aside className="fixed inset-y-14 right-0 z-50 flex w-[min(1280px,98vw)] flex-col border-l border-slate-200 bg-white shadow-2xl">
         <header className="flex items-start justify-between border-b border-slate-200 px-5 py-4">
           <div>
             <div className="flex items-center gap-2">
@@ -330,6 +347,27 @@ function category(name: string): string {
   if (["discover_product", "semantic_mapping", "research"].includes(node)) return "agent";
   if (node.includes("aas") || node.includes("store_result")) return "output";
   return "workflow";
+}
+
+function layoutDirection(container: HTMLDivElement): "RIGHT" | "DOWN" {
+  const { width, height } = container.getBoundingClientRect();
+  return width >= height * 1.15 ? "RIGHT" : "DOWN";
+}
+
+function elkLayout(direction: "RIGHT" | "DOWN"): cytoscape.LayoutOptions {
+  return {
+    name: "elk",
+    fit: true,
+    padding: 48,
+    nodeDimensionsIncludeLabels: true,
+    elk: {
+      algorithm: "layered",
+      "elk.direction": direction,
+      "elk.edgeRouting": "ORTHOGONAL",
+      "elk.spacing.nodeNode": "36",
+      "elk.layered.spacing.nodeNodeBetweenLayers": "58",
+    },
+  } as cytoscape.LayoutOptions;
 }
 
 function Legend({ color, label }: { color: string; label: string }) {

@@ -11,7 +11,7 @@
   "dependencies": {
     "@clerk/nextjs": "^7.9.4",
     "cytoscape": "^3.34.3",
-    "cytoscape-dagre": "^4.0.1",
+    "cytoscape-elk": "^2.3.0",
     "next": "16.3.4",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
