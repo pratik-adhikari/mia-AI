@@ -15,11 +15,13 @@ services:
       MIA_CATALOGUE_PATH: /data/catalogue.sqlite3
       MIA_THREAD_STORE_PATH: /data/mia-agent.sqlite3
       MIA_WORKSPACE_ROOT: /data/workspaces
+      MIA_CONFIG_PATH: /app/config.json
       CLERK_AUTHORIZED_PARTIES: "${CLERK_AUTHORIZED_PARTIES:-http://localhost:3000,http://127.0.0.1:3000}"
     ports:
       - "${BACKEND_PORT:-8000}:8000"
     volumes:
       - mia-data:/data
+      - ./config.json:/app/config.json:ro
     healthcheck:
       test:
         - CMD
@@ -52,12 +54,14 @@ services:
       MIA_CATALOGUE_PATH: /data/catalogue.sqlite3
       MIA_THREAD_STORE_PATH: /data/mia-agent.sqlite3
       MIA_WORKSPACE_ROOT: /data/workspaces
+      MIA_CONFIG_PATH: /app/config.json
       MIA_WORKER_POLL_SECONDS: "${MIA_WORKER_POLL_SECONDS:-1}"
     depends_on:
       backend:
         condition: service_healthy
     volumes:
       - mia-data:/data
+      - ./config.json:/app/config.json:ro
     restart: unless-stopped
 
   frontend:
@@ -73,6 +77,9 @@ services:
         required: false
     environment:
       MIA_RESEARCH_DISPATCH: local
+      MIA_LOCAL_MODE: "1"
+      VERCEL_ENV: ""
+      MIA_CONFIG_PATH: /app/config.json
       MIA_BACKEND_URL: http://backend:8000
       NEXT_PUBLIC_MIA_API_URL: "${NEXT_PUBLIC_MIA_API_URL:-http://127.0.0.1:8000}"
     depends_on:
@@ -82,6 +89,8 @@ services:
         condition: service_started
     ports:
       - "${FRONTEND_PORT:-3000}:3000"
+    volumes:
+      - ./config.json:/app/config.json:ro
     healthcheck:
       test:
         - CMD

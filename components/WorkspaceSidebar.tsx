@@ -3,6 +3,7 @@
 import { UserButton } from "@clerk/nextjs";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { useAuthenticationEnabled } from "@/lib/app-providers";
 
 const ITEMS = [
   { label: "New passport", href: "/workspace", exact: true },
@@ -12,6 +13,7 @@ const ITEMS = [
 
 export function WorkspaceSidebar() {
   const pathname = usePathname();
+  const authenticationEnabled = useAuthenticationEnabled();
   return (
     <aside className="fixed left-0 top-0 z-30 flex h-full w-[240px] flex-col border-r border-hairline bg-paper">
       <div className="flex h-14 shrink-0 items-center border-b border-hairline px-4">
@@ -42,8 +44,14 @@ export function WorkspaceSidebar() {
       </nav>
       <div className="border-t border-hairline px-4 py-3">
         <div className="flex items-center gap-3">
-          <UserButton />
-          <span className="text-[13px] text-muted">Account</span>
+          {authenticationEnabled ? (
+            <>
+              <UserButton />
+              <span className="text-[13px] text-muted">Account</span>
+            </>
+          ) : (
+            <span className="text-[13px] text-muted">Local test account</span>
+          )}
         </div>
       </div>
     </aside>

@@ -2,6 +2,7 @@ import { auth } from "@clerk/nextjs/server";
 import { NextResponse } from "next/server";
 import { start } from "workflow/api";
 
+import { AUTHENTICATION_ENABLED } from "@/lib/server-config";
 import { runDeepResearch } from "@/workflows/deep-research";
 
 function backendOrigin(request: Request): URL {
@@ -20,8 +21,8 @@ function backendOrigin(request: Request): URL {
  * browser, so deep research no longer depends on client-side dispatch.
  */
 export async function POST(request: Request) {
-  const session = await auth();
-  if (!session.userId) {
+  const session = AUTHENTICATION_ENABLED ? await auth() : null;
+  if (AUTHENTICATION_ENABLED && !session?.userId) {
     return NextResponse.json({ detail: "Authentication required" }, { status: 401 });
   }
 
@@ -30,7 +31,7 @@ export async function POST(request: Request) {
   // validates the same session/azp that authenticated the browser request.
   // Fall back to Clerk's server token only for non-browser callers.
   const incomingAuthorization = request.headers.get("authorization");
-  const token = incomingAuthorization ? null : await session.getToken();
+  const token = incomingAuthorization || !session ? null : await session.getToken();
   const authorization =
     incomingAuthorization ?? (token ? `Bearer ${token}` : null);
   const backend = backendOrigin(request);

@@ -69,3 +69,62 @@ def test_local_mode_ignores_stale_remote_database_urls() -> None:
     )
 
     assert settings.database_url is None
+
+
+def test_local_config_can_disable_authentication(tmp_path) -> None:
+    config_path = tmp_path / "config.json"
+    config_path.write_text('{"auth":{"enabled":false}}', encoding="utf-8")
+
+    settings = Settings(_env_file=None, MIA_LOCAL_MODE=True, MIA_CONFIG_PATH=config_path)
+
+    assert settings.authentication_enabled is False
+
+
+def test_authentication_cannot_be_disabled_outside_local_mode(tmp_path) -> None:
+    config_path = tmp_path / "config.json"
+    config_path.write_text('{"auth":{"enabled":false}}', encoding="utf-8")
+
+    settings = Settings(_env_file=None, MIA_CONFIG_PATH=config_path)
+
+    assert settings.authentication_enabled is True
+
+
+def test_authentication_cannot_be_disabled_in_vercel(tmp_path) -> None:
+    config_path = tmp_path / "config.json"
+    config_path.write_text('{"auth":{"enabled":false}}', encoding="utf-8")
+
+    settings = Settings(
+        _env_file=None,
+        MIA_LOCAL_MODE=True,
+        MIA_CONFIG_PATH=config_path,
+        VERCEL_ENV="production",
+    )
+
+    assert settings.authentication_enabled is True
+
+
+def test_missing_or_invalid_auth_config_defaults_to_enabled(tmp_path) -> None:
+    missing = Settings(
+        _env_file=None,
+        MIA_LOCAL_MODE=True,
+        MIA_CONFIG_PATH=tmp_path / "missing.json",
+    )
+    malformed_path = tmp_path / "invalid.json"
+    malformed_path.write_text("{invalid", encoding="utf-8")
+    malformed = Settings(
+        _env_file=None,
+        MIA_LOCAL_MODE=True,
+        MIA_CONFIG_PATH=malformed_path,
+    )
+
+    assert missing.authentication_enabled is True
+    assert malformed.authentication_enabled is True
+
+
+def test_explicit_auth_config_can_keep_local_auth_enabled(tmp_path) -> None:
+    config_path = tmp_path / "config.json"
+    config_path.write_text('{"auth":{"enabled":true}}', encoding="utf-8")
+
+    settings = Settings(_env_file=None, MIA_LOCAL_MODE=True, MIA_CONFIG_PATH=config_path)
+
+    assert settings.authentication_enabled is True

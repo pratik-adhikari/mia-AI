@@ -20,6 +20,8 @@ async def authenticated_user(request: Request) -> str:
 
     application: Mia = request.app.state.mia
     settings = application.settings
+    if not settings.authentication_enabled:
+        return LOCAL_USER_ID
     secret = settings.clerk_secret_key
     jwt_key = settings.clerk_jwt_key
     if secret is None and jwt_key is None:

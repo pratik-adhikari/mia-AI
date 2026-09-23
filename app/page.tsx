@@ -2,9 +2,10 @@ import Link from "next/link";
 import { UserButton } from "@clerk/nextjs";
 import { auth } from "@clerk/nextjs/server";
 import { Nameplate } from "@/components/Nameplate";
+import { AUTHENTICATION_ENABLED } from "@/lib/server-config";
 
 export default async function Home() {
-  const { userId } = await auth();
+  const userId = AUTHENTICATION_ENABLED ? (await auth()).userId : "local-development";
   return (
     <main className="min-h-screen bg-paper">
       {/* Nav */}
@@ -36,15 +37,17 @@ export default async function Home() {
               >
                 Open workspace
               </Link>
-              <UserButton />
+              {AUTHENTICATION_ENABLED && <UserButton />}
             </div>
           ) : (
             <div className="flex items-center gap-3">
-              <Link href="/login" className="text-[13px] font-medium text-muted hover:text-ink">
-                Sign in
-              </Link>
+              {AUTHENTICATION_ENABLED && (
+                <Link href="/login" className="text-[13px] font-medium text-muted hover:text-ink">
+                  Sign in
+                </Link>
+              )}
               <Link
-                href="/signup"
+                href={AUTHENTICATION_ENABLED ? "/signup" : "/workspace"}
                 className="rounded-full bg-ink px-4 py-1.5 text-[13px] font-medium text-white transition-opacity hover:opacity-85"
               >
                 Get started

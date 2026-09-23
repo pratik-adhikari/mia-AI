@@ -43,6 +43,7 @@ backend: ## Run the Python API at http://127.0.0.1:8000.
 		--reload --host 127.0.0.1 --port $(BACKEND_PORT)
 
 frontend: ## Run only the Next.js interface.
+	VERCEL_ENV= MIA_LOCAL_MODE=1 \
 	MIA_RESEARCH_DISPATCH=local \
 	MIA_BACKEND_URL="$(API_URL)" \
 	NEXT_PUBLIC_MIA_API_URL="$(API_URL)" \
@@ -59,7 +60,7 @@ dev: ## Run backend, local worker, and Next.js frontend together.
 	VERCEL_ENV= MIA_LOCAL_MODE=1 $(UV) run --project backend --no-sync python -m mia_dpp.worker &
 	worker_pid=$!
 	trap 'kill "$backend_pid" "$worker_pid" 2>/dev/null || true; wait "$backend_pid" "$worker_pid" 2>/dev/null || true' EXIT INT TERM
-	MIA_RESEARCH_DISPATCH=local \
+	MIA_LOCAL_MODE=1 MIA_RESEARCH_DISPATCH=local \
 	MIA_BACKEND_URL="$(API_URL)" \
 	NEXT_PUBLIC_MIA_API_URL="$(API_URL)" \
 		npm run dev -- --hostname 127.0.0.1 --port $(FRONTEND_PORT)

@@ -33,6 +33,7 @@ import { LiveActivity } from "@/components/LiveActivity";
 import { WorkspaceExplorer } from "@/components/WorkspaceExplorer";
 import { IntegrationGraph } from "@/components/IntegrationGraph";
 import { useAuthenticatedFetch } from "@/lib/use-authenticated-fetch";
+import { useAuthenticationEnabled } from "@/lib/app-providers";
 
 const API_URL = process.env.NEXT_PUBLIC_MIA_API_URL ?? "";
 type WorkspaceTab =
@@ -59,6 +60,7 @@ const SAMPLES = [
 ];
 
 export default function Workspace() {
+  const authenticationEnabled = useAuthenticationEnabled();
   const authenticatedFetch = useAuthenticatedFetch();
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [threads, setThreads] = useState<ThreadRecord[]>([]);
@@ -649,7 +651,7 @@ export default function Workspace() {
           >
             Generate passport
           </button>
-          <UserButton />
+          {authenticationEnabled && <UserButton />}
         </div>
       </header>
 

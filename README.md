@@ -26,8 +26,21 @@ cd mia-AI
 cp .env.example .env.local
 ```
 
-Set at least `OPENROUTER_API_KEY` in `.env.local`. Keep the existing Clerk development keys if
-you want authenticated multi-user testing.
+Set at least `OPENROUTER_API_KEY` in `.env.local`. Local testing uses the shared local account by
+default; set `auth.enabled` to `true` in the root `config.json` to test Clerk authentication.
+Authentication can only be disabled in local mode. Restart the stack after changing the file;
+image rebuilds are not required.
+
+```json
+{
+  "auth": {
+    "enabled": false
+  }
+}
+```
+
+Apply a change with `docker compose restart frontend backend` (or restart the native dev processes).
+With local authentication disabled, `/login` and `/signup` redirect to the workspace.
 
 Then start everything:
 

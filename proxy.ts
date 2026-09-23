@@ -1,4 +1,7 @@
 import { clerkMiddleware, createRouteMatcher } from "@clerk/nextjs/server";
+import { NextResponse, type NextFetchEvent, type NextRequest } from "next/server";
+
+import { AUTHENTICATION_ENABLED } from "@/lib/server-config";
 
 // Authentication UI stays public; all durable user data lives behind these routes.
 const isProtectedRoute = createRouteMatcher([
@@ -8,11 +11,21 @@ const isProtectedRoute = createRouteMatcher([
   "/agent(.*)",
 ]);
 
-export default clerkMiddleware(async (auth, request) => {
+const clerkProxy = clerkMiddleware(async (auth, request) => {
   if (isProtectedRoute(request)) {
     await auth.protect();
   }
 });
+
+export default function proxy(request: NextRequest, event: NextFetchEvent) {
+  if (!AUTHENTICATION_ENABLED) {
+    if (request.nextUrl.pathname.startsWith("/login") || request.nextUrl.pathname.startsWith("/signup")) {
+      return NextResponse.redirect(new URL("/workspace", request.url));
+    }
+    return NextResponse.next();
+  }
+  return clerkProxy(request, event);
+}
 
 export const config = {
   matcher: [

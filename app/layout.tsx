@@ -1,6 +1,9 @@
 import type { Metadata } from "next";
-import { ClerkProvider } from "@clerk/nextjs";
+import { AppProviders } from "@/lib/app-providers";
+import { AUTHENTICATION_ENABLED } from "@/lib/server-config";
 import "./globals.css";
+
+export const dynamic = "force-dynamic";
 
 export const metadata: Metadata = {
   title: "MIA - Digital Product Passports for Mittelstand manufacturers",
@@ -14,10 +17,10 @@ export default function RootLayout({
   children: React.ReactNode;
 }) {
   return (
-    <ClerkProvider afterSignOutUrl="/">
+    <AppProviders authenticationEnabled={AUTHENTICATION_ENABLED}>
       <html lang="en">
         <body className="font-sans antialiased">{children}</body>
       </html>
-    </ClerkProvider>
+    </AppProviders>
   );
 }

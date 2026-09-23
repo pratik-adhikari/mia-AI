@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
+from typing import Any
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
-from pydantic import AliasChoices, Field, SecretStr
+from pydantic import AliasChoices, Field, PrivateAttr, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
@@ -20,6 +22,10 @@ class Settings(BaseSettings):
     )
 
     openrouter_api_key: SecretStr | None = None
+    config_path: Path = Field(
+        default=REPOSITORY_ROOT / "config.json",
+        validation_alias="MIA_CONFIG_PATH",
+    )
     clerk_secret_key: SecretStr | None = None
     clerk_jwt_key: SecretStr | None = None
     clerk_authorized_parties: str = Field(
@@ -91,6 +97,23 @@ class Settings(BaseSettings):
         default=r"https?://(127[.]0[.]0[.]1|localhost):[0-9]+",
         validation_alias="MIA_CORS_ORIGIN_REGEX",
     )
+    _authentication_enabled: bool = PrivateAttr(default=True)
+
+    def model_post_init(self, context: Any) -> None:
+        if not self.local_mode or self.vercel_environment:
+            return
+        try:
+            config = json.loads(self.config_path.read_text(encoding="utf-8"))
+            auth_config = config.get("auth", {}) if isinstance(config, dict) else {}
+            self._authentication_enabled = not (
+                isinstance(auth_config, dict) and auth_config.get("enabled") is False
+            )
+        except (OSError, UnicodeError, json.JSONDecodeError):
+            self._authentication_enabled = True
+
+    @property
+    def authentication_enabled(self) -> bool:
+        return self._authentication_enabled
 
     @property
     def database_url(self) -> str | None:
