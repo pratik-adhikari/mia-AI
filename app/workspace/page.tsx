@@ -32,6 +32,7 @@ import { ChatMarkdown } from "@/components/ChatMarkdown";
 import { LiveActivity } from "@/components/LiveActivity";
 import { WorkspaceExplorer } from "@/components/WorkspaceExplorer";
 import { IntegrationGraph } from "@/components/IntegrationGraph";
+import { LiveGraphDebugPanel } from "@/components/LiveGraphDebugPanel";
 import { useAuthenticatedFetch } from "@/lib/use-authenticated-fetch";
 import { useAuthenticationEnabled } from "@/lib/app-providers";
 
@@ -92,6 +93,7 @@ export default function Workspace() {
     Record<string, AgentReviewDecision>
   >({});
   const [tab, setTab] = useState<WorkspaceTab>("mappings");
+  const [debugPanelOpen, setDebugPanelOpen] = useState(false);
   const endRef = useRef<HTMLDivElement>(null);
 
   const mergeActivity = useCallback((events: AgentTraceEvent[]) => {
@@ -623,6 +625,17 @@ export default function Workspace() {
           </span>
         </div>
         <div className="flex items-center gap-2">
+          {process.env.NEXT_PUBLIC_MIA_GRAPH_DEBUG_ENABLED === "true" && (
+            <button
+              type="button"
+              onClick={() => setDebugPanelOpen(true)}
+              className="inline-flex items-center gap-2 rounded-full border border-slate-300 bg-white px-3 py-1.5 text-[12px] font-medium text-slate-700 transition-colors hover:border-slate-400 hover:bg-slate-50"
+              aria-label="Open live workflow debugger"
+            >
+              <span className={`h-2 w-2 rounded-full ${busy ? "animate-pulse bg-amber-500" : "bg-slate-400"}`} />
+              Debug
+            </button>
+          )}
           {threads.length > 0 && (
             <select
               aria-label="Conversation history"
@@ -1068,6 +1081,14 @@ export default function Workspace() {
           </div>
         </section>
       </div>
+      {debugPanelOpen && (
+        <LiveGraphDebugPanel
+          threadId={threadId}
+          busy={busy}
+          onClose={() => setDebugPanelOpen(false)}
+          authenticatedFetch={authenticatedFetch}
+        />
+      )}
     </div>
   );
 }

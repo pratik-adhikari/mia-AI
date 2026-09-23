@@ -8,6 +8,7 @@ import secrets
 
 import httpx
 from fastapi import APIRouter, FastAPI, HTTPException, Query, Request, Response
+from fastapi.responses import StreamingResponse
 from pydantic_ai.exceptions import UnexpectedModelBehavior
 
 from mia_dpp import __version__
@@ -390,6 +391,38 @@ async def thread_state(
         return await _application(http_request).thread_state(thread_id, user_id=user_id)
     except KeyError as error:
         raise HTTPException(status_code=404, detail="unknown thread") from error
+
+
+@router.get("/api/debug/graph/stream")
+async def workflow_graph_stream(
+    http_request: Request,
+    user_id: AuthenticatedUser,
+    thread_id: str | None = None,
+) -> StreamingResponse:
+    """Stream safe LangGraph node lifecycle events for the owned local workflow."""
+
+    application = _application(http_request)
+    if not application.graph_debug_enabled:
+        raise HTTPException(status_code=404, detail="live graph debugging is local-only")
+    if (
+        thread_id is not None
+        and application.context.catalogue.get_thread(thread_id, user_id=user_id) is None
+    ):
+        raise HTTPException(status_code=404, detail="unknown thread")
+
+    async def events():
+        try:
+            async for event in application.graph_debug_stream(thread_id, user_id=user_id):
+                yield f"event: {event['event']}\ndata: {json.dumps(event['data'])}\n\n"
+        except Exception as error:
+            detail = {"errorType": type(error).__name__}
+            yield f"event: error\ndata: {json.dumps(detail)}\n\n"
+
+    return StreamingResponse(
+        events(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 @router.get(

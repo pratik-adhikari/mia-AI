@@ -2,9 +2,14 @@
 
 from __future__ import annotations
 
+import asyncio
 import uuid
+from collections.abc import AsyncIterator, Mapping
+from dataclasses import dataclass, field
 from typing import Any, cast
 
+import httpx
+from langgraph_sdk import get_client
 from pydantic_ai.models import Model
 from pydantic_ai.models.openrouter import OpenRouterModel
 from pydantic_ai.providers.openrouter import OpenRouterProvider
@@ -37,6 +42,14 @@ from mia_dpp.tools.search import SearchProvider
 from mia_dpp.tools.web.tool import WebExtractionTool
 from mia_dpp.workflow.context import MiaContext
 from mia_dpp.workflow.graph import create_graph
+
+
+@dataclass
+class _GraphDebugSession:
+    run_id: str
+    status: str = "running"
+    events: list[dict[str, Any]] = field(default_factory=list)
+    listeners: set[asyncio.Queue[dict[str, Any] | None]] = field(default_factory=set)
 
 
 class Mia:
@@ -98,6 +111,8 @@ class Mia:
         self._response_view = AgentResponseView(self.context, self.store)
         self._graph: Any | None = None
         self._checkpoint_cm: Any | None = None
+        self._agent_client: Any | None = None
+        self._graph_debug_sessions: dict[tuple[str, str], _GraphDebugSession] = {}
 
     @property
     def configured(self) -> bool:
@@ -110,14 +125,31 @@ class Mia:
         user_id: str = LOCAL_USER_ID,
     ) -> AgentResponse:
         thread_id = request.thread_id or f"thread-{uuid.uuid4().hex}"
+        thread_exists = self.context.catalogue.get_thread(thread_id, user_id=user_id) is not None
         self.context.catalogue.get_or_create_thread(
             thread_id,
             user_id,
             title=request.message[:120],
         )
-        graph = await self._ensure_graph()
-        config = self._config(thread_id, user_id)
-        snapshot = await graph.aget_state(config)
+        remote = self._use_agent_server
+        snapshot: Any | None = None
+        if remote:
+            snapshot = await self._agent_server_snapshot(thread_id, user_id)
+            if snapshot is None and not thread_exists:
+                await self._agent_server_client().threads.create(
+                    thread_id=self._agent_server_thread_id(thread_id, user_id),
+                    if_exists="do_nothing",
+                )
+                snapshot = {"values": {}, "tasks": []}
+            elif snapshot is None:
+                # Existing local SQLite threads predate Agent Server ownership. Keep them
+                # resumable on their original checkpoint rather than silently forking state.
+                remote = False
+        if not remote:
+            graph = await self._ensure_graph()
+            config = self._config(thread_id, user_id)
+            snapshot = await graph.aget_state(config)
+        assert snapshot is not None
         trace_offset = len(self.store.list_events(thread_id, user_id=user_id))
         message = self.context.catalogue.add_message(
             thread_id,
@@ -125,13 +157,14 @@ class Mia:
             request.message,
             user_id=user_id,
         )
+        values = self._snapshot_values(snapshot)
         if self._snapshot_interrupt(snapshot) is not None:
             self._assign_message_to_latest_run(message.id, thread_id, user_id=user_id)
-            response = self._response_view.build(dict(snapshot.values), trace_offset=trace_offset)
+            response = self._response_view.build(values, trace_offset=trace_offset)
             self._record_assistant(response, user_id=user_id)
             return response
 
-        initial = not bool(snapshot.values)
+        initial = not bool(values)
         update: dict[str, Any] = {
             "thread_id": thread_id,
             "user_id": user_id,
@@ -158,7 +191,10 @@ class Mia:
             return response
 
         try:
-            result = await graph.ainvoke(update, config=config, context=self.context)
+            if remote:
+                result = await self._run_agent_server(thread_id, user_id, run_input=update)
+            else:
+                result = await graph.ainvoke(update, config=config, context=self.context)
         except Exception as error:
             self._assign_message_to_latest_run(message.id, thread_id, user_id=user_id)
             self._record_failure(thread_id, error, user_id=user_id)
@@ -204,18 +240,28 @@ class Mia:
 
         if self.context.catalogue.get_thread(thread_id, user_id=user_id) is None:
             raise KeyError(thread_id)
-        graph = await self._ensure_graph()
-        snapshot = await graph.aget_state(self._config(thread_id, user_id))
-        if not snapshot.values:
+        snapshot = (
+            await self._agent_server_snapshot(thread_id, user_id)
+            if self._use_agent_server
+            else None
+        )
+        if snapshot is None:
+            graph = await self._ensure_graph()
+            snapshot = await graph.aget_state(self._config(thread_id, user_id))
+        values = self._snapshot_values(snapshot)
+        if not values:
             return AgentResponse(
                 thread_id=thread_id,
                 reply="",
                 status=AgentStatus.AWAITING_INPUT,
                 decision_summary="Conversation exists but has no active workflow state.",
             )
-        return self._response_view.build(dict(snapshot.values), trace_offset=0)
+        return self._response_view.build(values, trace_offset=0)
 
     async def close(self) -> None:
+        if self._agent_client is not None:
+            await self._agent_client.aclose()
+            self._agent_client = None
         if self._checkpoint_cm is not None:
             await self._checkpoint_cm.__aexit__(None, None, None)
             self._checkpoint_cm = None
@@ -234,12 +280,8 @@ class Mia:
         message: str,
         user_id: str,
     ) -> AgentResponse:
-        from langgraph.types import Command
-
-        graph = await self._ensure_graph()
         if self.context.catalogue.get_thread(thread_id, user_id=user_id) is None:
             raise ValueError("unknown thread")
-        config = self._config(thread_id, user_id)
         trace_offset = len(self.store.list_events(thread_id, user_id=user_id))
         user_message = self.context.catalogue.add_message(
             thread_id,
@@ -249,9 +291,24 @@ class Mia:
         )
         self._assign_message_to_latest_run(user_message.id, thread_id, user_id=user_id)
         try:
-            result = await graph.ainvoke(
-                Command(resume=payload), config=config, context=self.context
+            snapshot = (
+                await self._agent_server_snapshot(thread_id, user_id)
+                if self._use_agent_server
+                else None
             )
+            if snapshot is not None:
+                result = await self._run_agent_server(
+                    thread_id, user_id, command={"resume": payload}
+                )
+            else:
+                from langgraph.types import Command
+
+                graph = await self._ensure_graph()
+                result = await graph.ainvoke(
+                    Command(resume=payload),
+                    config=self._config(thread_id, user_id),
+                    context=self.context,
+                )
         except ValueError as error:
             self._record_rejected_input(thread_id, error, user_id=user_id)
             raise
@@ -268,6 +325,243 @@ class Mia:
             checkpointer = await self._checkpoint_cm.__aenter__()
             self._graph = create_graph(checkpointer)
         return self._graph
+
+    @property
+    def _use_agent_server(self) -> bool:
+        return bool(
+            self.settings.local_mode
+            and not self.settings.vercel_environment
+            and self.settings.agent_server_url
+        )
+
+    def _agent_server_client(self) -> Any:
+        if self._agent_client is None:
+            if not self.settings.agent_server_url:
+                raise RuntimeError("MIA_AGENT_SERVER_URL is not configured.")
+            self._agent_client = get_client(url=self.settings.agent_server_url)
+        return self._agent_client
+
+    @staticmethod
+    def _agent_server_thread_id(thread_id: str, user_id: str) -> str:
+        # Keep arbitrary public/API thread IDs and user identifiers out of Agent Server URLs.
+        return str(uuid.uuid5(uuid.NAMESPACE_URL, f"mia-dpp:{user_id}:{thread_id}"))
+
+    async def _agent_server_snapshot(self, thread_id: str, user_id: str) -> Any | None:
+        if not self._use_agent_server:
+            return None
+        try:
+            return await self._agent_server_client().threads.get_state(
+                self._agent_server_thread_id(thread_id, user_id)
+            )
+        except httpx.HTTPStatusError as error:
+            if error.response.status_code == 404:
+                return None
+            raise
+
+    async def _run_agent_server(
+        self,
+        thread_id: str,
+        user_id: str,
+        *,
+        run_input: dict[str, Any] | None = None,
+        command: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        client = self._agent_server_client()
+        key = (user_id, thread_id)
+        session: _GraphDebugSession | None = None
+
+        def register_run(metadata: Mapping[str, Any]) -> None:
+            nonlocal session
+            session = _GraphDebugSession(run_id=str(metadata["run_id"]))
+            self._graph_debug_sessions[key] = session
+            self._publish_debug_event(
+                session,
+                "run",
+                {"runId": session.run_id, "status": "running"},
+            )
+
+        try:
+            async for part in client.runs.stream(
+                thread_id=self._agent_server_thread_id(thread_id, user_id),
+                assistant_id="mia",
+                input=run_input,
+                command=command,
+                stream_mode=["debug"],
+                stream_subgraphs=True,
+                on_disconnect="continue",
+                if_not_exists="create",
+                on_run_created=register_run,
+            ):
+                if session is None and part.event == "metadata":
+                    run_id = part.data.get("run_id")
+                    if isinstance(run_id, str):
+                        register_run({"run_id": run_id})
+                self._record_debug_part(session, part.event, part.data)
+            snapshot = await self._agent_server_snapshot(thread_id, user_id)
+            if snapshot is None:
+                raise RuntimeError("LangGraph Agent Server lost the workflow thread.")
+            if session is not None:
+                session.status = self._snapshot_status(snapshot)
+                self._publish_debug_event(
+                    session,
+                    "run",
+                    {"runId": session.run_id, "status": session.status},
+                )
+            return self._snapshot_values(snapshot)
+        except Exception as error:
+            if session is not None:
+                session.status = "failed"
+                self._publish_debug_event(
+                    session,
+                    "run",
+                    {
+                        "runId": session.run_id,
+                        "status": "failed",
+                        "errorType": type(error).__name__,
+                    },
+                )
+            raise
+
+    @staticmethod
+    def _record_debug_part(
+        session: _GraphDebugSession | None,
+        event_name: str,
+        data: Mapping[str, Any],
+    ) -> None:
+        if session is None or not event_name.startswith("debug"):
+            return
+        event_type = data.get("type")
+        payload = data.get("payload")
+        if event_type not in {"task", "task_result"} or not isinstance(payload, Mapping):
+            return
+        node_name = payload.get("name")
+        if not isinstance(node_name, str):
+            return
+        namespaces = [item for item in event_name.split("|")[1:] if item]
+        namespace = ":".join(namespaces)
+        node_id = f"{namespace}:{node_name}" if namespace else node_name
+        if event_type == "task":
+            status = "running"
+        elif payload.get("interrupts"):
+            status = "waiting"
+        else:
+            status = "failed" if payload.get("error") else "completed"
+        timestamp = data.get("timestamp")
+        Mia._publish_debug_event(
+            session,
+            "node",
+            {
+                "nodeId": node_id,
+                "nodeName": node_name,
+                "namespace": namespace,
+                "status": status,
+                "timestamp": timestamp if isinstance(timestamp, str) else None,
+            },
+        )
+
+    @staticmethod
+    def _publish_debug_event(
+        session: _GraphDebugSession,
+        event_name: str,
+        data: dict[str, Any],
+    ) -> None:
+        event = {"event": event_name, "data": data}
+        session.events.append(event)
+        for listener in tuple(session.listeners):
+            listener.put_nowait(event)
+
+    @property
+    def graph_debug_enabled(self) -> bool:
+        return self._use_agent_server
+
+    async def graph_debug_stream(
+        self,
+        thread_id: str | None,
+        *,
+        user_id: str,
+    ) -> AsyncIterator[dict[str, Any]]:
+        if not self.graph_debug_enabled:
+            raise RuntimeError("Live workflow debugging is only enabled in the local Agent Server.")
+        if (
+            thread_id is not None
+            and self.context.catalogue.get_thread(thread_id, user_id=user_id) is None
+        ):
+            raise KeyError(thread_id)
+        graph = await self._agent_server_client().assistants.get_graph("mia", xray=1)
+        nodes = [
+            {
+                "id": str(node.get("id", "")),
+                "name": (
+                    node["data"].get("name", "")
+                    if isinstance(node.get("data"), Mapping)
+                    else str(node.get("data") or "")
+                ),
+                "type": node.get("type"),
+            }
+            for node in graph.get("nodes", [])
+        ]
+        edges = [
+            {
+                "source": str(edge.get("source", "")),
+                "target": str(edge.get("target", "")),
+                "conditional": bool(edge.get("conditional", False)),
+                "label": str(edge.get("data", "")) if edge.get("data") else "",
+            }
+            for edge in graph.get("edges", [])
+        ]
+        yield {"event": "topology", "data": {"nodes": nodes, "edges": edges}}
+
+        if thread_id is None:
+            yield {"event": "run", "data": {"status": "idle"}}
+            return
+
+        session = self._graph_debug_sessions.get((user_id, thread_id))
+        if session is None:
+            yield {"event": "run", "data": {"status": "idle"}}
+            return
+        listener: asyncio.Queue[dict[str, Any] | None] = asyncio.Queue()
+        session.listeners.add(listener)
+        history = list(session.events)
+        try:
+            yield {
+                "event": "run",
+                "data": {"runId": session.run_id, "status": session.status},
+            }
+            for event in history:
+                yield event
+            while session.status == "running":
+                event = await listener.get()
+                if event is None:
+                    break
+                yield event
+        finally:
+            session.listeners.discard(listener)
+
+    @staticmethod
+    def _snapshot_values(snapshot: Any) -> dict[str, Any]:
+        values = snapshot.get("values", {}) if isinstance(snapshot, Mapping) else snapshot.values
+        return dict(values) if isinstance(values, Mapping) else {}
+
+    @staticmethod
+    def _snapshot_status(snapshot: Any) -> str:
+        next_nodes = (
+            snapshot.get("next", ())
+            if isinstance(snapshot, Mapping)
+            else getattr(snapshot, "next", ())
+        )
+        tasks = (
+            snapshot.get("tasks", ())
+            if isinstance(snapshot, Mapping)
+            else getattr(snapshot, "tasks", ())
+        )
+        if next_nodes or any(
+            getattr(task, "interrupts", ())
+            if not isinstance(task, Mapping)
+            else task.get("interrupts", ())
+            for task in tasks
+        ):
+            return "waiting"
+        return "completed"
 
     def _configured_model(self) -> Model | None:
         if self.settings.openrouter_api_key is None:
@@ -350,8 +644,11 @@ class Mia:
 
     @staticmethod
     def _snapshot_interrupt(snapshot: Any) -> object | None:
-        for task in getattr(snapshot, "tasks", ()):
-            interrupts = getattr(task, "interrupts", ())
+        tasks = snapshot.get("tasks", ()) if isinstance(snapshot, Mapping) else snapshot.tasks
+        for task in tasks:
+            interrupts = (
+                task.get("interrupts", ()) if isinstance(task, Mapping) else task.interrupts
+            )
             if interrupts:
                 return cast(object, interrupts[0])
         return None

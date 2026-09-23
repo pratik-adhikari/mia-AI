@@ -1,9 +1,48 @@
 services:
+  agent-server:
+    network_mode: host
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: agent-server
+      network: "${DOCKER_BUILD_NETWORK:-host}"
+    env_file:
+      - path: .env.local
+        required: false
+    environment:
+      VERCEL_ENV: ""
+      MIA_LOCAL_MODE: "1"
+      MIA_CATALOGUE_PATH: /data/catalogue.sqlite3
+      MIA_THREAD_STORE_PATH: /data/mia-agent.sqlite3
+      MIA_WORKSPACE_ROOT: /data/workspaces
+      MIA_CONFIG_PATH: /app/config.json
+      AGENT_SERVER_PORT: "${AGENT_SERVER_PORT:-2025}"
+    volumes:
+      - mia-data:/data
+      - mia-agent-server:/app/.langgraph_api
+      - ./config.json:/app/config.json:ro
+      - ./langgraph.json:/app/langgraph.json:ro
+      - ./.env.local:/app/.env.local:ro
+    healthcheck:
+      test:
+        - CMD
+        - /app/backend/.venv/bin/python
+        - -c
+        - >-
+          import os, sys, urllib.request;
+          urllib.request.urlopen('http://127.0.0.1:' + os.environ.get('AGENT_SERVER_PORT', '2025') + '/ok', timeout=2);
+          sys.exit(0)
+      interval: 5s
+      timeout: 3s
+      retries: 30
+      start_period: 15s
+
   backend:
     network_mode: host
     build:
       context: .
       dockerfile: Dockerfile
+      target: app
       network: "${DOCKER_BUILD_NETWORK:-host}"
     env_file:
       - path: .env.local
@@ -19,10 +58,14 @@ services:
       MIA_THREAD_STORE_PATH: /data/mia-agent.sqlite3
       MIA_WORKSPACE_ROOT: /data/workspaces
       MIA_CONFIG_PATH: /app/config.json
+      MIA_AGENT_SERVER_URL: "http://127.0.0.1:${AGENT_SERVER_PORT:-2025}"
       CLERK_AUTHORIZED_PARTIES: "${CLERK_AUTHORIZED_PARTIES:-http://localhost:${FRONTEND_PORT:-3000},http://127.0.0.1:${FRONTEND_PORT:-3000}}"
     volumes:
       - mia-data:/data
       - ./config.json:/app/config.json:ro
+    depends_on:
+      agent-server:
+        condition: service_healthy
     healthcheck:
       test:
         - CMD
@@ -42,6 +85,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      target: app
       network: "${DOCKER_BUILD_NETWORK:-host}"
     command:
       - /app/backend/.venv/bin/python
@@ -74,6 +118,7 @@ services:
       network: "${DOCKER_BUILD_NETWORK:-host}"
       args:
         NEXT_PUBLIC_MIA_API_URL: "${NEXT_PUBLIC_MIA_API_URL:-http://127.0.0.1:${BACKEND_PORT:-8000}}"
+        NEXT_PUBLIC_MIA_GRAPH_DEBUG_ENABLED: "true"
         NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: "${NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY:-}"
     env_file:
       - path: .env.local
@@ -109,3 +154,4 @@ services:
 
 volumes:
   mia-data:
+  mia-agent-server:

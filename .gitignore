@@ -17,4 +17,5 @@ test-output
 /.swc
 /logs/
 /.langgraph_api/
+.playwright-mcp/
 TODO_LIST.md

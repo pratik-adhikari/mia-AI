@@ -10,6 +10,8 @@
   },
   "dependencies": {
     "@clerk/nextjs": "^7.9.4",
+    "cytoscape": "^3.34.3",
+    "cytoscape-dagre": "^4.0.1",
     "next": "16.3.4",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
@@ -22,8 +24,6 @@
     "@types/react": "^18.3.3",
     "@types/react-dom": "^18.3.0",
     "autoprefixer": "^10.4.19",
-    "cytoscape": "^3.34.3",
-    "cytoscape-dagre": "^4.0.1",
     "eslint": "9.39.5",
     "eslint-config-next": "16.3.4",
     "postcss": "^8.4.39",

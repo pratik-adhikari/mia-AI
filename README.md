@@ -69,13 +69,29 @@ make studio   # run the backend workflow in LangGraph Studio for debugging
 make down     # stop services; durable Docker volume is kept
 ```
 
-`make studio` starts the standard local LangGraph Agent Server from `langgraph.json` and opens the
-workflow in LangGraph Studio. It runs independently of the MIA FastAPI and frontend processes,
-forces MIA's local storage adapters, and uses LangGraph's local development persistence. Studio's
-graph view shows traversed nodes and intermediate graph state. Opening Studio does not start a
-workflow; submitting a run can call the configured model and external product sites.
-`LANGSMITH_TRACING=false` keeps traces local. Studio's browser interface is hosted by LangSmith and
-connects to the local server.
+`make studio` starts the local LangGraph Agent Server used by FastAPI graph runs and prints the
+LangGraph Studio URL. Backend graph calls go through the official LangGraph SDK, so Studio shows
+the same live executions rather than a separate copy of the workflow. The Agent Server uses the
+same local MIA data volume for catalogue and artifacts, and its graph checkpoint store has a
+separate Docker volume. New local threads use Agent Server checkpoints; threads created before
+this integration continue on their existing SQLite checkpoints. The Studio browser interface is
+hosted by LangSmith and connects to the local server. Opening Studio does not start a workflow;
+submitting a product request can call the configured model and external product sites.
+
+The local Compose frontend also has a **Debug** control in the workspace header. It opens a
+side panel that renders the compiled Agent Server topology and highlights node task events from
+the selected conversation. With no conversation selected, it still shows the graph topology;
+after a conversation is selected, it shows that local process's live or recent run state. This
+control is enabled only in the local Compose build and is absent from the Vercel frontend.
+
+When `LANGSMITH_TRACING=true` and `LANGSMITH_API_KEY` is set in `.env.local`, the local backend,
+worker, and Agent Server send traces to LangSmith. Without those settings, graph state remains
+available through local Agent Server/Studio without LangSmith run tracing.
+
+The current Clerk SDK constraint requires `cryptography<49`, while LangGraph API 0.14 requires
+`cryptography>=50`; the local Agent Server therefore resolves API 0.13.3, which currently logs a
+critical-support warning. Revisit this pin when the Clerk dependency can move to a compatible
+cryptography range.
 
 The overview groups the workflow into `evidence_and_coverage` and `aas_output` subgraphs. Open a
 subgraph in Studio to inspect its node-level flow, including mapping review and research loops.

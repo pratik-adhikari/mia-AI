@@ -1,6 +1,6 @@
 FROM ghcr.io/astral-sh/uv:0.10.3 AS uv
 
-FROM python:3.12-slim
+FROM python:3.12-slim AS app
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
@@ -35,3 +35,15 @@ USER mia
 EXPOSE 8000
 
 CMD ["sh", "-c", "exec /app/backend/.venv/bin/uvicorn mia_dpp.main:app --host ${MIA_BIND_HOST:-0.0.0.0} --port ${PORT:-8000}"]
+
+# Keep the local Agent Server CLI out of the production backend image.
+FROM app AS agent-server
+USER root
+RUN mkdir -p /app/.langgraph_api && chown -R mia:mia /app/.langgraph_api
+RUN uv sync --project backend --locked --no-dev --extra production --extra agent-server
+USER mia
+EXPOSE 2025
+CMD ["sh", "-c", "exec /app/backend/.venv/bin/langgraph dev --host 127.0.0.1 --port ${AGENT_SERVER_PORT:-2025} --no-browser --no-reload --config /app/langgraph.json"]
+
+# Keep ordinary `docker build .` consumers (including Vercel) on the production runtime.
+FROM app AS production

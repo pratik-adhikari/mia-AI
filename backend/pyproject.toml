@@ -21,6 +21,7 @@ dependencies = [
   "ddgs==9.16.0",
   "langgraph>=1.2,<2",
   "langgraph-checkpoint-sqlite>=3,<4",
+  "langgraph-sdk>=0.4,<1",
 ]
 
 [project.optional-dependencies]
@@ -32,6 +33,7 @@ production = [
 pdf = [
   "pdf2aas @ git+https://github.com/eclipse-basyx/basyx-pdf-to-aas.git@0111a119e3d75e447c0de4fbaebb93353d647636",
 ]
+agent-server = ["langgraph-cli[inmem]>=0.4.31,<0.5"]
 
 [dependency-groups]
 dev = [

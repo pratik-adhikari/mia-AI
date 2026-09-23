@@ -34,6 +34,7 @@ class Settings(BaseSettings):
     )
     workflow_secret: SecretStr | None = Field(default=None, validation_alias="MIA_WORKFLOW_SECRET")
     local_mode: bool = Field(default=False, validation_alias="MIA_LOCAL_MODE")
+    agent_server_url: str | None = Field(default=None, validation_alias="MIA_AGENT_SERVER_URL")
     agent_model: str = Field(
         default="deepseek/deepseek-v3.2",
         validation_alias="MIA_AGENT_MODEL",

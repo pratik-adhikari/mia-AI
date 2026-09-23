@@ -6,6 +6,7 @@ SHELL := /bin/bash
 UV ?= uv
 BACKEND_PORT ?= 8000
 FRONTEND_PORT ?= 3000
+AGENT_SERVER_PORT ?= 2025
 API_URL ?= http://127.0.0.1:$(BACKEND_PORT)
 COMPOSE_ENV := $(if $(wildcard .env.local),--env-file .env.local,)
 COMPOSE ?= docker compose $(COMPOSE_ENV)
@@ -117,10 +118,9 @@ logs: ## Follow frontend, backend, and worker logs together.
 monitor: ## Open frontend, backend, worker, and combined logs in a tmux grid.
 	bash scripts/dev-tmux.sh
 
-studio: ## Run MIA's LangGraph locally and open it in LangGraph Studio.
-	MIA_LOCAL_MODE=1 VERCEL_ENV= LANGSMITH_TRACING=false \
-		$(UV) run --project backend --with 'langgraph-cli[inmem]' \
-		langgraph dev --config langgraph.json
+studio: ## Start the local Agent Server and print its LangGraph Studio link.
+	$(COMPOSE) up -d --build --wait agent-server
+	printf 'Open LangGraph Studio: https://smith.langchain.com/studio/?baseUrl=http://127.0.0.1:%s\n' "$(AGENT_SERVER_PORT)"
 
 smoke: ## Start, probe, and always stop the production containers.
 	@trap '$(COMPOSE) down' EXIT
