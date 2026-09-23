@@ -65,8 +65,24 @@ Useful commands:
 
 ```bash
 make logs     # follow frontend + backend + worker
+make studio   # run the backend workflow in LangGraph Studio for debugging
 make down     # stop services; durable Docker volume is kept
 ```
+
+`make studio` starts the standard local LangGraph Agent Server from `langgraph.json` and opens the
+workflow in LangGraph Studio. It runs independently of the MIA FastAPI and frontend processes,
+forces MIA's local storage adapters, and uses LangGraph's local development persistence. Studio's
+graph view shows traversed nodes and intermediate graph state. Opening Studio does not start a
+workflow; submitting a run can call the configured model and external product sites.
+`LANGSMITH_TRACING=false` keeps traces local. Studio's browser interface is hosted by LangSmith and
+connects to the local server.
+
+The overview groups the workflow into `evidence_and_coverage` and `aas_output` subgraphs. Open a
+subgraph in Studio to inspect its node-level flow, including mapping review and research loops.
+
+To run the workflow from Studio, provide `thread_id`, `user_id`, and `user_message` in the graph
+input; for direct URL import, put the product page URL in `user_message`. The workflow can then
+crawl the site and call the configured model, which may incur provider costs.
 
 The worker polls durable background jobs and advances one bounded crawl batch at a time. Each batch
 checkpoints the frontier, cursor, evidence artifact, mapping progress, and timing events, so a

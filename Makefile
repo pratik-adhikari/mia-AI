@@ -12,7 +12,7 @@ COMPOSE ?= docker compose $(COMPOSE_ENV)
 STANDARDS_DIR := standards/idta-submodel-templates
 STANDARDS_COMMIT := a9664731a903b29ac5f45e23ab3a25c581f3d92f
 
-.PHONY: help install crawl-setup refs refs-check backend frontend worker dev extract lint format \
+.PHONY: help install crawl-setup refs refs-check backend frontend worker dev studio extract lint format \
 	typecheck test build check docker-build up down logs monitor smoke
 
 help: ## Show the available commands.
@@ -116,6 +116,11 @@ logs: ## Follow frontend, backend, and worker logs together.
 
 monitor: ## Open frontend, backend, worker, and combined logs in a tmux grid.
 	bash scripts/dev-tmux.sh
+
+studio: ## Run MIA's LangGraph locally and open it in LangGraph Studio.
+	MIA_LOCAL_MODE=1 VERCEL_ENV= LANGSMITH_TRACING=false \
+		$(UV) run --project backend --with 'langgraph-cli[inmem]' \
+		langgraph dev --config langgraph.json
 
 smoke: ## Start, probe, and always stop the production containers.
 	@trap '$(COMPOSE) down' EXIT

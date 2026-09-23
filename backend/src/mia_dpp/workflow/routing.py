@@ -37,13 +37,16 @@ def after_product_done(state: MiaWorkflowState) -> Literal["next", "done"]:
 
 
 DISCOVERY_ROUTES: dict[Hashable, str] = {"process": "resolve_product", "wait": "__end__"}
-PRODUCT_ROUTES: dict[Hashable, str] = {"reuse": "reuse_existing_dpp", "extract": "extract_evidence"}
+PRODUCT_ROUTES: dict[Hashable, str] = {
+    "reuse": "reuse_existing_dpp",
+    "extract": "evidence_and_coverage",
+}
 SEMANTIC_ROUTES: dict[Hashable, str] = {
     "review": "human_review",
     "coverage": "integrate_background_research",
 }
-COVERAGE_ROUTES: dict[Hashable, str] = {
-    "build": "build_aas",
+PREPARATION_ROUTES: dict[Hashable, str] = {
+    "build": "__end__",
     "research": "research",
     "human": "human_value",
 }

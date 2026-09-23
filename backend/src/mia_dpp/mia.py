@@ -250,9 +250,7 @@ class Mia:
         self._assign_message_to_latest_run(user_message.id, thread_id, user_id=user_id)
         try:
             result = await graph.ainvoke(
-                Command(resume=payload),
-                config=config,
-                context=self.context,
+                Command(resume=payload), config=config, context=self.context
             )
         except ValueError as error:
             self._record_rejected_input(thread_id, error, user_id=user_id)

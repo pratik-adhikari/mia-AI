@@ -55,7 +55,8 @@ def test_graph_failure_is_recorded_on_the_active_attempt(tmp_path) -> None:
         async def aget_state(self, config):
             return _Snapshot({})
 
-        async def ainvoke(self, update, **kwargs):
+        async def astream(self, update, **kwargs):
+            yield "tasks", {"id": "task-1", "name": "fixture_node", "input": {}}
             raise RuntimeError("fixture workflow failure")
 
     mia = _mia(catalogue, Graph())

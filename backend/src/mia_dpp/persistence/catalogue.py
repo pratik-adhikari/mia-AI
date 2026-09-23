@@ -381,6 +381,14 @@ class ProductCatalogue:
             (thread_id, user_id),
         )
 
+    def list_recent_runs(self, *, user_id: str, limit: int = 30) -> tuple[ProductRun, ...]:
+        rows = self._fetchall(
+            "SELECT runs.payload FROM runs JOIN threads ON threads.id=runs.thread_id "
+            "WHERE threads.user_id=? ORDER BY runs.started_at DESC LIMIT ?",
+            (user_id, max(1, min(limit, 100))),
+        )
+        return tuple(ProductRun.model_validate_json(row[0]) for row in rows)
+
     def add_message(
         self,
         thread_id: str,
