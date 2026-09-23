@@ -414,6 +414,7 @@ export interface AgentResponse {
   pendingHumanRequest: HumanRequest | null;
   artifactCount: number;
   backgroundJobId: string | null;
+  researchDispatchError?: string | null;
 }
 
 export interface BackgroundJob {

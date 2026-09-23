@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from time import perf_counter
 from typing import TYPE_CHECKING, Any
 from urllib.parse import urlsplit
 
@@ -48,11 +49,24 @@ async def deterministic_mapping(
     work = RunWorkspace(state, runtime.context)
     package = work.load_state("evidence_artifact_id", ProductKnowledgePackage)
     index = work.load_state("targets_artifact_id", TemplateIndex)
+    started = perf_counter()
     result = await DeterministicWebsiteMapper(work.ctx.templates, index).propose(package.evidence)
+    duration_ms = round((perf_counter() - started) * 1000, 2)
     artifact_id = work.put_model(
         "mapping/deterministic.json",
         result,
         derived_from=(work.state_id("evidence_artifact_id"), work.state_id("targets_artifact_id")),
+    )
+    work.event(
+        "mapping.deterministic.completed",
+        "Completed deterministic mapping for the currently available evidence.",
+        metadata={
+            "durationMs": duration_ms,
+            "evidenceCount": len(package.evidence),
+            "mapped": len(result.mapped),
+            "ambiguous": len(result.ambiguous),
+            "unmatched": len(result.unmatched_evidence_ids),
+        },
     )
     return {"deterministic_mapping_artifact_id": artifact_id}
 
@@ -87,7 +101,9 @@ async def semantic_mapping(
             template_keys=state.get("target_submodels", ("digital_nameplate", "technical_data")),
         )
     )
+    semantic_started = perf_counter()
     semantic_run = await mapper.map(package, index, deterministic, reviewed_knowledge=knowledge)
+    semantic_duration_ms = round((perf_counter() - semantic_started) * 1000, 2)
     result = work.ctx.mapping_review.apply_semantic_run(
         package,
         deterministic,
@@ -119,6 +135,8 @@ async def semantic_mapping(
             "ambiguous": len(result.ambiguous),
             "unmatched": len(result.unmatched_evidence_ids),
             "semanticModelRequests": semantic_run.metrics.model_requests,
+            "durationMs": semantic_duration_ms,
+            "evidenceCount": len(package.evidence),
         },
     )
     return {

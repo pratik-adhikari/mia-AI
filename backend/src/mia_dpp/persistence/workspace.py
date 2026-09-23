@@ -122,7 +122,8 @@ class WorkspaceView:
             id=artifact.id,
             kind=WorkspaceView._kind(artifact.key),
             name=PurePosixPath(artifact.key).name,
-            relative_path=artifact.storage_uri,
+            # Expose the logical workspace path, never a private storage URI/blob URL.
+            relative_path=artifact.key,
             created_at=artifact.created_at,
             created_by="workflow",
             content_type=artifact.content_type,

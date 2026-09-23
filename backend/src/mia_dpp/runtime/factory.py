@@ -15,14 +15,14 @@ def create_catalogue(settings: Settings) -> ProductCatalogue:
 
 
 def create_artifact_store(settings: Settings) -> ArtifactStore:
-    if not settings.vercel_environment:
+    if settings.local_mode or not settings.vercel_environment:
         return LocalArtifactStore(settings.workspace_root)
     if not settings.database_url:
         raise RuntimeError("Vercel deployment requires MIA_DATABASE_URL for durable metadata")
-    if not (settings.blob_read_write_token or settings.blob_store_id):
+    if settings.blob_read_write_token is None:
         raise RuntimeError(
-            "Vercel deployment requires a connected Blob store "
-            "(BLOB_READ_WRITE_TOKEN or BLOB_STORE_ID)"
+            "Vercel Blob requires BLOB_READ_WRITE_TOKEN or "
+            "VERCEL_BLOB_READ_WRITE_TOKEN; BLOB_STORE_ID alone is not authentication"
         )
     token = (
         settings.blob_read_write_token.get_secret_value()

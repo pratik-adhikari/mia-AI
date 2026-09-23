@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import mimetypes
 import re
+from time import perf_counter
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
@@ -13,7 +14,6 @@ if TYPE_CHECKING:
 from mia_dpp.canonical import sha256_json
 from mia_dpp.domain.evidence import ExtractedAsset, ProductKnowledgePackage
 from mia_dpp.domain.product import RunStatus
-from mia_dpp.tools.web.models import DownloadedSource
 from mia_dpp.workflow.context import MiaContext
 from mia_dpp.workflow.presentation import evidence_text, product_image_url
 from mia_dpp.workflow.state import MiaWorkflowState, reset_product_state
@@ -101,7 +101,10 @@ async def extract_evidence(
     runtime: Runtime[MiaContext],
 ) -> dict[str, Any]:
     work = RunWorkspace(state, runtime.context)
+    total_started = perf_counter()
+    crawl_started = perf_counter()
     incoming = await work.ctx.web_tool.extract(state["product_url"])
+    crawl_duration_ms = round((perf_counter() - crawl_started) * 1000, 2)
     incoming = incoming.model_copy(update={"product_id": work.product_id})
     prior_id = state.get("evidence_artifact_id")
     package = (
@@ -110,6 +113,7 @@ async def extract_evidence(
         else merge_packages(work.load(prior_id, ProductKnowledgePackage), incoming)
     )
 
+    persist_started = perf_counter()
     raw_ids = tuple(
         work.put_bytes(
             f"sources/{source.id}.html",
@@ -129,7 +133,6 @@ async def extract_evidence(
         for source in incoming.acquired_sources
         if source.markdown
     )
-    # Store the readable pre-normalization view beside raw HTML and canonical evidence.
     structured_ids = tuple(
         work.put_model(
             f"extraction/structured-page-{index}.json",
@@ -138,97 +141,24 @@ async def extract_evidence(
         )
         for index, page in enumerate(incoming.extracted_pages, start=1)
     )
-    source_assets = tuple(asset for page in incoming.extracted_pages for asset in page.assets)
-    # Download images once up front: byte size is used to choose a stable main product image and
-    # the cached bytes are then persisted without a second network request.
-    image_downloads: dict[str, DownloadedSource] = {}
-    download_errors: dict[str, str] = {}
-    for asset in source_assets:
-        if asset.kind != "image" or asset.url in image_downloads:
-            continue
-        try:
-            image_downloads[asset.url] = await work.ctx.web_tool.download_source(asset.url)
-        except Exception as error:
-            download_errors[asset.url] = str(error)[:500]
-    # Prefer an image at the product-page root, then the largest usable candidate. Contextual
-    # diagrams remain supporting images even if they have more pixels/bytes.
-    main_image_url = max(
-        image_downloads,
-        key=lambda url: (
-            not next(asset.context_path for asset in source_assets if asset.url == url),
-            image_downloads[url].size,
-        ),
-        default=None,
-    )
 
-    # The manifest connects source URL -> hierarchy -> local path -> content hash/artifact ID.
-    asset_manifest: list[dict[str, object]] = []
-    asset_ids: list[str] = []
-    stored_assets: dict[str, ExtractedAsset] = {}
-    for asset in source_assets:
-        role = (
-            ("main" if asset.kind == "image" and asset.url == main_image_url else "supporting")
-            if asset.kind == "image"
-            else None
-        )
-        record: dict[str, object] = asset.model_dump(mode="json", by_alias=True)
-        try:
-            # Documents are intentionally downloaded only after discovery; all downloads still
-            # pass through WebExtractionTool's URL, redirect, size, and MIME checks.
-            downloaded = (
-                image_downloads[asset.url]
-                if asset.kind == "image"
-                else await work.ctx.web_tool.download_source(asset.url)
-            )
-            workspace_path = asset_workspace_path(asset, downloaded.media_type)
-            artifact_id = work.put_bytes(
-                workspace_path,
-                downloaded.content,
-                content_type=downloaded.media_type,
-                derived_from=raw_ids,
-            )
-            asset_ids.append(artifact_id)
-            stored_assets[asset.url] = asset.model_copy(
-                update={"role": role, "workspace_path": workspace_path}
-            )
-            record.update(
-                {
-                    "role": role,
-                    "workspacePath": workspace_path,
-                    "artifactId": artifact_id,
-                    "mediaType": downloaded.media_type,
-                    "contentSha256": downloaded.content_sha256,
-                    "size": downloaded.size,
-                }
-            )
-        except Exception as error:
-            # One unavailable optional asset must not discard otherwise valid page evidence.
-            message = download_errors.get(asset.url, str(error)[:500])
-            stored_assets[asset.url] = asset.model_copy(update={"role": role})
-            record.update({"role": role, "downloadError": message})
-        asset_manifest.append(record)
-    # Replace source-only assets with their durable role/path references before saving evidence.
-    package = package.model_copy(
-        update={
-            "extracted_pages": tuple(
-                page.model_copy(
-                    update={
-                        "assets": tuple(
-                            stored_assets.get(asset.url, asset) for asset in page.assets
-                        )
-                    }
-                )
-                for page in package.extracted_pages
-            )
-        }
-    )
+    # Keep the browser-facing seed pass intentionally shallow. Crawl4AI already observed these
+    # assets while rendering the page, so persist their provenance now and let durable background
+    # research decide which expensive binary downloads are worth acquiring later.
+    source_assets = tuple(asset for page in incoming.extracted_pages for asset in page.assets)
     asset_manifest_id = (
         work.put_json(
             "extraction/assets.json",
-            asset_manifest,
-            derived_from=(*raw_ids, *asset_ids),
+            [
+                {
+                    **asset.model_dump(mode="json", by_alias=True),
+                    "acquisition": "deferred",
+                }
+                for asset in source_assets
+            ],
+            derived_from=raw_ids,
         )
-        if asset_manifest
+        if source_assets
         else None
     )
     evidence_id = work.put_model(
@@ -241,12 +171,23 @@ async def extract_evidence(
                 *raw_ids,
                 *markdown_ids,
                 *structured_ids,
-                *asset_ids,
                 asset_manifest_id,
             )
             if item
         ),
     )
+    persistence_duration_ms = round((perf_counter() - persist_started) * 1000, 2)
+    work.event(
+        "crawl.seed.completed",
+        "Completed the shallow seed crawl and persisted evidence without blocking on assets.",
+        metadata={
+            "durationMs": crawl_duration_ms,
+            "sourceCount": len(incoming.acquired_sources),
+            "evidenceCount": len(incoming.evidence),
+            "deferredAssetCount": len(source_assets),
+        },
+    )
+
     source_urls = tuple(
         dict.fromkeys(
             (
@@ -278,7 +219,13 @@ async def extract_evidence(
     work.event(
         "source.extracted",
         f"Persisted {len(package.evidence)} evidence records.",
-        metadata={"artifactId": evidence_id, "sourceCount": len(source_urls)},
+        metadata={
+            "artifactId": evidence_id,
+            "sourceCount": len(source_urls),
+            "evidenceCount": len(package.evidence),
+            "persistenceDurationMs": persistence_duration_ms,
+            "totalDurationMs": round((perf_counter() - total_started) * 1000, 2),
+        },
     )
     job = work.ctx.catalogue.create_background_job(
         user_id=work.user_id,
@@ -291,6 +238,9 @@ async def extract_evidence(
             "seedEvidenceArtifactId": evidence_id,
             "processedSources": 0,
             "totalSources": 0,
+            "iteration": 0,
+            "nextSourceIndex": 0,
+            "phase": "queued",
         },
     )
     job_artifact_id = work.put_model(

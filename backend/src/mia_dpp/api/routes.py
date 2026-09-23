@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import secrets
 
@@ -29,8 +30,15 @@ from mia_dpp.api.schemas import (
     HealthResponse,
     ProductDetail,
     ProductLibraryItem,
+    StorageStatus,
 )
-from mia_dpp.domain.product import BackgroundJob, ChatMessage, ThreadRecord
+from mia_dpp.domain.product import (
+    BackgroundJob,
+    BackgroundJobStatus,
+    ChatMessage,
+    RunStatus,
+    ThreadRecord,
+)
 from mia_dpp.domain.targets import TemplateSummary
 from mia_dpp.errors import MiaError
 from mia_dpp.mia import Mia
@@ -74,6 +82,35 @@ async def health(http_request: Request) -> HealthResponse:
     )
 
 
+@router.get("/api/runtime/storage", response_model=StorageStatus)
+async def runtime_storage(
+    http_request: Request,
+    _user_id: AuthenticatedUser,
+) -> StorageStatus:
+    """Report which durable storage adapters the running deployment actually selected."""
+
+    application = _application(http_request)
+    database_url = application.settings.database_url or ""
+    database_backend = application.context.catalogue.backend
+    provider = (
+        "supabase"
+        if "supabase.com" in database_url.casefold()
+        else ("postgres" if database_backend == "postgres" else "local")
+    )
+    artifact_backend = (
+        "vercel_blob"
+        if application.context.artifacts.__class__.__name__ == "VercelBlobArtifactStore"
+        else "filesystem"
+    )
+    return StorageStatus(
+        database_backend=database_backend,
+        database_provider=provider,
+        artifact_backend=artifact_backend,
+        durable_metadata=database_backend == "postgres",
+        durable_artifacts=artifact_backend == "vercel_blob",
+    )
+
+
 @router.get("/api/templates", response_model=tuple[TemplateSummary, ...])
 async def template_catalog(http_request: Request) -> tuple[TemplateSummary, ...]:
     """Expose the two pinned templates currently used to prove generic loading."""
@@ -112,6 +149,17 @@ async def agent_message(
         json.JSONDecodeError,
     ) as error:
         raise HTTPException(status_code=502, detail=f"agent failed: {error}") from error
+    except Exception as error:
+        # Temporary integration-branch diagnostic: surface the exception class
+        # and a bounded message so runtime failures can be located without
+        # exposing tracebacks or database credentials to the browser.
+        detail = str(error) or type(error).__name__
+        if "://" in detail:
+            detail = "runtime dependency failed; inspect server logs for connection details"
+        raise HTTPException(
+            status_code=500,
+            detail=f"{type(error).__name__}: {detail[:500]}",
+        ) from error
 
 
 @router.post("/api/agent/review", response_model=AgentResponse)
@@ -254,21 +302,94 @@ async def mapping_knowledge(
 async def create_dpp(
     payload: DppBuildRequest,
     http_request: Request,
-    _user_id: AuthenticatedUser,
+    user_id: AuthenticatedUser,
 ) -> DppPackage:
-    """Build and validate an official-template-backed AAS environment."""
+    """Build, validate, and when scoped to a workspace, durably persist the DPP."""
 
     try:
-        return build_dpp(
+        application = _application(http_request)
+        package = build_dpp(
             payload.product_name,
             list(payload.mappings),
-            repository=_application(http_request).templates,
+            repository=application.templates,
             evidence=payload.evidence,
         )
+        if payload.thread_id and payload.product_id:
+            catalogue = application.context.catalogue
+            if catalogue.get_thread(payload.thread_id, user_id=user_id) is None:
+                raise ValueError("unknown thread")
+            product = catalogue.get_product(payload.product_id, user_id=user_id)
+            if product is None:
+                raise ValueError("unknown product")
+            run = catalogue.start_run(
+                product.id,
+                payload.thread_id,
+                user_id=user_id,
+                refresh_requested=True,
+            )
+
+            def persist(key: str, data: bytes, content_type: str) -> str:
+                artifact = application.context.artifacts.put(
+                    key,
+                    data,
+                    content_type=content_type,
+                    product_id=product.id,
+                    run_id=run.id,
+                )
+                catalogue.register_artifact(artifact)
+                return artifact.id
+
+            dpp_id = persist(
+                "dpp/manual-package.json",
+                package.model_dump_json(by_alias=True, indent=2).encode(),
+                "application/json",
+            )
+            aas_id = persist(
+                "aas/manual-environment.json",
+                json.dumps(package.environment, indent=2, default=str).encode(),
+                "application/json",
+            )
+            validation_id = persist(
+                "aas/manual-validation.json",
+                package.validation_report.model_dump_json(by_alias=True, indent=2).encode(),
+                "application/json",
+            )
+            catalogue.finish_run(
+                run.id,
+                RunStatus.COMPLETED if package.deployable else RunStatus.FAILED,
+                error=None if package.deployable else "Manual DPP validation blocked deployment",
+            )
+            if package.deployable:
+                catalogue.create_dpp_version(
+                    product.id,
+                    run.id,
+                    dpp_artifact_id=dpp_id,
+                    aas_artifact_id=aas_id,
+                    validation_artifact_id=validation_id,
+                    source_fingerprint=hashlib.sha256(
+                        package.model_dump_json(by_alias=True).encode()
+                    ).hexdigest(),
+                    deployable=True,
+                )
+        return package
     except TemplateRepositoryError as error:
         raise HTTPException(status_code=503, detail=str(error)) from error
-    except MiaError as error:
+    except (MiaError, ValueError) as error:
         raise HTTPException(status_code=422, detail=str(error)) from error
+
+
+@router.get("/api/threads/{thread_id}", response_model=AgentResponse)
+async def thread_state(
+    thread_id: str,
+    http_request: Request,
+    user_id: AuthenticatedUser,
+) -> AgentResponse:
+    """Restore the checkpoint-backed workspace state for an owned conversation."""
+
+    try:
+        return await _application(http_request).thread_state(thread_id, user_id=user_id)
+    except KeyError as error:
+        raise HTTPException(status_code=404, detail="unknown thread") from error
 
 
 @router.get(
@@ -313,6 +434,23 @@ async def background_jobs(
     if catalogue.get_thread(thread_id, user_id=user_id) is None:
         raise HTTPException(status_code=404, detail="unknown thread")
     return catalogue.list_background_jobs(user_id=user_id, thread_id=thread_id)
+
+
+@router.post("/api/background-jobs/{job_id}/retry", response_model=BackgroundJob)
+async def retry_background_job(
+    job_id: str,
+    http_request: Request,
+    user_id: AuthenticatedUser,
+) -> BackgroundJob:
+    """Requeue a failed owned background job for the persistent local/hosted worker."""
+
+    catalogue = _application(http_request).context.catalogue
+    job = catalogue.get_background_job(job_id, user_id=user_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="unknown background job")
+    if job.status is not BackgroundJobStatus.FAILED:
+        return job
+    return catalogue.requeue_background_job(job.id, user_id=user_id)
 
 
 @router.get("/api/background-jobs/{job_id}", response_model=BackgroundJob)

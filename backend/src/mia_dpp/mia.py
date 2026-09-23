@@ -194,6 +194,27 @@ class Mia:
             user_id=user_id,
         )
 
+    async def thread_state(
+        self,
+        thread_id: str,
+        *,
+        user_id: str = LOCAL_USER_ID,
+    ) -> AgentResponse:
+        """Restore the authoritative checkpoint-backed workspace state for one owned thread."""
+
+        if self.context.catalogue.get_thread(thread_id, user_id=user_id) is None:
+            raise KeyError(thread_id)
+        graph = await self._ensure_graph()
+        snapshot = await graph.aget_state(self._config(thread_id, user_id))
+        if not snapshot.values:
+            return AgentResponse(
+                thread_id=thread_id,
+                reply="",
+                status=AgentStatus.AWAITING_INPUT,
+                decision_summary="Conversation exists but has no active workflow state.",
+            )
+        return self._response_view.build(dict(snapshot.values), trace_offset=0)
+
     async def close(self) -> None:
         if self._checkpoint_cm is not None:
             await self._checkpoint_cm.__aexit__(None, None, None)

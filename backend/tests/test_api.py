@@ -219,3 +219,35 @@ def test_trace_endpoint_returns_normalized_events() -> None:
 
     assert response.status_code == 200
     assert [item["id"] for item in response.json()] == [event.id]
+
+
+def test_runtime_storage_reports_selected_adapters() -> None:
+    response = request("GET", "/api/runtime/storage")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "databaseBackend": "sqlite",
+        "databaseProvider": "local",
+        "artifactBackend": "filesystem",
+        "durableMetadata": False,
+        "durableArtifacts": False,
+    }
+
+
+def test_thread_state_endpoint_restores_owned_workspace(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def state(thread_id: str, *, user_id: str) -> AgentResponse:
+        return AgentResponse(
+            thread_id=thread_id,
+            reply="Restored.",
+            status=AgentStatus.AWAITING_REVIEW,
+            decision_summary="Checkpoint restored.",
+        )
+
+    monkeypatch.setattr(app.state.mia, "thread_state", state)
+    response = request("GET", "/api/threads/thread-restored")
+
+    assert response.status_code == 200
+    assert response.json()["threadId"] == "thread-restored"
+    assert response.json()["status"] == "awaiting_review"

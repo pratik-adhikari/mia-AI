@@ -67,7 +67,7 @@ class VercelBlobArtifactStore:
         )
 
     def get(self, artifact: StoredArtifact) -> bytes:
-        value = self._client.get(artifact.storage_uri)
+        value = self._client.get(artifact.storage_uri, access="private")
         if isinstance(value, bytes):
             return value
         if hasattr(value, "read"):

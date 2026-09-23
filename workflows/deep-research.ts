@@ -1,13 +1,29 @@
 import { FatalError, RetryableError } from "workflow";
 
-/** Run the catalogue-owned research job in a durable, retryable Workflow step. */
+type ResearchJob = {
+  status: "queued" | "running" | "completed" | "failed" | "cancelled";
+  metadata?: Record<string, unknown>;
+};
+
+/** Resume the same catalogue-owned crawl job until every bounded batch is checkpointed. */
 export async function runDeepResearch(jobId: string, backendOrigin: string) {
   "use workflow";
 
-  return executeResearchJob(jobId, backendOrigin);
+  let job: ResearchJob | null = null;
+  // The backend owns the durable cursor; the Workflow only schedules the next bounded slice.
+  for (let iteration = 0; iteration < 50; iteration += 1) {
+    job = await executeResearchBatch(jobId, backendOrigin);
+    if (job.status === "completed" || job.status === "cancelled") return job;
+    if (job.status !== "queued") {
+      throw new RetryableError(`Research job returned unexpected status ${job.status}`, {
+        retryAfter: "30s",
+      });
+    }
+  }
+  throw new FatalError("Research job exceeded the bounded workflow iteration limit");
 }
 
-async function executeResearchJob(jobId: string, backendOrigin: string) {
+async function executeResearchBatch(jobId: string, backendOrigin: string): Promise<ResearchJob> {
   "use step";
 
   const secret = process.env.MIA_WORKFLOW_SECRET;
@@ -29,7 +45,7 @@ async function executeResearchJob(jobId: string, backendOrigin: string) {
   if (!response.ok) {
     throw new FatalError(`Research worker returned ${response.status}`);
   }
-  return response.json();
+  return response.json() as Promise<ResearchJob>;
 }
 
-executeResearchJob.maxRetries = 5;
+executeResearchBatch.maxRetries = 5;

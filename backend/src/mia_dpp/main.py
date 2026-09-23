@@ -34,7 +34,7 @@ def create_app(mia: Mia | None = None) -> FastAPI:
         CORSMiddleware,
         allow_origin_regex=application.settings.cors_origin_regex,
         allow_methods=["GET", "POST"],
-        allow_headers=["Content-Type"],
+        allow_headers=["Content-Type", "Authorization"],
     )
     app.include_router(router)
     return app

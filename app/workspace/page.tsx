@@ -81,6 +81,8 @@ export default function Workspace() {
   const [agentActivity, setAgentActivity] = useState<AgentTraceEvent[]>([]);
   const [artifacts, setArtifacts] = useState<WorkspaceArtifact[]>([]);
   const [backgroundJob, setBackgroundJob] = useState<BackgroundJob | null>(null);
+  const [workspaceError, setWorkspaceError] = useState<string | null>(null);
+  const [researchDispatchError, setResearchDispatchError] = useState<string | null>(null);
   const [semanticReview, setSemanticReview] = useState<SemanticReviewItem[]>([]);
   const [humanRequest, setHumanRequest] = useState<HumanRequest | null>(null);
   const [humanValue, setHumanValue] = useState("");
@@ -89,7 +91,6 @@ export default function Workspace() {
   >({});
   const [tab, setTab] = useState<WorkspaceTab>("mappings");
   const endRef = useRef<HTMLDivElement>(null);
-  const dispatchedJobs = useRef(new Set<string>());
 
   const mergeActivity = useCallback((events: AgentTraceEvent[]) => {
     setAgentActivity((previous) => {
@@ -98,22 +99,35 @@ export default function Workspace() {
     });
   }, []);
 
-  const dispatchBackgroundJob = useCallback(async (jobId: string) => {
-    if (dispatchedJobs.current.has(jobId)) return;
-    dispatchedJobs.current.add(jobId);
+  const retryBackgroundJob = useCallback(async (jobId: string) => {
     const response = await authenticatedFetch("/research/start", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ jobId }),
     });
-    if (!response.ok) dispatchedJobs.current.delete(jobId);
+    if (response.ok) {
+      setResearchDispatchError(null);
+      return;
+    }
+    const detail = await response.text();
+    setResearchDispatchError(detail || `Research dispatcher returned ${response.status}`);
   }, [authenticatedFetch]);
 
   const refreshArtifacts = useCallback(async (activeThreadId: string) => {
-    const response = await authenticatedFetch(
-      `${API_URL}/api/workspaces/${encodeURIComponent(activeThreadId)}/artifacts`
-    );
-    if (response.ok) setArtifacts((await response.json()) as WorkspaceArtifact[]);
+    try {
+      const response = await authenticatedFetch(
+        `${API_URL}/api/workspaces/${encodeURIComponent(activeThreadId)}/artifacts`
+      );
+      if (!response.ok) {
+        const detail = await response.text();
+        setWorkspaceError(detail || `Workspace API returned ${response.status}`);
+        return;
+      }
+      setArtifacts((await response.json()) as WorkspaceArtifact[]);
+      setWorkspaceError(null);
+    } catch (error) {
+      setWorkspaceError(error instanceof Error ? error.message : "Workspace API is unavailable");
+    }
   }, [authenticatedFetch]);
 
   const refreshBackgroundJobs = useCallback(async (activeThreadId: string) => {
@@ -122,10 +136,8 @@ export default function Workspace() {
     );
     if (!response.ok) return;
     const jobs = (await response.json()) as BackgroundJob[];
-    const latest = jobs.at(-1) ?? null;
-    setBackgroundJob(latest);
-    if (latest?.status === "queued") void dispatchBackgroundJob(latest.id);
-  }, [authenticatedFetch, dispatchBackgroundJob]);
+    setBackgroundJob(jobs.at(-1) ?? null);
+  }, [authenticatedFetch]);
 
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -191,10 +203,16 @@ export default function Workspace() {
 
   async function openThread(selectedThreadId: string) {
     setThreadId(selectedThreadId);
-    const response = await authenticatedFetch(
-      `${API_URL}/api/threads/${encodeURIComponent(selectedThreadId)}/messages`
-    );
-    if (response.ok) setMessages((await response.json()) as ChatMessage[]);
+    const [messagesResponse, stateResponse] = await Promise.all([
+      authenticatedFetch(
+        `${API_URL}/api/threads/${encodeURIComponent(selectedThreadId)}/messages`
+      ),
+      authenticatedFetch(
+        `${API_URL}/api/threads/${encodeURIComponent(selectedThreadId)}`
+      ),
+    ]);
+    if (messagesResponse.ok) setMessages((await messagesResponse.json()) as ChatMessage[]);
+    if (stateResponse.ok) applyAgentResponse((await stateResponse.json()) as AgentResponse);
     void refreshArtifacts(selectedThreadId);
     void refreshBackgroundJobs(selectedThreadId);
   }
@@ -210,7 +228,7 @@ export default function Workspace() {
     setBusy(true);
 
     try {
-      const res = await authenticatedFetch(`${API_URL}/api/agent/messages`, {
+      const res = await authenticatedFetch("/agent/messages", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ threadId: activeThreadId, message: t }),
@@ -251,7 +269,7 @@ export default function Workspace() {
     ]);
 
     try {
-      const response = await authenticatedFetch(`${API_URL}/api/agent/messages`, {
+      const response = await authenticatedFetch("/agent/messages", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -309,7 +327,7 @@ export default function Workspace() {
     mergeActivity(data.traceEvents);
     void refreshArtifacts(data.threadId);
     void refreshBackgroundJobs(data.threadId);
-    if (data.backgroundJobId) void dispatchBackgroundJob(data.backgroundJobId);
+    setResearchDispatchError(data.researchDispatchError ?? null);
     void refreshMappingKnowledge();
     const product = data.currentProduct;
     if (product?.mappingResult && product.coverageReport) {
@@ -536,6 +554,8 @@ export default function Workspace() {
           productName: selectedProduct || "Product",
           mappings: selectedMappings,
           evidence: selectedEvidence,
+          threadId,
+          productId: currentProductId,
         }),
       });
       if (!response.ok) {
@@ -586,7 +606,7 @@ export default function Workspace() {
     ) ?? [];
 
   return (
-    <div className="flex h-screen flex-col bg-mist">
+    <div className="flex h-full flex-col bg-mist">
       {/* Top bar */}
       <header className="relative z-10 flex h-14 shrink-0 items-center justify-between border-b border-hairline bg-paper px-5 shadow-sm">
         <div className="flex items-center gap-3">
@@ -896,8 +916,22 @@ export default function Workspace() {
             <div className="flex items-center gap-3">
               {(backgroundJob?.status === "queued" || backgroundJob?.status === "running") && (
                 <span className="text-[11px] font-medium text-signal">
-                  Deep research running · {Number(backgroundJob.metadata.processedSources ?? 0)} / {Number(backgroundJob.metadata.totalSources ?? 0)} sources
+                  Deep research {backgroundJob.status} · {Number(backgroundJob.metadata.processedSources ?? 0)} / {Number(backgroundJob.metadata.totalSources ?? 0)} sources
                 </span>
+              )}
+              {backgroundJob?.status === "failed" && (
+                <span className="max-w-72 truncate text-[11px] font-medium text-red-700" title={backgroundJob.error ?? undefined}>
+                  Deep research failed{backgroundJob.error ? `: ${backgroundJob.error}` : ""}
+                </span>
+              )}
+              {researchDispatchError && backgroundJob && (
+                <button
+                  onClick={() => void retryBackgroundJob(backgroundJob.id)}
+                  className="rounded-full border border-red-200 bg-red-50 px-3 py-1 text-[11px] font-medium text-red-700"
+                  title={researchDispatchError}
+                >
+                  Research dispatch failed · Retry
+                </button>
               )}
               {tab === "mappings" && pending > 0 && (
                 <button
@@ -1025,7 +1059,7 @@ export default function Workspace() {
             ) : tab === "process" ? (
               <AgentActivity events={agentActivity} />
             ) : tab === "data" ? (
-              <WorkspaceExplorer apiUrl={API_URL} threadId={threadId} artifacts={artifacts} />
+              <WorkspaceExplorer apiUrl={API_URL} threadId={threadId} artifacts={artifacts} error={workspaceError} />
             ) : (
               <IntegrationGraph entries={mappingKnowledge} />
             )}

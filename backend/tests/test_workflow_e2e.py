@@ -20,6 +20,7 @@ from mia_dpp.agents.semantic_mapping.agent import (
     lean_targets,
 )
 from mia_dpp.config import Settings
+from mia_dpp.domain.evidence import ExtractedAsset
 from mia_dpp.domain.mappings import MappingResult
 from mia_dpp.domain.targets import TemplateIndex
 from mia_dpp.mia import Mia
@@ -45,7 +46,27 @@ class _Search:
 
 class _Loader:
     async def load(self, url: str) -> RenderedPage:
-        return RenderedPage(url=url, html=FIXTURE.read_text(encoding="utf-8"))
+        return RenderedPage(
+            url=url,
+            html=FIXTURE.read_text(encoding="utf-8"),
+            observed_assets=(
+                ExtractedAsset(
+                    url="https://manufacturer.example/files/pg-16-datasheet.pdf",
+                    kind="document",
+                    label="PG-16 datasheet",
+                ),
+            ),
+        )
+
+
+class _WebTool(WebExtractionTool):
+    def __init__(self, **kwargs) -> None:
+        super().__init__(**kwargs)
+        self.download_calls = 0
+
+    async def download_source(self, url: str, *, max_bytes: int = 25 * 1024 * 1024):
+        self.download_calls += 1
+        raise AssertionError("the shallow seed pass must defer binary asset downloads")
 
 
 class _SemanticMapper:
@@ -124,7 +145,7 @@ async def test_graph_review_resume_build_and_reuse_are_one_durable_workflow(tmp_
         MIA_THREAD_STORE_PATH=tmp_path / "checkpoints.sqlite3",
         MIA_WORKSPACE_ROOT=tmp_path / "artifacts",
     )
-    web_tool = WebExtractionTool(
+    web_tool = _WebTool(
         loader=_Loader(),
         url_policy=ProductUrlPolicy(_public_resolver),
     )
@@ -147,6 +168,7 @@ async def test_graph_review_resume_build_and_reuse_are_one_durable_workflow(tmp_
         )
         assert response.status is AgentStatus.AWAITING_REVIEW
         assert mapper.calls == 1
+        assert web_tool.download_calls == 0
         assert response.current_product is not None
         assert response.current_product.pending_reviews
 

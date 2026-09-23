@@ -27,6 +27,7 @@ def test_workspace_view_reads_thread_artifacts_and_events(tmp_path: Path) -> Non
     workspace = WorkspaceView(catalogue, storage)
     listed = workspace.list_artifacts("thread-workspace")
     assert [item.id for item in listed] == [artifact.id]
+    assert listed[0].relative_path == "evidence/product.json"
     assert workspace.read_artifact("thread-workspace", artifact.id)[1] == b'{"name":"Example"}'
     assert workspace.list_events("thread-workspace")[0].event_type == "source.extracted"
     assert workspace.combined_export("thread-workspace")["jsonArtifacts"][artifact.id] == {

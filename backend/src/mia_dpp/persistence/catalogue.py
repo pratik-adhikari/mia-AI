@@ -866,6 +866,15 @@ class ProductCatalogue:
             (user_id,),
         )
 
+    def next_queued_background_job(self) -> BackgroundJob | None:
+        """Return the oldest queued worker job for an atomic worker claim."""
+
+        return self._one(
+            BackgroundJob,
+            "SELECT payload FROM background_jobs WHERE status=? ORDER BY created_at LIMIT 1",
+            (BackgroundJobStatus.QUEUED.value,),
+        )
+
     def claim_background_job(self, job_id: str, *, user_id: str) -> BackgroundJob | None:
         """Atomically move a queued/failed job to running; duplicate workers receive ``None``."""
 
@@ -922,6 +931,37 @@ class ProductCatalogue:
             (updated.model_dump_json(), now.isoformat(), job_id, user_id),
         )
         return updated
+
+    def requeue_background_job(
+        self,
+        job_id: str,
+        *,
+        user_id: str,
+        metadata: dict[str, Any] | None = None,
+    ) -> BackgroundJob:
+        """Checkpoint one completed worker batch and make the same job claimable again."""
+
+        job = self._require(self.get_background_job(job_id, user_id=user_id), job_id)
+        now = _now()
+        queued = job.model_copy(
+            update={
+                "status": BackgroundJobStatus.QUEUED,
+                "updated_at": now,
+                "error": None,
+                "metadata": {**job.metadata, **(metadata or {})},
+            }
+        )
+        self._execute(
+            "UPDATE background_jobs SET status=?,payload=?,updated_at=? WHERE id=? AND user_id=?",
+            (
+                queued.status.value,
+                queued.model_dump_json(),
+                now.isoformat(),
+                job_id,
+                user_id,
+            ),
+        )
+        return queued
 
     def finish_background_job(
         self,
