@@ -77,6 +77,9 @@ separate Docker volume. New local threads use Agent Server checkpoints; threads 
 this integration continue on their existing SQLite checkpoints. The Studio browser interface is
 hosted by LangSmith and connects to the local server. Opening Studio does not start a workflow;
 submitting a product request can call the configured model and external product sites.
+The local Agent Server runs with LangGraph's `--allow-blocking` development option because MIA's
+SQLite catalogue and artifact storage perform synchronous filesystem operations. This option is
+limited to the local Agent Server image; it is not part of the production backend image.
 
 The local Compose frontend also has a **Debug** control in the workspace header. It opens a
 side panel that renders the compiled Agent Server topology and highlights node task events from

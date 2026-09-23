@@ -43,7 +43,7 @@ RUN mkdir -p /app/.langgraph_api && chown -R mia:mia /app/.langgraph_api
 RUN uv sync --project backend --locked --no-dev --extra production --extra agent-server
 USER mia
 EXPOSE 2025
-CMD ["sh", "-c", "exec /app/backend/.venv/bin/langgraph dev --host 127.0.0.1 --port ${AGENT_SERVER_PORT:-2025} --no-browser --no-reload --config /app/langgraph.json"]
+CMD ["sh", "-c", "exec /app/backend/.venv/bin/langgraph dev --allow-blocking --host 127.0.0.1 --port ${AGENT_SERVER_PORT:-2025} --no-browser --no-reload --config /app/langgraph.json"]
 
 # Keep ordinary `docker build .` consumers (including Vercel) on the production runtime.
 FROM app AS production

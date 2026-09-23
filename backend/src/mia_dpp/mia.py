@@ -401,7 +401,12 @@ class Mia:
             if snapshot is None:
                 raise RuntimeError("LangGraph Agent Server lost the workflow thread.")
             if session is not None:
-                session.status = self._snapshot_status(snapshot)
+                status = self._snapshot_status(snapshot)
+                if status == "failed":
+                    raise RuntimeError(
+                        "LangGraph Agent Server workflow failed. Open Debug to see the failed node."
+                    )
+                session.status = status
                 self._publish_debug_event(
                     session,
                     "run",
@@ -517,7 +522,69 @@ class Mia:
 
         session = self._graph_debug_sessions.get((user_id, thread_id))
         if session is None:
-            yield {"event": "run", "data": {"status": "idle"}}
+            snapshot = await self._agent_server_snapshot(thread_id, user_id)
+            if snapshot is None:
+                yield {"event": "run", "data": {"status": "idle"}}
+                return
+            status = self._snapshot_status(snapshot)
+            metadata = snapshot.get("metadata", {}) if isinstance(snapshot, Mapping) else {}
+            yield {
+                "event": "run",
+                "data": {
+                    "runId": metadata.get("run_id") if isinstance(metadata, Mapping) else None,
+                    "status": status,
+                },
+            }
+            tasks = (
+                snapshot.get("tasks", ())
+                if isinstance(snapshot, Mapping)
+                else getattr(snapshot, "tasks", ())
+            )
+            for task in tasks:
+                task_data = task if isinstance(task, Mapping) else {}
+                name = task_data.get("name")
+                if not isinstance(name, str):
+                    continue
+                path = task_data.get("path", ())
+                path_items = (
+                    [item for item in path if isinstance(item, str)]
+                    if isinstance(path, (list, tuple))
+                    else []
+                )
+                namespace_items = [item for item in path_items if item != "__pregel_pull"][:-1]
+                task_status = self._task_status(task_data)
+                if task_status == "running" and status != "running":
+                    task_status = status
+                yield {
+                    "event": "node",
+                    "data": {
+                        "nodeId": f"{':'.join(namespace_items)}:{name}"
+                        if namespace_items
+                        else name,
+                        "nodeName": name,
+                        "namespace": ":".join(namespace_items),
+                        "status": task_status,
+                        "timestamp": None,
+                    },
+                }
+            if not tasks:
+                next_nodes = (
+                    snapshot.get("next", ())
+                    if isinstance(snapshot, Mapping)
+                    else getattr(snapshot, "next", ())
+                )
+                for node_name in next_nodes:
+                    if isinstance(node_name, str):
+                        yield {
+                            "event": "node",
+                            "data": {
+                                "nodeId": node_name,
+                                "nodeName": node_name,
+                                "namespace": "",
+                                "status": "waiting" if status != "running" else "running",
+                                "timestamp": None,
+                            },
+                        }
             return
         listener: asyncio.Queue[dict[str, Any] | None] = asyncio.Queue()
         session.listeners.add(listener)
@@ -554,14 +621,34 @@ class Mia:
             if isinstance(snapshot, Mapping)
             else getattr(snapshot, "tasks", ())
         )
-        if next_nodes or any(
-            getattr(task, "interrupts", ())
-            if not isinstance(task, Mapping)
-            else task.get("interrupts", ())
-            for task in tasks
+        if any(Mia._task_status(task) == "failed" for task in tasks):
+            return "failed"
+        state_interrupts = (
+            snapshot.get("interrupts", ())
+            if isinstance(snapshot, Mapping)
+            else getattr(snapshot, "interrupts", ())
+        )
+        if (
+            next_nodes
+            or state_interrupts
+            or any(Mia._task_status(task) == "waiting" for task in tasks)
         ):
             return "waiting"
         return "completed"
+
+    @staticmethod
+    def _task_status(task: Any) -> str:
+        error = task.get("error") if isinstance(task, Mapping) else getattr(task, "error", None)
+        interrupts = (
+            task.get("interrupts", ())
+            if isinstance(task, Mapping)
+            else getattr(task, "interrupts", ())
+        )
+        if error:
+            return "failed"
+        if interrupts:
+            return "waiting"
+        return "running"
 
     def _configured_model(self) -> Model | None:
         if self.settings.openrouter_api_key is None:
