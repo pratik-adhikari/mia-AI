@@ -57,6 +57,10 @@ worker     persistent resumable Crawl4AI/research worker
 storage    Docker volume using the local filesystem adapter
 ```
 
+The local Compose stack uses host networking so the browser-based crawler shares the host's
+working outbound route. Backend and frontend listeners bind to localhost in Compose; their ports
+remain configurable through `BACKEND_PORT` and `FRONTEND_PORT`.
+
 Useful commands:
 
 ```bash

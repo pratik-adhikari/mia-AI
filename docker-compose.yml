@@ -1,5 +1,6 @@
 services:
   backend:
+    network_mode: host
     build:
       context: .
       dockerfile: Dockerfile
@@ -12,13 +13,13 @@ services:
       # variables previously pulled from Vercel.
       VERCEL_ENV: ""
       MIA_LOCAL_MODE: "1"
+      MIA_BIND_HOST: 127.0.0.1
+      PORT: "${BACKEND_PORT:-8000}"
       MIA_CATALOGUE_PATH: /data/catalogue.sqlite3
       MIA_THREAD_STORE_PATH: /data/mia-agent.sqlite3
       MIA_WORKSPACE_ROOT: /data/workspaces
       MIA_CONFIG_PATH: /app/config.json
-      CLERK_AUTHORIZED_PARTIES: "${CLERK_AUTHORIZED_PARTIES:-http://localhost:3000,http://127.0.0.1:3000}"
-    ports:
-      - "${BACKEND_PORT:-8000}:8000"
+      CLERK_AUTHORIZED_PARTIES: "${CLERK_AUTHORIZED_PARTIES:-http://localhost:${FRONTEND_PORT:-3000},http://127.0.0.1:${FRONTEND_PORT:-3000}}"
     volumes:
       - mia-data:/data
       - ./config.json:/app/config.json:ro
@@ -28,8 +29,8 @@ services:
         - /app/backend/.venv/bin/python
         - -c
         - >-
-          import json, sys, urllib.request;
-          data = json.load(urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=2));
+          import json, os, sys, urllib.request;
+          data = json.load(urllib.request.urlopen('http://127.0.0.1:' + os.environ.get('PORT', '8000') + '/health', timeout=2));
           sys.exit(0 if data.get('status') == 'ok' else 1)
       interval: 5s
       timeout: 3s
@@ -37,6 +38,7 @@ services:
       start_period: 10s
 
   worker:
+    network_mode: host
     build:
       context: .
       dockerfile: Dockerfile
@@ -65,12 +67,13 @@ services:
     restart: unless-stopped
 
   frontend:
+    network_mode: host
     build:
       context: .
       dockerfile: Dockerfile.frontend
       network: "${DOCKER_BUILD_NETWORK:-host}"
       args:
-        NEXT_PUBLIC_MIA_API_URL: "${NEXT_PUBLIC_MIA_API_URL:-http://127.0.0.1:8000}"
+        NEXT_PUBLIC_MIA_API_URL: "${NEXT_PUBLIC_MIA_API_URL:-http://127.0.0.1:${BACKEND_PORT:-8000}}"
         NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: "${NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY:-}"
     env_file:
       - path: .env.local
@@ -80,15 +83,15 @@ services:
       MIA_LOCAL_MODE: "1"
       VERCEL_ENV: ""
       MIA_CONFIG_PATH: /app/config.json
-      MIA_BACKEND_URL: http://backend:8000
-      NEXT_PUBLIC_MIA_API_URL: "${NEXT_PUBLIC_MIA_API_URL:-http://127.0.0.1:8000}"
+      MIA_BIND_HOST: 127.0.0.1
+      MIA_BACKEND_URL: http://127.0.0.1:${BACKEND_PORT:-8000}
+      NEXT_PUBLIC_MIA_API_URL: "${NEXT_PUBLIC_MIA_API_URL:-http://127.0.0.1:${BACKEND_PORT:-8000}}"
+      PORT: "${FRONTEND_PORT:-3000}"
     depends_on:
       backend:
         condition: service_healthy
       worker:
         condition: service_started
-    ports:
-      - "${FRONTEND_PORT:-3000}:3000"
     volumes:
       - ./config.json:/app/config.json:ro
     healthcheck:
@@ -97,7 +100,7 @@ services:
         - node
         - -e
         - >-
-          fetch('http://127.0.0.1:3000/').then(response =>
+          fetch('http://127.0.0.1:' + (process.env.PORT || '3000') + '/').then(response =>
           process.exit(response.ok ? 0 : 1)).catch(() => process.exit(1))
       interval: 5s
       timeout: 3s

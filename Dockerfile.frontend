@@ -40,4 +40,4 @@ USER node
 
 EXPOSE 3000
 
-CMD ["npm", "run", "start", "--", "--hostname", "0.0.0.0", "--port", "3000"]
+CMD ["sh", "-c", "exec npm run start -- --hostname ${MIA_BIND_HOST:-0.0.0.0} --port ${PORT:-3000}"]

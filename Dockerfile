@@ -34,4 +34,4 @@ USER mia
 
 EXPOSE 8000
 
-CMD ["sh", "-c", "exec /app/backend/.venv/bin/uvicorn mia_dpp.main:app --host 0.0.0.0 --port ${PORT:-8000}"]
+CMD ["sh", "-c", "exec /app/backend/.venv/bin/uvicorn mia_dpp.main:app --host ${MIA_BIND_HOST:-0.0.0.0} --port ${PORT:-8000}"]
