@@ -18,6 +18,7 @@ from mia_dpp.domain.product_work import ProductWorkSnapshot, ProductWorkStage, R
 from mia_dpp.services.product_reuse import ProductReuseService
 from mia_dpp.workflow.context import MiaContext
 from mia_dpp.workflow.presentation import evidence_text, product_image_url
+from mia_dpp.workflow.product_snapshot import update_product_snapshot
 from mia_dpp.workflow.state import MiaWorkflowState, reset_product_state
 from mia_dpp.workflow.workspace import RunWorkspace
 
@@ -149,20 +150,14 @@ async def extract_evidence(
                 "evidenceArtifactId": evidence_id,
             },
         )
-        snapshot = work.ctx.catalogue.save_product_work_snapshot(
-            ProductWorkSnapshot(
-                id=f"snapshot-{work.product_id}",
-                user_id=work.user_id,
-                product_id=work.product_id,
-                run_id=work.run_id,
-                thread_id=state["thread_id"],
-                workflow_stage=ProductWorkStage.EVIDENCE,
-                template_keys=state.get("target_submodels", ()),
-                evidence_artifact_id=evidence_id,
-                reviewed_mapping_artifact_id=state.get("reviewed_mapping_artifact_id") or None,
-                source_fingerprint=fingerprint,
-                evidence_fingerprint=fingerprint,
-            )
+        snapshot = update_product_snapshot(
+            work,
+            ProductWorkStage.EVIDENCE,
+            template_keys=state.get("target_submodels", ()),
+            evidence_artifact_id=evidence_id,
+            reviewed_mapping_artifact_id=state.get("reviewed_mapping_artifact_id") or None,
+            source_fingerprint=fingerprint,
+            evidence_fingerprint=fingerprint,
         )
         return {
             "evidence_artifact_id": evidence_id,

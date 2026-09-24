@@ -66,6 +66,9 @@ class ProductWorkSnapshot(WireModel):
     mapping_input_fingerprint: str | None = None
     semantic_mapper_fingerprint: str | None = None
     review_fingerprint: str | None = None
+    reviewed_evidence_fingerprint: str | None = None
+    reviewed_target_fingerprint: str | None = None
+    reviewed_mapping_input_fingerprint: str | None = None
     build_input_fingerprint: str | None = None
 
     mapping_cycle_id: str | None = None

@@ -18,6 +18,7 @@ from mia_dpp.domain.product_work import ProductWorkStage
 from mia_dpp.domain.targets import RequirementKind, TemplateIndex
 from mia_dpp.services.deep_research import merge_mapping_results
 from mia_dpp.services.human_review_audit import mapping_review_records, supplied_value_record
+from mia_dpp.services.reconfirmation import ReviewReuseStatus, review_reuse_status
 from mia_dpp.tools.mapping.coverage import coverage as calculate_coverage
 from mia_dpp.tools.mapping.mapper import DeterministicWebsiteMapper
 from mia_dpp.workflow.context import MiaContext
@@ -118,7 +119,16 @@ async def semantic_mapping(
     deterministic = work.load_state("deterministic_mapping_artifact_id", MappingResult)
 
     reusable_mapping_id = state.get("reviewed_mapping_artifact_id")
-    if state.get("reuse_prior_work") and reusable_mapping_id:
+    durable_snapshot = work.ctx.catalogue.get_product_work_snapshot(
+        work.product_id,
+        user_id=work.user_id,
+    )
+    reuse_status = review_reuse_status(
+        durable_snapshot,
+        evidence_fingerprint=state.get("evidence_fingerprint") or state.get("source_fingerprint"),
+        target_fingerprint=state.get("target_fingerprint"),
+    )
+    if state.get("reuse_prior_work") and reusable_mapping_id and reuse_status is not ReviewReuseStatus.STALE:
         try:
             reused = work.load(str(reusable_mapping_id), MappingResult)
             work.ctx.mapping_review.validate_complete_accounting(package, reused)
@@ -126,7 +136,11 @@ async def semantic_mapping(
             reused = None
         if reused is not None and _mapping_targets_are_current(reused, index):
             cycle_id = work.ctx.mapping_review.cycle_id(package, index, reused)
-            reviews = work.ctx.mapping_review.complete_review(package, reused, index)
+            reviews = (
+                ()
+                if reuse_status is ReviewReuseStatus.CURRENT
+                else work.ctx.mapping_review.complete_review(package, reused, index)
+            )
             mapping_id = work.put_model(
                 "mapping/reused-reviewed.json",
                 reused,
@@ -139,17 +153,22 @@ async def semantic_mapping(
             )
             work.event(
                 "mapping.history_reused",
-                f"Reused {len(reused.mapped)} prior mapped facts and reopened them for confirmation.",
+                (
+                    f"Reused {len(reused.mapped)} human-reviewed mappings without semantic remapping."
+                    if not reviews
+                    else f"Reused {len(reused.mapped)} prior mappings and reopened them for confirmation."
+                ),
                 metadata={
                     "seededFromRunId": state.get("seeded_from_run_id"),
                     "priorMappingArtifactId": str(reusable_mapping_id),
+                    "reviewReuseStatus": reuse_status.value,
                 },
             )
             snapshot = update_product_snapshot(
                 work,
                 ProductWorkStage.HUMAN_REVIEW if reviews else ProductWorkStage.MAPPING,
                 semantic_mapping_artifact_id=mapping_id,
-                reviewed_mapping_artifact_id=None,
+                reviewed_mapping_artifact_id=(mapping_id if not reviews else None),
                 mapping_cycle_id=cycle_id,
                 human_review_pending=bool(reviews),
             )
@@ -158,7 +177,7 @@ async def semantic_mapping(
                 "review_items_artifact_id": review_id,
                 "mapping_cycle_id": cycle_id,
                 "review_required": bool(reviews),
-                "reviewed_mapping_artifact_id": "",
+                "reviewed_mapping_artifact_id": mapping_id if not reviews else "",
                 "product_snapshot_version": snapshot.version,
             }
 
@@ -290,6 +309,7 @@ async def human_review(
             corrected_requirement_id=decision.corrected_requirement_id,
             corrected_value=decision.corrected_value,
             comment=decision.comment,
+            actor_name=request.actor_name,
         )
         reviewed.append(item)
         for audit in mapping_review_records(
@@ -357,6 +377,9 @@ async def human_review(
         evidence_artifact_id=evidence_id,
         reviewed_mapping_artifact_id=mapping_id,
         review_fingerprint=review_fingerprint,
+        reviewed_evidence_fingerprint=state.get("evidence_fingerprint") or state.get("source_fingerprint"),
+        reviewed_target_fingerprint=state.get("target_fingerprint"),
+        reviewed_mapping_input_fingerprint=state.get("mapping_input_fingerprint"),
         mapping_cycle_id=state["mapping_cycle_id"],
         human_review_pending=False,
     )
@@ -583,6 +606,9 @@ async def human_value(
         evidence_artifact_id=evidence_id,
         reviewed_mapping_artifact_id=reviewed_id,
         review_fingerprint=review_fingerprint,
+        reviewed_evidence_fingerprint=state.get("evidence_fingerprint") or state.get("source_fingerprint"),
+        reviewed_target_fingerprint=state.get("target_fingerprint"),
+        reviewed_mapping_input_fingerprint=state.get("mapping_input_fingerprint"),
         unresolved_required_ids=tuple(item for item in missing if item != requirement_id),
     )
     return {
