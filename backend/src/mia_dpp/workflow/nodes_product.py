@@ -62,6 +62,7 @@ async def resolve_product(
             "product_name": product.name or "",
             "manufacturer": product.manufacturer or "",
             "image_url": product.image_url or "",
+            "product_snapshot_version": snapshot.version if snapshot is not None else 0,
             "status": (
                 "awaiting_human"
                 if active.status is RunStatus.AWAITING_HUMAN
@@ -70,6 +71,10 @@ async def resolve_product(
         }
 
     refresh_requested = state.get("refresh_requested", False)
+    durable_snapshot = catalogue.get_product_work_snapshot(
+        product.id,
+        user_id=state["user_id"],
+    )
     decision = ProductReuseService(catalogue).decide(
         product.id,
         user_id=state["user_id"],
@@ -113,6 +118,9 @@ async def resolve_product(
         "product_name": product.name or "",
         "manufacturer": product.manufacturer or "",
         "image_url": product.image_url or "",
+        "product_snapshot_version": (
+            durable_snapshot.version if durable_snapshot is not None else 0
+        ),
         "status": "reused" if cached else "running",
         "max_research_attempts": state.get("max_research_attempts", 2),
     }
@@ -382,19 +390,13 @@ async def extract_evidence(
         "Queued durable deep research without blocking initial mapping.",
         metadata={"jobId": job.id, "artifactId": job_artifact_id},
     )
-    snapshot = work.ctx.catalogue.save_product_work_snapshot(
-        ProductWorkSnapshot(
-            id=f"snapshot-{work.product_id}",
-            user_id=work.user_id,
-            product_id=work.product_id,
-            run_id=work.run_id,
-            thread_id=state["thread_id"],
-            workflow_stage=ProductWorkStage.EVIDENCE,
-            template_keys=state.get("target_submodels", ()),
-            evidence_artifact_id=evidence_id,
-            source_fingerprint=fingerprint,
-            evidence_fingerprint=fingerprint,
-        )
+    snapshot = update_product_snapshot(
+        work,
+        ProductWorkStage.EVIDENCE,
+        template_keys=state.get("target_submodels", ()),
+        evidence_artifact_id=evidence_id,
+        source_fingerprint=fingerprint,
+        evidence_fingerprint=fingerprint,
     )
     return {
         "evidence_artifact_id": evidence_id,

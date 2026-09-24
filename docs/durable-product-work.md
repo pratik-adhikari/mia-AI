@@ -334,3 +334,16 @@ generation, clears a queued refresh, and reserves the replacement run. Only afte
 does LangGraph start the replacement checkpoint.
 
 This prevents the earlier unsafe inference that "RUNNING + no human interrupt = zombie".
+
+
+## Causal snapshot CAS
+
+Workflow snapshot writes now use the snapshot version carried in LangGraph state as the expected
+version. A node that computed from snapshot vN may write only against vN.
+
+The helper no longer reloads vN+K and silently rebases stale results onto it. If the durable current
+version differs from `state.productSnapshotVersion`, the write raises `ProductSnapshotConflict`
+and the stale generation must stop/reconcile.
+
+Resolve/restart paths seed `productSnapshotVersion` from the durable snapshot, and every successful
+snapshot write returns the new version into graph state for the next node.

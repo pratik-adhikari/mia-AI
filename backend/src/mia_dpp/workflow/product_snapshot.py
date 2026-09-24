@@ -33,10 +33,24 @@ def update_product_snapshot(
 ) -> ProductWorkSnapshot:
     """Merge authoritative stage pointers without discarding still-valid earlier work."""
 
+    expected_version = int(work.state.get("product_snapshot_version", 0))
     current = work.ctx.catalogue.get_product_work_snapshot(
         work.product_id,
         user_id=work.user_id,
     )
+    if current is None and expected_version != 0:
+        from mia_dpp.persistence.catalogue import ProductSnapshotConflict
+
+        raise ProductSnapshotConflict(
+            f"workflow expected snapshot version {expected_version}, but no snapshot exists"
+        )
+    if current is not None and current.version != expected_version:
+        from mia_dpp.persistence.catalogue import ProductSnapshotConflict
+
+        raise ProductSnapshotConflict(
+            f"workflow computed from snapshot version {expected_version}, "
+            f"but current version is {current.version}"
+        )
     snapshot = current or ProductWorkSnapshot(
         id=f"snapshot-{work.product_id}",
         user_id=work.user_id,
@@ -54,5 +68,5 @@ def update_product_snapshot(
     )
     return work.ctx.catalogue.save_product_work_snapshot(
         snapshot,
-        expected_version=current.version if current is not None else 0,
+        expected_version=expected_version,
     )
