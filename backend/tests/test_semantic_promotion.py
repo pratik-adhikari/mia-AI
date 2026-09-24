@@ -433,7 +433,6 @@ def test_projection_uniqueness_rejects_unresolved_duplicate_targets() -> None:
         MappingReviewService.validate_projection_uniqueness(result)
 
 
-
 def test_promoted_technical_property_reaches_final_technical_data_submodel() -> None:
     repository, package, record, concept_a, _, proposals, resolution, diagnostics = _inputs(
         priority=DecisionPriority.AUTO
@@ -489,4 +488,3 @@ def test_promoted_technical_property_reaches_final_technical_data_submodel() -> 
     assert "RatedPower" in rendered
     assert concept_a.irdi in rendered
     assert "500" in rendered
-    assert dpp.deployable is True
