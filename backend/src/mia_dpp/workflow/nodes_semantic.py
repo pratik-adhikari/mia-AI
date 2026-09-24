@@ -9,7 +9,9 @@ from langgraph.runtime import Runtime
 from mia_dpp.domain.evidence import ProductKnowledgePackage
 from mia_dpp.normalization import NormalizationReport, normalize_package
 from mia_dpp.semantic import ContextViewSet, build_context_views
-from mia_dpp.semantic.idta_routing import route_views
+from mia_dpp.semantic.decision_policy import apply_decision_policy
+from mia_dpp.semantic.diagnostics import build_routing_diagnostics
+from mia_dpp.semantic.idta_routing import IdtaRoutingReport, route_views
 from mia_dpp.workflow.context import MiaContext
 from mia_dpp.workflow.state import MiaWorkflowState
 from mia_dpp.workflow.workspace import RunWorkspace
@@ -139,3 +141,54 @@ async def shadow_jev_idta_routing(
         },
     )
     return {"jev_idta_routing_artifact_id": artifact_id}
+
+
+async def analyze_jev_shadow(
+    state: MiaWorkflowState,
+    runtime: Runtime[MiaContext],
+) -> dict[str, Any]:
+    """Derive multi-scope diagnostics and review priority without model calls."""
+
+    work = RunWorkspace(state, runtime.context)
+    routing_id = state.get("jev_idta_routing_artifact_id")
+    if not routing_id:
+        work.event(
+            "semantic.jev_policy_skipped",
+            "No Jev shadow routing artifact exists, so diagnostics were skipped.",
+            metadata={"shadowMode": True},
+        )
+        return {}
+
+    routing = work.load(routing_id, IdtaRoutingReport)
+    diagnostics = build_routing_diagnostics(routing)
+    diagnostics_id = work.put_model(
+        "semantic/jev-routing-diagnostics.json",
+        diagnostics,
+        derived_from=(routing_id,),
+    )
+    policy = apply_decision_policy(
+        diagnostics,
+        work.ctx.jev_decision_policy,
+    )
+    policy_id = work.put_model(
+        "semantic/jev-decision-policy.json",
+        policy,
+        derived_from=(diagnostics_id,),
+    )
+    counts: dict[str, int] = {}
+    for decision in policy.decisions:
+        counts[decision.priority.value] = counts.get(decision.priority.value, 0) + 1
+    work.event(
+        "semantic.jev_policy_completed",
+        "Derived shadow human-attention priorities from saved Jev distributions.",
+        metadata={
+            "diagnosticsArtifactId": diagnostics_id,
+            "policyArtifactId": policy_id,
+            "priorityCounts": counts,
+            "shadowMode": True,
+        },
+    )
+    return {
+        "jev_routing_diagnostics_artifact_id": diagnostics_id,
+        "jev_decision_policy_artifact_id": policy_id,
+    }
