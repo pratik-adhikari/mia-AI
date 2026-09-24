@@ -496,9 +496,10 @@ class ProductCatalogue:
         reused_from_run_id: str | None = None,
         seeded_from_run_id: str | None = None,
     ) -> ProductRun:
-        if self.get_thread(thread_id, user_id=user_id) is None:
+        thread = self.get_thread(thread_id, user_id=user_id)
+        if thread is None:
             if user_id == LOCAL_USER_ID:
-                self.get_or_create_thread(thread_id, user_id)
+                thread = self.get_or_create_thread(thread_id, user_id)
             else:
                 raise PermissionError("unknown thread")
         if not self.user_owns_product(user_id, product_id):
@@ -514,6 +515,7 @@ class ProductCatalogue:
             reused_from_run_id=reused_from_run_id,
             seeded_from_run_id=seeded_from_run_id,
             status=status,
+            workflow_generation=thread.workflow_generation,
             execution_lease_token=(_new_id("lease") if status is RunStatus.RUNNING else None),
             execution_lease_expires_at=(
                 now + RUN_EXECUTION_LEASE if status is RunStatus.RUNNING else None
@@ -557,7 +559,9 @@ class ProductCatalogue:
         return run
 
     def set_run_status(self, run_id: str, status: RunStatus) -> ProductRun:
-        run = self._require(self.get_run(run_id), run_id)
+        run = self.assert_run_generation(run_id)
+        if run.status not in {RunStatus.RUNNING, RunStatus.AWAITING_HUMAN}:
+            raise RuntimeError(f"run {run_id} is no longer mutable")
         now = _now()
         run = run.model_copy(
             update={
@@ -589,7 +593,9 @@ class ProductCatalogue:
         metrics: dict[str, int | float | str | bool | None] | None = None,
         error: str | None = None,
     ) -> ProductRun:
-        run = self._require(self.get_run(run_id), run_id)
+        run = self.assert_run_generation(run_id)
+        if run.status not in {RunStatus.RUNNING, RunStatus.AWAITING_HUMAN, RunStatus.REUSED}:
+            raise RuntimeError(f"run {run_id} is no longer mutable")
         run = run.model_copy(
             update={
                 "status": status,
@@ -617,7 +623,7 @@ class ProductCatalogue:
         return run.execution_lease_expires_at > (now or _now())
 
     def renew_run_lease(self, run_id: str) -> ProductRun:
-        run = self._require(self.get_run(run_id), run_id)
+        run = self.assert_run_generation(run_id)
         if run.status is not RunStatus.RUNNING:
             return run
         now = _now()
@@ -745,6 +751,7 @@ class ProductCatalogue:
                 refresh_requested=refresh_requested,
                 seeded_from_run_id=previous.id,
                 status=RunStatus.RUNNING,
+                workflow_generation=advanced.workflow_generation,
                 execution_lease_token=_new_id("lease"),
                 execution_lease_expires_at=now + RUN_EXECUTION_LEASE,
                 last_heartbeat_at=now,
@@ -762,6 +769,28 @@ class ProductCatalogue:
                 ),
             )
             return replacement
+
+    def assert_run_generation(self, run_id: str) -> ProductRun:
+        """Reject durable mutations from an executor that belongs to an old generation."""
+
+        run = self._require(self.get_run(run_id), run_id)
+        row = self._fetchone("SELECT payload FROM threads WHERE id=?", (run.thread_id,))
+        if row is None:
+            raise RuntimeError(f"run {run_id} has no owning thread")
+        thread = ThreadRecord.model_validate_json(row[0])
+        if run.workflow_generation != thread.workflow_generation:
+            raise RuntimeError(
+                f"run {run_id} belongs to workflow generation {run.workflow_generation}, "
+                f"current generation is {thread.workflow_generation}"
+            )
+        return run
+
+    def run_is_current_generation(self, run_id: str) -> bool:
+        try:
+            self.assert_run_generation(run_id)
+        except (KeyError, RuntimeError):
+            return False
+        return True
 
     def get_run(self, run_id: str) -> ProductRun | None:
         return self._one(ProductRun, "SELECT payload FROM runs WHERE id=?", (run_id,))
@@ -1367,6 +1396,9 @@ class ProductCatalogue:
         release_status: DppReleaseStatus = DppReleaseStatus.VERIFIED,
         dummy_mapping_ids: tuple[str, ...] = (),
     ) -> DppVersion:
+        run = self.assert_run_generation(run_id)
+        if run.product_id != product_id:
+            raise RuntimeError("DPP run does not belong to the requested product")
         for _ in range(3):
             try:
                 with self._connect() as db:
@@ -1537,15 +1569,26 @@ class ProductCatalogue:
         product_id: str,
         *,
         user_id: str,
+        source_generation: int | None = None,
     ) -> BackgroundJob | None:
-        """Return the newest completed research job for one owned product."""
+        """Return completed research only from the requested source lineage."""
 
-        return self._one(
+        jobs = self._many(
             BackgroundJob,
             "SELECT payload FROM background_jobs "
             "WHERE user_id=? AND product_id=? AND status=? "
-            "ORDER BY completed_at DESC,updated_at DESC LIMIT 1",
+            "ORDER BY completed_at DESC,updated_at DESC",
             (user_id, product_id, BackgroundJobStatus.COMPLETED.value),
+        )
+        if source_generation is None:
+            return jobs[0] if jobs else None
+        return next(
+            (
+                job
+                for job in jobs
+                if int(job.metadata.get("sourceGeneration", 0)) == source_generation
+            ),
+            None,
         )
 
     def next_queued_background_job(self) -> BackgroundJob | None:
