@@ -330,3 +330,112 @@ partition.
 
 This stage is still diagnostic-only and has no effect on `MappingResult`, human-review state,
 coverage, or AAS generation.
+
+## Milestone 4 implemented: ECLASS retrieval and bounded Jev concept classification
+
+The shadow graph now continues:
+
+```text
+lossless semantic grouping
+  -> shadow ECLASS resolution
+       -> route eligibility gate
+       -> preferred-name retrieval
+       -> direct-IRDI verification
+       -> sibling-context Jev choice
+       -> full-product-context Jev choice
+  -> deterministic ECLASS diagnostics / attention policy
+  -> existing trusted mapping pipeline
+```
+
+Artifacts:
+
+```text
+semantic/eclass-resolution-shadow.json
+semantic/eclass-resolution-diagnostics.json
+semantic/eclass-decision-policy.json
+```
+
+None of these artifacts affect `MappingResult`, coverage, human-review state, or AAS generation.
+
+### Eligibility
+
+ECLASS retrieval runs only for evidence that hierarchical IDTA routing placed into the official
+open Technical Data wildcard:
+
+```text
+TechnicalData
+  / TechnicalPropertyAreas
+  / []
+  / ArbitraryProperty
+```
+
+The wildcard route must receive a strict majority of the configured IDTA context scopes. A tied
+or fragmented routing result does not trigger ECLASS retrieval.
+
+### Registry trust boundary
+
+The new `EclassPropertyProvider` contract exposes only:
+
+```text
+search_properties(query, limit)
+get_property(irdi)
+```
+
+Search results are discovery hints only. Every search-hit IRDI is fetched again through
+`get_property()` before it is eligible for Jev.
+
+The saved artifact distinguishes search query, search hits, rejected/unverified IRDIs, verified
+authoritative properties, and Jev decisions.
+
+Jev cannot introduce an IRDI. Its choices are exactly the verified IRDIs plus
+`__no_eclass_match__` and `__unresolved__`.
+
+### Retrieval-empty versus semantic no-match
+
+`retrieval_empty` means the configured registry search returned no candidates.
+`__no_eclass_match__` can occur only after at least one authoritative candidate has been
+retrieved and directly verified, and Jev explicitly decides that none matches.
+
+This distinction is required before any future LLM query-expansion helper is added.
+
+### Official JSON V2 adapter
+
+`EclassJsonV2Provider` is mTLS-capable and configurable. It supports the JSON V2 multilingual
+preferred-name/definition shape and keeps canonical IRDIs inside MIA while converting only the
+HTTP lookup path to the V2 hyphen form.
+
+Runtime configuration:
+
+```env
+MIA_ECLASS_SHADOW_ENABLED=true
+MIA_ECLASS_CERTIFICATE_FILE=/absolute/path/to/eclass-client-cert.pem
+MIA_ECLASS_KEY_FILE=/absolute/path/to/eclass-client-key.pem
+MIA_ECLASS_JSON_BASE_URL=https://eclass-cdp.com/jsonapi/v2
+MIA_ECLASS_SEARCH_PARAMETER=preferredName
+MIA_ECLASS_CANDIDATE_LIMIT=12
+```
+
+Enabling ECLASS shadow mode requires Jev shadow mode. Missing certificate configuration fails
+startup instead of silently falling back to another source.
+
+### Multi-scope ECLASS classification
+
+Verified candidates are classified independently with sibling context and full-product context.
+
+The deterministic diagnostics stage records selected probability, runner-up probability, margin,
+runner-up/winner ratio, normalized entropy, and cross-scope concept agreement.
+
+Two strongly supported but different ECLASS concepts produce `ALARM`, even with only two scopes.
+
+The normal `AUTO / OPTIONAL / CONFIRM / ALARM` thresholds are reused for ECLASS concept
+classification and can be retuned from saved distributions without new ECLASS or Jev calls.
+
+### Tests added for milestone 4
+
+- `test_eclass_provider.py`
+- `test_eclass_resolution.py`
+- `test_eclass_diagnostics.py`
+
+They verify JSON V2 parsing and path conversion, direct-IRDI verification, route gating, rejected
+candidate handling, retrieval-empty versus semantic no-match, tied-route suppression, and
+multi-scope ECLASS agreement/disagreement.
