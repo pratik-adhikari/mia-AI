@@ -665,3 +665,123 @@ They verify:
 - legacy unbound wildcard mappings still compile as one list instance;
 - malformed list bindings are rejected;
 - old serialized mapping targets still load without the new field.
+
+## Milestone 7 implemented: authoritative promotion, direct review, and multi-submodel AAS
+
+The Jev/ECLASS path can now move out of shadow mode behind an explicit feature gate:
+
+```env
+MIA_JEV_SHADOW_ENABLED=true
+MIA_ECLASS_SHADOW_ENABLED=true
+MIA_SEMANTIC_PROMOTION_ENABLED=true
+```
+
+`MIA_SEMANTIC_PROMOTION_ENABLED` requires the verified ECLASS path. It cannot be enabled as an
+LLM-only or registry-free shortcut.
+
+### Authoritative promotion policy
+
+After the existing semantic mapper, the graph now passes through `promote_semantic_mapping`.
+When promotion is disabled, the node is a no-op and existing behavior is unchanged.
+
+When promotion is enabled:
+
+- conflict-free `AUTO` open Technical Properties become authoritative `FieldMapping`s;
+- `CONFIRM` becomes a direct semantic human-review row with the proposed target preselected;
+- `ALARM` becomes a direct semantic review row with verified ECLASS alternatives and no forced
+  mapping;
+- wildcard conflicts always force human review;
+- `OPTIONAL`, retrieval failures, semantic no-match, and unresolved cases remain unmapped under
+  the conservative starting policy.
+
+No technical value or semantic identifier is generated during promotion.
+
+### Direct semantic human review
+
+Open Technical Properties do not have fixed `Requirement` IDs, so review now supports two target
+kinds:
+
+```text
+requirement  -> existing fixed IDTA Requirement review
+direct       -> verified MappingTarget / ECLASS semantic target review
+```
+
+For a direct review, a human may:
+
+- keep the proposed verified target;
+- choose another ECLASS target from the already verified candidate set;
+- correct the source value;
+- mark the evidence unmapped/irrelevant/rejected.
+
+`correctedSemanticId` is accepted only when it selects exactly one target already present in the
+verified review alternatives. Human review cannot type or invent a new IRDI through this path.
+
+### Durable audit and reuse
+
+Immutable review records now retain:
+
+- proposed/final semantic ID;
+- proposed/final list-instance bindings;
+- source/final values;
+- fixed target path where relevant.
+
+Changing a direct ECLASS target is therefore recorded as `corrected_target`.
+
+Reusable reviewed mapping knowledge now includes semantic ID, source context, target instance path,
+and list-instance bindings. Context-specific mappings such as Motor A and Motor B no longer share
+one persistence identity accidentally.
+
+### Projection safety after human review
+
+After every review batch the mapping service validates complete projection identities, not merely
+template paths. Duplicate authoritative wildcard projections are rejected before durable review
+state is written or the compiler is invoked.
+
+### Final AAS assembly
+
+`build_dpp()` now groups accepted mappings by template and compiles each mapped submodel under one
+shared AAS/asset identity.
+
+A finished environment may therefore contain:
+
+```text
+AssetAdministrationShell
+├── Digital Nameplate submodel
+└── Technical Data submodel
+    └── TechnicalPropertyAreas
+        ├── Motor A
+        │   └── promoted ECLASS properties
+        └── Motor B
+            └── promoted ECLASS properties
+```
+
+The combined environment is deserialized and verified again after assembly. Per-submodel
+validation/gap reports remain available alongside the aggregate DPP report.
+
+The legacy `DppPackage.submodel` and `template` fields still point to the primary Digital
+Nameplate for compatibility; `submodels`, `templates`, `validationReports`, and `gapReports`
+expose the complete assembled result.
+
+### End-to-end regression coverage
+
+New/expanded tests cover:
+
+- AUTO promotion into authoritative direct mappings;
+- CONFIRM and ALARM direct-review behavior;
+- verified ECLASS alternative selection;
+- conservative OPTIONAL behavior;
+- conflict-forced review;
+- immutable audit of semantic target corrections;
+- duplicate projection rejection after human review;
+- repeated TechnicalPropertyArea compiler projection;
+- one-shell Nameplate + Technical Data assembly;
+- promoted Technical Property surviving through the final Technical Data submodel.
+
+### CI status
+
+A draft validation PR is open against `feat/resumable-assets-history-reuse` to trigger the real
+repository `make check` workflow. At the time of this milestone, GitHub creates the CI job but
+fails it before any workflow step is started (zero job steps), so Ruff, mypy, pytest, frontend
+typecheck/build, and Docker build do not execute on GitHub. This is a runner/account/infrastructure
+failure rather than a reported application-test failure. The PR remains draft until executable CI
+is available.
