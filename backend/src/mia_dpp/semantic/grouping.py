@@ -12,7 +12,11 @@ from pydantic import Field, model_validator
 from mia_dpp.domain.base import WireModel
 from mia_dpp.domain.evidence import EvidenceRecord, ProductKnowledgePackage
 from mia_dpp.normalization.models import NormalizationReport, NormalizedEvidence
-from mia_dpp.semantic.jev import ChoiceDecision, JevDecisionClient
+from mia_dpp.semantic.jev import (
+    MAX_CHOICE_OPTIONS,
+    ChoiceDecision,
+    JevDecisionClient,
+)
 from mia_dpp.semantic.models import ContextScope, ContextView, ContextViewSet
 
 NEW_GROUP = "__new_group__"
@@ -245,6 +249,12 @@ async def jev_incremental_grouping(
 
     if max_groups < 1:
         raise ValueError("max_groups must be at least one")
+    maximum_supported_groups = MAX_CHOICE_OPTIONS - 2
+    if max_groups > maximum_supported_groups:
+        raise ValueError(
+            f"max_groups cannot exceed {maximum_supported_groups}; "
+            "NEW_GROUP and UNRESOLVED consume two Jev options"
+        )
     records = {item.id: item for item in package.evidence}
     normalized = {item.evidence_id: item for item in normalization.evidence}
     if set(records) != set(normalized):
