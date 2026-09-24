@@ -321,6 +321,15 @@ async def jev_incremental_grouping(
             continue
 
         if decision.choice == NEW_GROUP:
+            if len(groups) >= max_groups:
+                assignments.append(
+                    GroupAssignment(
+                        evidence_id=record.id,
+                        status=GroupAssignmentStatus.UNRESOLVED,
+                        decision=decision,
+                    )
+                )
+                continue
             group_id = _group_id(
                 strategy=GroupingStrategy.JEV_INCREMENTAL,
                 scope=scope,
