@@ -133,6 +133,10 @@ class Settings(BaseSettings):
         le=64,
         validation_alias="MIA_ECLASS_CANDIDATE_LIMIT",
     )
+    semantic_promotion_enabled: bool = Field(
+        default=False,
+        validation_alias="MIA_SEMANTIC_PROMOTION_ENABLED",
+    )
     mia_database_url: str | None = Field(
         default=None,
         validation_alias="MIA_DATABASE_URL",
