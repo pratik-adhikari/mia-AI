@@ -51,11 +51,7 @@ class OpenPropertyConflictKind(StrEnum):
     PROJECTION_CONTEXT_COLLISION = "projection_context_collision"
 
 
-TECHNICAL_PROPERTY_AREA_LIST_PATH = (
-    "TechnicalData",
-    "TechnicalPropertyAreas",
-    "[]",
-)
+TECHNICAL_PROPERTY_AREA_LIST_PATH = TECHNICAL_DATA_ARBITRARY_PROPERTY_PATH[:-1]
 
 
 def technical_property_area_binding(
@@ -102,13 +98,19 @@ class OpenPropertyProposal(WireModel):
         pattern=r"^[0-9a-f]{64}$",
     )
     eclass_property: EclassProperty | None = None
+    property_area: ListInstanceBinding | None = None
     semantic_slot: SemanticSlotIdentity | None = None
     target: MappingTarget | None = None
 
     @model_validator(mode="after")
     def proposal_shape_matches_disposition(self) -> OpenPropertyProposal:
         proposed = self.disposition is OpenPropertyDisposition.PROPOSED
-        fields = (self.eclass_property, self.semantic_slot, self.target)
+        fields = (
+            self.eclass_property,
+            self.property_area,
+            self.semantic_slot,
+            self.target,
+        )
         if proposed and any(item is None for item in fields):
             raise ValueError("proposed open property requires ECLASS concept, slot, and target")
         if not proposed and any(item is not None for item in fields):
@@ -329,6 +331,7 @@ def build_open_property_proposals(
                         normalized[record.id]
                     ),
                     eclass_property=property_,
+                    property_area=area_binding,
                     semantic_slot=slot,
                     target=target,
                 )
