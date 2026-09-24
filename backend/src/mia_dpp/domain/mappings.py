@@ -328,6 +328,6 @@ class SemanticReviewItem(WireModel):
     alternative_requirement_ids: tuple[str, ...] = ()
     target_kind: Literal["requirement", "direct"] = "requirement"
     alternative_targets: tuple[MappingTarget, ...] = ()
-    review_priority: Literal["confirm", "alarm"] | None = None
+    review_priority: Literal["optional", "confirm", "alarm"] | None = None
     reason: str = Field(min_length=1, max_length=600)
     mapping: FieldMapping | None = None
