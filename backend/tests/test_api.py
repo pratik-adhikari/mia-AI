@@ -13,6 +13,8 @@ from pydantic_ai.exceptions import UnexpectedModelBehavior
 from mia_dpp.aas.templates import OfficialTemplateRepository
 from mia_dpp.agent.models import AgentResponse, AgentStatus
 from mia_dpp.domain.mappings import MappingStatus
+from mia_dpp.domain.product import RunStatus
+from mia_dpp.services.product_query import EvidenceSearchHit, WorkStatusView
 from mia_dpp.main import app
 from mia_dpp.tools.mapping.text_mapping import propose_text_mappings
 
@@ -313,3 +315,97 @@ def test_human_value_actor_name_is_bound_to_authenticated_identity(
 
     assert response.status_code == 200
     assert getattr(captured["payload"], "actor_name") == "Local user"
+
+
+
+def test_work_status_endpoint_uses_durable_query_service(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class Query:
+        def work_status(self, thread_id: str, *, user_id: str) -> WorkStatusView:
+            return WorkStatusView(
+                thread_id=thread_id,
+                product_id="product-query-api",
+                run_id="run-query-api",
+                run_status=RunStatus.RUNNING,
+                workflow_generation=3,
+                lease_live=True,
+            )
+
+    monkeypatch.setattr(app.state.mia, "query", Query())
+    response = request("GET", "/api/threads/thread-query-api/work-status")
+
+    assert response.status_code == 200
+    assert response.json()["threadId"] == "thread-query-api"
+    assert response.json()["runStatus"] == "running"
+    assert response.json()["workflowGeneration"] == 3
+    assert response.json()["leaseLive"] is True
+
+
+def test_evidence_search_endpoint_returns_source_backed_hits(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class Query:
+        def search_evidence(
+            self,
+            thread_id: str,
+            query: str,
+            *,
+            user_id: str,
+            limit: int,
+        ) -> tuple[EvidenceSearchHit, ...]:
+            assert thread_id == "thread-evidence-api"
+            assert query == "voltage"
+            assert limit == 4
+            return (
+                EvidenceSearchHit(
+                    evidence_id="ev-voltage",
+                    label="Supply voltage",
+                    value="48",
+                    unit="V",
+                    context_path=("Technical Specifications", "Electrical"),
+                    source_uri="https://manufacturer.example/robot",
+                    excerpt="Supply voltage: 48 V",
+                    score=15,
+                ),
+            )
+
+    monkeypatch.setattr(app.state.mia, "query", Query())
+    response = request(
+        "GET",
+        "/api/threads/thread-evidence-api/evidence/search?q=voltage&limit=4",
+    )
+
+    assert response.status_code == 200
+    assert response.json() == [
+        {
+            "evidenceId": "ev-voltage",
+            "label": "Supply voltage",
+            "value": "48",
+            "unit": "V",
+            "contextPath": ["Technical Specifications", "Electrical"],
+            "sourceUri": "https://manufacturer.example/robot",
+            "excerpt": "Supply voltage: 48 V",
+            "score": 15,
+        }
+    ]
+
+
+def test_retry_thread_endpoint_delegates_to_fenced_recovery(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def retry_work(thread_id: str, *, user_id: str) -> AgentResponse:
+        assert thread_id == "thread-retry-api"
+        return AgentResponse(
+            thread_id=thread_id,
+            reply="Recovered durable product work.",
+            status=AgentStatus.RUNNING,
+            decision_summary="Started a new fenced workflow generation.",
+        )
+
+    monkeypatch.setattr(app.state.mia, "retry_work", retry_work)
+    response = request("POST", "/api/threads/thread-retry-api/retry")
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "running"
+    assert response.json()["threadId"] == "thread-retry-api"
