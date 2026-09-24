@@ -36,6 +36,7 @@ from mia_dpp.persistence.workspace import WorkspaceView
 from mia_dpp.runtime.checkpoints import open_checkpointer
 from mia_dpp.runtime.factory import create_artifact_store, create_catalogue
 from mia_dpp.semantic.decision_policy import DecisionPolicySettings
+from mia_dpp.semantic.eclass import EclassJsonV2Provider, EclassPropertyProvider
 from mia_dpp.semantic.jev import OpenRouterJevClient
 from mia_dpp.services.deep_research import DeepResearchService
 from mia_dpp.tools.mapping.models import SemanticMapper
@@ -67,6 +68,7 @@ class Mia:
         search_provider: SearchProvider | None = None,
         web_tool: WebExtractionTool | None = None,
         semantic_mapper: SemanticMapper | None = None,
+        eclass_provider: EclassPropertyProvider | None = None,
     ) -> None:
         self.settings = settings or Settings()
         self.templates = OfficialTemplateRepository(self.settings.standards_root)
@@ -104,6 +106,23 @@ class Mia:
                 model=self.settings.jev_model,
                 max_concurrency=self.settings.jev_max_concurrency,
             )
+        resolved_eclass_provider = eclass_provider
+        if self.settings.eclass_shadow_enabled and resolved_eclass_provider is None:
+            if jev_decider is None:
+                raise ValueError(
+                    "MIA_ECLASS_SHADOW_ENABLED requires MIA_JEV_SHADOW_ENABLED"
+                )
+            if self.settings.eclass_certificate_file is None:
+                raise ValueError(
+                    "MIA_ECLASS_SHADOW_ENABLED requires MIA_ECLASS_CERTIFICATE_FILE"
+                )
+            resolved_eclass_provider = EclassJsonV2Provider(
+                certificate_file=self.settings.eclass_certificate_file,
+                key_file=self.settings.eclass_key_file,
+                base_url=self.settings.eclass_json_base_url,
+                search_parameter=self.settings.eclass_search_parameter,
+            )
+
         discovery = PydanticDiscoveryAgent(agent_model, search) if agent_model is not None else None
         research = (
             PydanticResearchAgent(agent_model, search)
@@ -141,6 +160,8 @@ class Mia:
                 ),
             ),
             jev_grouping_max_groups=self.settings.jev_grouping_max_groups,
+            eclass_provider=resolved_eclass_provider,
+            eclass_candidate_limit=self.settings.eclass_candidate_limit,
         )
         self.store = WorkspaceView(catalogue, artifacts)
         self.deep_research = DeepResearchService(self.context)
