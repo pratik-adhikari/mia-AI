@@ -35,6 +35,7 @@ from mia_dpp.persistence.catalogue import ActiveProductRunExists, LOCAL_USER_ID
 from mia_dpp.persistence.workspace import WorkspaceView
 from mia_dpp.runtime.checkpoints import open_checkpointer
 from mia_dpp.runtime.factory import create_artifact_store, create_catalogue
+from mia_dpp.semantic.decision_policy import DecisionPolicySettings
 from mia_dpp.semantic.jev import OpenRouterJevClient
 from mia_dpp.services.deep_research import DeepResearchService
 from mia_dpp.tools.mapping.models import SemanticMapper
@@ -121,6 +122,24 @@ class Mia:
             semantic_mapper=semantic,
             jev_decider=jev_decider,
             jev_routing_max_concurrency=self.settings.jev_max_concurrency,
+            jev_decision_policy=DecisionPolicySettings(
+                auto_min_selected_probability=(
+                    self.settings.jev_auto_min_selected_probability
+                ),
+                auto_min_margin=self.settings.jev_auto_min_margin,
+                auto_max_runner_up_ratio=self.settings.jev_auto_max_runner_up_ratio,
+                auto_max_normalized_entropy=self.settings.jev_auto_max_entropy,
+                optional_min_selected_probability=(
+                    self.settings.jev_optional_min_selected_probability
+                ),
+                optional_min_margin=self.settings.jev_optional_min_margin,
+                optional_max_runner_up_ratio=(
+                    self.settings.jev_optional_max_runner_up_ratio
+                ),
+                optional_max_normalized_entropy=(
+                    self.settings.jev_optional_max_entropy
+                ),
+            ),
         )
         self.store = WorkspaceView(catalogue, artifacts)
         self.deep_research = DeepResearchService(self.context)
