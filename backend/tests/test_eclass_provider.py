@@ -30,7 +30,7 @@ def test_eclass_provider_searches_then_fetches_property_by_irdi() -> None:
                     ]
                 },
             )
-        assert request.url.path.endswith("/properties/0173-1%2302-AAO677%23001")
+        assert request.url.path.endswith("/properties/0173-1-02-AAO677-001")
         return httpx.Response(
             200,
             json={
