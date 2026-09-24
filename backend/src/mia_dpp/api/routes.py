@@ -646,14 +646,11 @@ async def read_durable_artifact(
     """Read a product-library artifact by its durable catalogue identity."""
 
     mia = _application(http_request)
-    artifact = mia.context.catalogue.get_artifact(artifact_id)
+    artifact = mia.context.catalogue.get_artifact(artifact_id, user_id=user_id)
     if artifact is None or artifact.run_id is None:
         raise HTTPException(status_code=404, detail="unknown artifact")
     run = mia.context.catalogue.get_run(artifact.run_id)
-    if (
-        run is None
-        or mia.context.catalogue.get_product(run.product_id, user_id=user_id) is None
-    ):
+    if run is None:
         raise HTTPException(status_code=404, detail="unknown artifact")
     return Response(
         content=mia.context.artifacts.get(artifact),

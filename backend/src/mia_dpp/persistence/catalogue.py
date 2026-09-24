@@ -882,11 +882,25 @@ class ProductCatalogue:
         )
         return artifact
 
-    def get_artifact(self, artifact_id: str) -> StoredArtifact | None:
+    def get_artifact(
+        self,
+        artifact_id: str,
+        *,
+        user_id: str | None = None,
+    ) -> StoredArtifact | None:
+        if user_id is None:
+            return self._one(
+                StoredArtifact,
+                "SELECT payload FROM artifacts WHERE id=?",
+                (artifact_id,),
+            )
         return self._one(
             StoredArtifact,
-            "SELECT payload FROM artifacts WHERE id=?",
-            (artifact_id,),
+            "SELECT artifacts.payload FROM artifacts "
+            "JOIN runs ON runs.id=artifacts.run_id "
+            "JOIN threads ON threads.id=runs.thread_id "
+            "WHERE artifacts.id=? AND threads.user_id=?",
+            (artifact_id, user_id),
         )
 
     def list_artifacts(

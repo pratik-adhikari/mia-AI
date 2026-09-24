@@ -38,7 +38,7 @@ class RunWorkspace:
         return str(artifact_id)
 
     def load(self, artifact_id: str, model: type[ModelT]) -> ModelT:
-        artifact = self.ctx.catalogue.get_artifact(artifact_id)
+        artifact = self.ctx.catalogue.get_artifact(artifact_id, user_id=self.user_id)
         if artifact is None:
             raise KeyError(f"unknown artifact: {artifact_id}")
         return model.model_validate_json(self.ctx.artifacts.get(artifact))
@@ -47,7 +47,10 @@ class RunWorkspace:
         return self.load(self.state_id(key), model)
 
     def load_json(self, key: str) -> Any:
-        artifact = self.ctx.catalogue.get_artifact(self.state_id(key))
+        artifact = self.ctx.catalogue.get_artifact(
+            self.state_id(key),
+            user_id=self.user_id,
+        )
         if artifact is None:
             raise KeyError(f"unknown artifact: {self.state_id(key)}")
         return json.loads(self.ctx.artifacts.get(artifact))

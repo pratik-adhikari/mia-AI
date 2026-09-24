@@ -361,3 +361,19 @@ run and there is no completed research waiting to be integrated.
 
 This preserves the MVP rule that verified or provisional DPPs are reusable when no newer product
 knowledge exists, while preventing stale cached passports from hiding newer evidence.
+
+
+## Artifact ownership follows the producing run
+
+Products may be globally canonicalized while user workspaces remain private. Artifact authorization
+therefore cannot be based on `user_products` alone.
+
+Owned artifact reads now join:
+
+```text
+artifact -> run -> thread -> thread.user_id
+```
+
+The public product identity may be shared by two accounts, but bytes produced by one account's run
+remain inaccessible to the other account unless a separate sharing mechanism is introduced.
+Internal workflow loads also use the run owner when resolving artifact metadata.

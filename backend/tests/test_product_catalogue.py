@@ -393,3 +393,34 @@ def test_deleted_active_chat_no_longer_blocks_new_product_work(tmp_path: Path) -
 
     assert catalogue.get_run(first.id).status is RunStatus.INCOMPLETE
     assert replacement.thread_id == "thread-after-delete"
+
+
+
+def test_artifact_access_is_scoped_to_the_producing_thread_owner(tmp_path: Path) -> None:
+    from mia_dpp.storage.models import StoredArtifact
+
+    catalogue = ProductCatalogue(tmp_path / "catalogue.sqlite3")
+    product, _ = catalogue.get_or_create_product(
+        "https://example.com/shared-artifact-product",
+        user_id="user-a",
+    )
+    catalogue.get_or_create_product(
+        "https://example.com/shared-artifact-product",
+        user_id="user-b",
+    )
+    catalogue.get_or_create_thread("thread-owner-a", "user-a")
+    run = catalogue.start_run(product.id, "thread-owner-a", user_id="user-a")
+    artifact = StoredArtifact(
+        id="artifact-private-a",
+        key="evidence/private.json",
+        content_type="application/json",
+        sha256="0" * 64,
+        size=2,
+        storage_uri="memory://artifact-private-a",
+        product_id=product.id,
+        run_id=run.id,
+    )
+    catalogue.register_artifact(artifact)
+
+    assert catalogue.get_artifact(artifact.id, user_id="user-a") == artifact
+    assert catalogue.get_artifact(artifact.id, user_id="user-b") is None
