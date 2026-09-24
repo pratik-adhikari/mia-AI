@@ -11,6 +11,10 @@ from mia_dpp.normalization import NormalizationReport, normalize_package
 from mia_dpp.semantic import ContextViewSet, build_context_views
 from mia_dpp.semantic.decision_policy import apply_decision_policy
 from mia_dpp.semantic.diagnostics import build_routing_diagnostics
+from mia_dpp.semantic.eclass_diagnostics import (
+    build_eclass_diagnostics,
+    eclass_policy_decisions,
+)
 from mia_dpp.semantic.eclass_resolution import (
     EclassResolutionReport,
     resolve_eclass_for_technical_properties,
@@ -311,3 +315,65 @@ async def shadow_eclass_resolution(
         },
     )
     return {"eclass_resolution_artifact_id": artifact_id}
+
+
+async def analyze_eclass_shadow(
+    state: MiaWorkflowState,
+    runtime: Runtime[MiaContext],
+) -> dict[str, Any]:
+    """Derive ECLASS cross-scope diagnostics and attention priority without model calls."""
+
+    work = RunWorkspace(state, runtime.context)
+    resolution_id = state.get("eclass_resolution_artifact_id")
+    if not resolution_id:
+        work.event(
+            "semantic.eclass_policy_skipped",
+            "No ECLASS resolution artifact exists, so ECLASS diagnostics were skipped.",
+            metadata={"shadowMode": True},
+        )
+        return {}
+
+    resolution = work.load(resolution_id, EclassResolutionReport)
+    diagnostics = build_eclass_diagnostics(resolution)
+    diagnostics_id = work.put_model(
+        "semantic/eclass-resolution-diagnostics.json",
+        diagnostics,
+        derived_from=(resolution_id,),
+    )
+    decisions = eclass_policy_decisions(
+        diagnostics,
+        work.ctx.jev_decision_policy,
+    )
+    policy_id = work.put_json(
+        "semantic/eclass-decision-policy.json",
+        {
+            "settings": work.ctx.jev_decision_policy.model_dump(
+                mode="json",
+                by_alias=True,
+            ),
+            "decisions": [
+                item.model_dump(mode="json", by_alias=True)
+                for item in decisions
+            ],
+        },
+        derived_from=(diagnostics_id,),
+    )
+    priority_counts: dict[str, int] = {}
+    for decision in decisions:
+        priority_counts[decision.priority.value] = (
+            priority_counts.get(decision.priority.value, 0) + 1
+        )
+    work.event(
+        "semantic.eclass_policy_completed",
+        "Derived shadow ECLASS cross-scope diagnostics and attention priorities.",
+        metadata={
+            "diagnosticsArtifactId": diagnostics_id,
+            "policyArtifactId": policy_id,
+            "priorityCounts": priority_counts,
+            "shadowMode": True,
+        },
+    )
+    return {
+        "eclass_diagnostics_artifact_id": diagnostics_id,
+        "eclass_policy_artifact_id": policy_id,
+    }
