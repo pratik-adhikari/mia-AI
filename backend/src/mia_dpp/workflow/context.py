@@ -8,6 +8,7 @@ from mia_dpp.aas.templates import OfficialTemplateRepository
 from mia_dpp.agents.discovery.models import DiscoveryAgent
 from mia_dpp.agents.research.models import ResearchAgent
 from mia_dpp.persistence.catalogue import ProductCatalogue
+from mia_dpp.semantic.decision_policy import DecisionPolicySettings
 from mia_dpp.semantic.jev import JevDecisionClient
 from mia_dpp.semantic.models import ContextScope
 from mia_dpp.storage.base import ArtifactStore
@@ -35,3 +36,4 @@ class MiaContext:
         ContextScope.FULL_PRODUCT,
     )
     jev_routing_max_concurrency: int = 8
+    jev_decision_policy: DecisionPolicySettings = DecisionPolicySettings()
