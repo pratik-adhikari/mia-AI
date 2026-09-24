@@ -97,7 +97,10 @@ async def deterministic_mapping(
     )
     mapping_input_fingerprint = model_fingerprint(
         {
-            "evidenceFingerprint": state.get("evidence_fingerprint") or state.get("source_fingerprint"),
+            "evidenceFingerprint": (
+                state.get("evidence_fingerprint")
+                or state.get("source_fingerprint")
+            ),
             "targetFingerprint": state.get("target_fingerprint"),
             "deterministic": result.model_dump(mode="json", by_alias=True),
         }
@@ -134,7 +137,11 @@ async def semantic_mapping(
         evidence_fingerprint=state.get("evidence_fingerprint") or state.get("source_fingerprint"),
         target_fingerprint=state.get("target_fingerprint"),
     )
-    if state.get("reuse_prior_work") and reusable_mapping_id and reuse_status is not ReviewReuseStatus.STALE:
+    if (
+        state.get("reuse_prior_work")
+        and reusable_mapping_id
+        and reuse_status is not ReviewReuseStatus.STALE
+    ):
         try:
             reused = work.load(str(reusable_mapping_id), MappingResult)
             work.ctx.mapping_review.validate_complete_accounting(package, reused)
@@ -160,9 +167,15 @@ async def semantic_mapping(
             work.event(
                 "mapping.history_reused",
                 (
-                    f"Reused {len(reused.mapped)} human-reviewed mappings without semantic remapping."
+                    (
+                        f"Reused {len(reused.mapped)} human-reviewed mappings "
+                        "without semantic remapping."
+                    )
                     if not reviews
-                    else f"Reused {len(reused.mapped)} prior mappings and reopened them for confirmation."
+                    else (
+                        f"Reused {len(reused.mapped)} prior mappings and reopened "
+                        "them for confirmation."
+                    )
                 ),
                 metadata={
                     "seededFromRunId": state.get("seeded_from_run_id"),
@@ -414,7 +427,10 @@ async def human_review(
         evidence_artifact_id=evidence_id,
         reviewed_mapping_artifact_id=mapping_id,
         review_fingerprint=review_fingerprint,
-        reviewed_evidence_fingerprint=state.get("evidence_fingerprint") or state.get("source_fingerprint"),
+        reviewed_evidence_fingerprint=(
+            state.get("evidence_fingerprint")
+            or state.get("source_fingerprint")
+        ),
         reviewed_target_fingerprint=state.get("target_fingerprint"),
         reviewed_mapping_input_fingerprint=state.get("mapping_input_fingerprint"),
         mapping_cycle_id=state["mapping_cycle_id"],
@@ -591,7 +607,10 @@ async def integrate_background_research(
             f"Integrated {len(new_ids)} new background evidence records; "
             f"{len(conflicts)} reviewed-value conflicts require confirmation."
             if conflicts
-            else f"Integrated {len(new_ids)} new background evidence records without replacing review state."
+            else (
+                f"Integrated {len(new_ids)} new background evidence records "
+                "without replacing review state."
+            )
         ),
         metadata={
             "jobId": job.id,
@@ -740,7 +759,10 @@ async def human_value(
         evidence_artifact_id=evidence_id,
         reviewed_mapping_artifact_id=reviewed_id,
         review_fingerprint=review_fingerprint,
-        reviewed_evidence_fingerprint=state.get("evidence_fingerprint") or state.get("source_fingerprint"),
+        reviewed_evidence_fingerprint=(
+            state.get("evidence_fingerprint")
+            or state.get("source_fingerprint")
+        ),
         reviewed_target_fingerprint=state.get("target_fingerprint"),
         reviewed_mapping_input_fingerprint=state.get("mapping_input_fingerprint"),
         unresolved_required_ids=tuple(item for item in missing if item != requirement_id),
