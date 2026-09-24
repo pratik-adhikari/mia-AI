@@ -11,6 +11,10 @@ from mia_dpp.normalization import NormalizationReport, normalize_package
 from mia_dpp.semantic import ContextViewSet, build_context_views
 from mia_dpp.semantic.decision_policy import apply_decision_policy
 from mia_dpp.semantic.diagnostics import build_routing_diagnostics
+from mia_dpp.semantic.eclass_resolution import (
+    EclassResolutionReport,
+    resolve_eclass_for_technical_properties,
+)
 from mia_dpp.semantic.grouping import build_grouping_report
 from mia_dpp.semantic.idta_routing import IdtaRoutingReport, route_views
 from mia_dpp.workflow.context import MiaContext
@@ -246,3 +250,64 @@ async def shadow_jev_semantic_grouping(
         },
     )
     return {"jev_semantic_grouping_artifact_id": artifact_id}
+
+
+async def shadow_eclass_resolution(
+    state: MiaWorkflowState,
+    runtime: Runtime[MiaContext],
+) -> dict[str, Any]:
+    """Retrieve verified ECLASS properties for open Technical Properties only."""
+
+    work = RunWorkspace(state, runtime.context)
+    routing_id = state.get("jev_idta_routing_artifact_id")
+    if not routing_id:
+        work.event(
+            "semantic.eclass_shadow_skipped",
+            "No Jev IDTA routing artifact exists, so ECLASS resolution was skipped.",
+            metadata={"shadowMode": True},
+        )
+        return {}
+
+    package = work.load_state("evidence_artifact_id", ProductKnowledgePackage)
+    normalization = work.load_state("normalization_artifact_id", NormalizationReport)
+    context_views = work.load_state("semantic_context_artifact_id", ContextViewSet)
+    routing = work.load(routing_id, IdtaRoutingReport)
+    report: EclassResolutionReport = await resolve_eclass_for_technical_properties(
+        provider=work.ctx.eclass_provider,
+        decider=work.ctx.jev_decider,
+        package=package,
+        normalization=normalization,
+        context_views=context_views,
+        routing=routing,
+        scopes=work.ctx.eclass_resolution_scopes,
+        search_limit=work.ctx.eclass_candidate_limit,
+        verification_concurrency=work.ctx.jev_routing_max_concurrency,
+    )
+    artifact_id = work.put_model(
+        "semantic/eclass-resolution-shadow.json",
+        report,
+        derived_from=(
+            routing_id,
+            work.state_id("normalization_artifact_id"),
+            work.state_id("semantic_context_artifact_id"),
+        ),
+    )
+    status_counts: dict[str, int] = {}
+    decision_count = 0
+    for result in report.results:
+        status_counts[result.retrieval_status] = (
+            status_counts.get(result.retrieval_status, 0) + 1
+        )
+        decision_count += len(result.decisions)
+    work.event(
+        "semantic.eclass_shadow_completed",
+        "Retrieved, verified, and classified ECLASS candidates in shadow mode.",
+        metadata={
+            "artifactId": artifact_id,
+            "provider": report.provider_name,
+            "statusCounts": status_counts,
+            "jevDecisions": decision_count,
+            "shadowMode": True,
+        },
+    )
+    return {"eclass_resolution_artifact_id": artifact_id}
