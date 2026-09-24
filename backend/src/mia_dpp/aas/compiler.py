@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import copy
-import re
 from collections.abc import Mapping, Sequence
 from importlib.metadata import version
 from typing import Any, cast
@@ -11,6 +10,7 @@ from typing import Any, cast
 from aas_core3 import jsonization
 
 from mia_dpp.aas._structure import _children
+from mia_dpp.aas.identifiers import ID_SHORT_PATTERN, sanitize_id_short
 from mia_dpp.aas.models import AasArtifact
 from mia_dpp.aas.templates import OfficialTemplateRepository, resolve_element
 from mia_dpp.canonical import sha256_json
@@ -21,19 +21,8 @@ from mia_dpp.errors import CompilationError, MappingError
 
 _VALUE_MODEL_TYPES = {"Property", "MultiLanguageProperty", "Range", "File", "Blob"}
 _CONTAINER_MODEL_TYPES = {"SubmodelElementCollection", "SubmodelElementList", "Entity"}
-_ID_SHORT_PATTERN = re.compile(r"^[A-Za-z][A-Za-z0-9_]*$")
-
-
 def _reference_json(reference: SemanticReference) -> dict[str, Any]:
     return reference.model_dump(mode="json", by_alias=True)
-
-
-def _id_short(value: str, fallback: str = "Product") -> str:
-    cleaned = re.sub(r"[^A-Za-z0-9_]", "_", value.strip())
-    cleaned = re.sub(r"_+", "_", cleaned).strip("_")
-    if not cleaned or not cleaned[0].isalpha():
-        cleaned = f"{fallback}_{cleaned}" if cleaned else fallback
-    return cleaned[:128]
 
 
 def _child_key(model_type: str) -> str | None:
@@ -181,7 +170,7 @@ class AasCompiler:
         }
         shell: dict[str, Any] = {
             "id": aas_id,
-            "idShort": _id_short(package.product_name),
+            "idShort": sanitize_id_short(package.product_name),
             "assetInformation": {
                 "assetKind": "Instance",
                 "globalAssetId": asset_id,
@@ -229,7 +218,7 @@ class AasCompiler:
             if target.id_short != official.id_short:
                 raise MappingError("fixed template target idShort cannot be changed")
         else:
-            if not _ID_SHORT_PATTERN.fullmatch(target.id_short):
+            if not ID_SHORT_PATTERN.fullmatch(target.id_short):
                 raise MappingError("wildcard target idShort is invalid")
             if target.instance_path[:-1] != target.template_path[:-1]:
                 raise MappingError("wildcard target parent path cannot be changed")
