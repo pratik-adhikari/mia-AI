@@ -48,6 +48,26 @@ def mapping_review_records(
         "final_target_path": (
             after.mapping.target.template_path if after.mapping is not None else ()
         ),
+        "proposed_semantic_id": (
+            before.mapping.target.semantic_id.primary_value
+            if before.mapping is not None
+            else None
+        ),
+        "final_semantic_id": (
+            after.mapping.target.semantic_id.primary_value
+            if after.mapping is not None
+            else None
+        ),
+        "proposed_list_instance_bindings": (
+            before.mapping.target.list_instance_bindings
+            if before.mapping is not None
+            else ()
+        ),
+        "final_list_instance_bindings": (
+            after.mapping.target.list_instance_bindings
+            if after.mapping is not None
+            else ()
+        ),
         "actor_name": actor_name,
         "comment": decision.comment,
     }
@@ -67,7 +87,15 @@ def mapping_review_records(
         records.append(_record(HumanReviewAction.MARKED_UNMAPPED, common))
         return tuple(records)
 
-    target_changed = before.requirement_id != after.requirement_id
+    target_changed = (
+        before.requirement_id != after.requirement_id
+        or (
+            before.mapping is not None
+            and after.mapping is not None
+            and before.mapping.target != after.mapping.target
+        )
+        or (before.mapping is None) != (after.mapping is None)
+    )
     value_changed = before.evidence_id != after.evidence_id
     if target_changed:
         records.append(_record(HumanReviewAction.CORRECTED_TARGET, common))
