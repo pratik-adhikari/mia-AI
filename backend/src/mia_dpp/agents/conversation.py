@@ -17,6 +17,7 @@ from mia_dpp.services.product_query import ProductQueryService
 class ConversationAction(StrEnum):
     REPLY = "reply"
     WORKFLOW = "workflow"
+    RETRY_WORK = "retry_work"
 
 
 class ConversationTurn(WireModel):
@@ -86,10 +87,11 @@ questions that can be answered from the read tools. Never invent product facts, 
 sources, semantic identifiers, workflow progress, or completion state. If requested product data is
 not yet present, say that it is not available yet.
 
-Return action=workflow only when the user is instructing MIA to start/import/refresh product work,
-select a discovery candidate, continue a paused workflow choice, or otherwise perform workflow
-execution. The workflow, not this supervisor, owns extraction, research, mapping, reviews, and AAS
-generation. Never directly mutate product/work state."""
+Return action=retry_work when the user explicitly asks to retry/recover the latest failed or
+interrupted product workflow. Return action=workflow when the user is instructing MIA to
+start/import/refresh product work, select a discovery candidate, continue a paused workflow choice,
+or otherwise perform workflow execution. The workflow, not this supervisor, owns extraction,
+research, mapping, reviews, and AAS generation. Never directly mutate product/work state."""
 
 
 class PydanticConversationSupervisor:
