@@ -123,3 +123,92 @@ The durable catalogue is exposed through:
 
 The Next.js `/products` pages use these endpoints to show product images, attempts, DPP versions,
 and stored artifacts.
+
+## Conversation plane and durable work plane
+
+MIA now separates ordinary conversation from product-work execution.
+
+```text
+Chat UI
+  -> General conversation supervisor
+       -> durable status query
+       -> durable evidence search
+       -> durable recent-progress query
+       -> conversational reply
+  OR
+       -> typed workflow command
+            -> LangGraph durable work plane
+```
+
+The General LLM is not the workflow. It may read durable product/work state and explain it, but
+it cannot create technical facts, semantic identifiers, mappings, reviews, or AAS data.
+
+### Checkpoint-independent chat
+
+`Mia.message()` persists the user message and invokes the conversation supervisor before accessing
+LangGraph or the checkpoint store. A normal status/data/conversation question can therefore be
+answered even if the workflow checkpoint service is unavailable.
+
+Explicit product-work commands continue through the existing LangGraph path.
+
+### Durable product query service
+
+`ProductQueryService` reads only catalogue state and immutable artifacts. It exposes:
+
+- current durable run/snapshot status;
+- source-backed evidence search;
+- recent persisted workflow events.
+
+Product-data answers are grounded in `EvidenceRecord` values, hierarchy, source URI, and source
+excerpt. Missing data is reported as unavailable rather than inferred by the General LLM.
+
+### Production work-status/event APIs
+
+```text
+GET  /api/threads/{thread}/work-status
+GET  /api/threads/{thread}/evidence/search?q=...
+GET  /api/threads/{thread}/events/stream
+POST /api/threads/{thread}/retry
+```
+
+The event stream is generated from persisted run events and durable run/snapshot state rather than
+an in-memory worker session.
+
+### Concurrent chat UX
+
+The workspace no longer uses one global boolean request lock. It counts outstanding requests, so
+a user can send another chat question while a long product request is still in flight. Backend
+generation fencing still prevents concurrent product mutations from becoming authoritative.
+
+### Execution lease heartbeat
+
+`RunWorkspace` now renews the current run lease at node construction and before persisted artifact
+or event writes. Each heartbeat first verifies that the worker still owns the current workflow
+generation, so an old executor cannot revive itself after a replacement generation has started.
+
+### Recoverable workflow failures
+
+External/transient failures such as HTTP connection failures, search-provider unavailability, page
+load failures, and timeouts are persisted as:
+
+```text
+workflow.retryable_failure
+run status = incomplete
+```
+
+Unexpected deterministic failures remain `failed`.
+
+A retry never mutates or resurrects the old run. `retry_work()` creates a new workflow generation
+through the existing atomic restart/fencing mechanism and seeds it from the latest durable
+`ProductWorkSnapshot` when reusable evidence/reviewed mappings exist.
+
+The General LLM can return the typed `retry_work` action when a user explicitly asks to recover
+failed work; the same capability is available through the retry API.
+
+### Deliberately deferred
+
+The entire DPP LangGraph execution has not yet been moved into a separate persistent task queue.
+That is a larger deployment change. The current important slice keeps the existing execution
+model while making chat independent, reads durable, leases refreshed, and failures safely
+recoverable. A full work-queue/coordinator should be added only if deployment behavior shows that
+HTTP-lifetime execution itself remains a practical reliability problem.
