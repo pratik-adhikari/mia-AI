@@ -403,3 +403,17 @@ If a snapshot pointer is stale, MIA falls through to older reusable artifacts or
 instead of selecting continuation and failing later in `RunWorkspace.load()`. Missing storage is
 still observable as a data-quality problem, but it no longer converts a recoverable reuse decision
 into an avoidable workflow crash.
+
+
+## Human audit snapshots are self-contained
+
+Immutable human audit rows now retain compact before/after representations in addition to artifact
+IDs:
+
+- proposed and final displayed values;
+- proposed and final target template paths;
+- proposed/final mapping and requirement IDs;
+- actor, timestamp, action and optional comment.
+
+The audit therefore remains understandable even if an old evidence/mapping artifact is later removed.
+It intentionally does not duplicate whole mapping objects or evidence packages.

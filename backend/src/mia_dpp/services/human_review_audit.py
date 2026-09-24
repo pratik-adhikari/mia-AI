@@ -20,6 +20,8 @@ def mapping_review_records(
     decision: AgentReviewDecision,
     before: SemanticReviewItem,
     after: SemanticReviewItem,
+    proposed_value: str | None,
+    final_value: str | None,
 ) -> tuple[HumanReviewRecord, ...]:
     """Record every material human action without collapsing target and value corrections."""
 
@@ -37,6 +39,14 @@ def mapping_review_records(
         "final_requirement_id": after.requirement_id,
         "corrected_evidence_id": (
             after.evidence_id if after.evidence_id != before.evidence_id else None
+        ),
+        "proposed_value": proposed_value,
+        "final_value": final_value,
+        "proposed_target_path": (
+            before.mapping.target.template_path if before.mapping is not None else ()
+        ),
+        "final_target_path": (
+            after.mapping.target.template_path if after.mapping is not None else ()
         ),
         "actor_name": actor_name,
         "comment": decision.comment,
@@ -89,6 +99,8 @@ def supplied_value_record(
     mapping_id: str,
     actor_name: str | None,
     use_dummy: bool,
+    final_value: str,
+    final_target_path: tuple[str, ...],
 ) -> HumanReviewRecord:
     return HumanReviewRecord(
         id=f"human-review-{uuid.uuid4().hex}",
@@ -99,6 +111,8 @@ def supplied_value_record(
         evidence_id=evidence_id,
         final_mapping_id=mapping_id,
         final_requirement_id=requirement_id,
+        final_value=final_value,
+        final_target_path=final_target_path,
         action=(
             HumanReviewAction.SUPPLIED_DUMMY
             if use_dummy

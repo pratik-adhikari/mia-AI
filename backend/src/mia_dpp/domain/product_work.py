@@ -114,6 +114,10 @@ class HumanReviewRecord(WireModel):
     final_mapping_id: str | None = None
     final_requirement_id: str | None = None
     corrected_evidence_id: str | None = None
+    proposed_value: str | None = None
+    final_value: str | None = None
+    proposed_target_path: tuple[str, ...] = ()
+    final_target_path: tuple[str, ...] = ()
     action: HumanReviewAction
     actor_name: str | None = Field(default=None, max_length=200)
     comment: str | None = Field(default=None, max_length=1000)
