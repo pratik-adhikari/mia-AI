@@ -70,7 +70,8 @@ export default function Workspace() {
   const [threads, setThreads] = useState<ThreadRecord[]>([]);
   const [input, setInput] = useState("");
   const [websiteUrl, setWebsiteUrl] = useState("");
-  const [busy, setBusy] = useState(false);
+  const [pendingRequests, setPendingRequests] = useState(0);
+  const busy = pendingRequests > 0;
   const [mappings, setMappings] = useState<FieldMapping[]>([]);
   const [productName, setProductName] = useState("");
   const [dpp, setDpp] = useState<DppPackage | null>(null);
@@ -279,13 +280,12 @@ export default function Workspace() {
     options: { refreshRequested?: boolean } = {}
   ) {
     const t = text.trim();
-    if (!t || busy) return;
+    if (!t) return;
 
-    const next: ChatMessage[] = [...messages, { role: "user", content: t }];
-    setMessages(next);
+    setMessages((previous) => [...previous, { role: "user", content: t }]);
     setInput("");
     const activeThreadId = activeThread();
-    setBusy(true);
+    setPendingRequests((count) => count + 1);
 
     try {
       const res = await authenticatedFetch("/agent/messages", {
@@ -323,7 +323,7 @@ export default function Workspace() {
         },
       ]);
     } finally {
-      setBusy(false);
+      setPendingRequests((count) => Math.max(0, count - 1));
     }
   }
 
@@ -331,7 +331,7 @@ export default function Workspace() {
     const url = websiteUrl.trim();
     if (!url || busy || semanticReview.length > 0) return;
     const activeThreadId = activeThread();
-    setBusy(true);
+    setPendingRequests((count) => count + 1);
     setMessages((previous) => [
       ...previous,
       { role: "user", content: `Import product website: ${url}` },
@@ -388,7 +388,7 @@ export default function Workspace() {
         },
       ]);
     } finally {
-      setBusy(false);
+      setPendingRequests((count) => Math.max(0, count - 1));
     }
   }
 
@@ -416,7 +416,7 @@ export default function Workspace() {
 
   async function submitHumanValue(useDummy = false) {
     if (!threadId || !humanRequest?.requirementId || (!useDummy && !humanValue.trim()) || busy) return;
-    setBusy(true);
+    setPendingRequests((count) => count + 1);
     try {
       const response = await authenticatedFetch(`${API_URL}/api/agent/value`, {
         method: "POST",
@@ -448,7 +448,7 @@ export default function Workspace() {
         { role: "assistant", content: `The value could not be saved: ${message}` },
       ]);
     } finally {
-      setBusy(false);
+      setPendingRequests((count) => Math.max(0, count - 1));
     }
   }
 
@@ -512,7 +512,7 @@ export default function Workspace() {
       });
     if (invalid) return;
 
-    setBusy(true);
+    setPendingRequests((count) => count + 1);
     try {
       if (!currentProductId) throw new Error("No active product is available for review.");
       const response = await authenticatedFetch(`${API_URL}/api/agent/review`, {
@@ -954,7 +954,7 @@ export default function Workspace() {
               />
               <button
                 onClick={() => send(input)}
-                disabled={busy || !input.trim()}
+                disabled={!input.trim()}
                 className="mb-0.5 mr-0.5 grid h-10 w-10 shrink-0 place-items-center rounded-full bg-ink text-white transition-transform hover:scale-105 disabled:scale-100 disabled:opacity-25"
                 aria-label="Send message"
               >
