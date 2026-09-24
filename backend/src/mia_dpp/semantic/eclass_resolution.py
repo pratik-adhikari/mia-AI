@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from collections import Counter
+from enum import StrEnum
 from collections.abc import Iterable
 
 from pydantic import Field, model_validator
@@ -38,8 +39,8 @@ are insufficient to decide safely. Every listed IRDI was independently verified 
 application before this question was created."""
 
 
-class EclassRetrievalStatus(str):
-    """String constants kept simple for wire compatibility."""
+class EclassRetrievalStatus(StrEnum):
+    """Registry retrieval state before bounded semantic classification."""
 
     NOT_APPLICABLE = "not_applicable"
     PROVIDER_UNAVAILABLE = "provider_unavailable"
@@ -62,7 +63,7 @@ class EclassEvidenceResolution(WireModel):
     evidence_id: str = Field(min_length=1)
     applicable: bool
     search_query: str | None = None
-    retrieval_status: str
+    retrieval_status: EclassRetrievalStatus
     search_hits: tuple[EclassSearchCandidate, ...] = ()
     rejected_irdis: tuple[str, ...] = ()
     verified_candidates: tuple[EclassProperty, ...] = ()
