@@ -164,6 +164,7 @@ class Mia:
             eclass_shadow_enabled=self.settings.eclass_shadow_enabled,
             eclass_provider=resolved_eclass_provider,
             eclass_candidate_limit=self.settings.eclass_candidate_limit,
+            semantic_promotion_enabled=self.settings.semantic_promotion_enabled,
         )
         self.store = WorkspaceView(catalogue, artifacts)
         self.deep_research = DeepResearchService(self.context)
