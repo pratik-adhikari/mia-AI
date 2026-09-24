@@ -506,7 +506,12 @@ class Mia:
                     context=self.context,
                 )
         except ValueError as error:
-            self._record_rejected_input(thread_id, error, user_id=user_id)
+            self._record_rejected_input(
+                thread_id,
+                error,
+                user_id=user_id,
+                run_id=failing_run_id,
+            )
             raise
         except Exception as error:
             self._record_failure(
@@ -1033,15 +1038,23 @@ class Mia:
         error: ValueError,
         *,
         user_id: str,
+        run_id: str | None = None,
     ) -> None:
-        run = self._latest_active_run(thread_id, user_id=user_id)
-        if run is not None:
-            self.context.catalogue.add_event(
-                run.id,
-                "workflow.input_rejected",
-                "Rejected invalid human input without advancing the workflow.",
-                metadata={"error": str(error)},
-            )
+        run = (
+            self.context.catalogue.get_run(run_id)
+            if run_id is not None
+            else self._latest_active_run(thread_id, user_id=user_id)
+        )
+        if run is None or not self.context.catalogue.run_is_current_generation(run.id):
+            return
+        if self.context.catalogue.get_thread(run.thread_id, user_id=user_id) is None:
+            return
+        self.context.catalogue.add_event(
+            run.id,
+            "workflow.input_rejected",
+            "Rejected invalid human input without advancing the workflow.",
+            metadata={"error": str(error)},
+        )
 
     def _latest_active_run(self, thread_id: str, *, user_id: str) -> ProductRun | None:
         active = {RunStatus.RUNNING, RunStatus.AWAITING_HUMAN}
