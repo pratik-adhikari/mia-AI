@@ -358,6 +358,8 @@ async def human_review(
                 run_id=work.run_id,
             )
 
+    work.ctx.mapping_review.validate_projection_uniqueness(result)
+
     evidence_id = work.put_model(
         "evidence/product-knowledge-reviewed.json",
         package,
