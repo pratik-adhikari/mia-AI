@@ -145,3 +145,99 @@ The following are subsequent milestones, not hidden behavior in milestone 1:
 
 Those changes should be added only after the shadow routing artifacts have been inspected on real
 products.
+
+
+## Milestone 2 implemented: multi-scope diagnostics and human-attention policy
+
+After shadow IDTA routing, the graph now derives two additional artifacts without making any model
+calls:
+
+```text
+semantic/jev-routing-diagnostics.json
+semantic/jev-decision-policy.json
+```
+
+The flow is now:
+
+```text
+shadow_jev_idta_routing
+  -> analyze_jev_shadow
+       -> distribution diagnostics
+       -> cross-scope agreement
+       -> AUTO / OPTIONAL / CONFIRM / ALARM
+  -> existing trusted mapper
+```
+
+The policy is still shadow-only and cannot alter the AAS.
+
+### Diagnostics retained per Jev choice
+
+For every non-deterministic hierarchy decision the system records:
+
+- selected probability;
+- top probability;
+- runner-up probability;
+- top-two margin;
+- runner-up / winner ratio;
+- normalized entropy;
+- whether Jev's selected choice is also the probability argmax.
+
+These values are treated as relative decision diagnostics, **not calibrated probabilities of
+correctness**.
+
+### Route and cross-scope diagnostics
+
+For each property/scope route the system records the weakest decision along the path. For each
+evidence item it then compares the configured scopes and stores:
+
+- consensus destination;
+- scope agreement;
+- number of distinct destinations;
+- weakest selected probability;
+- weakest margin;
+- largest runner-up ratio;
+- largest normalized entropy;
+- unresolved-scope count;
+- whether every selected Jev choice was its own probability argmax.
+
+### Starting policy
+
+The default policy deliberately distinguishes dominant distributions from close two-way decisions.
+
+Example:
+
+```text
+85 / 15
+-> runner-up is material
+-> CONFIRM under the starting policy
+
+85 / 7 / diffuse remainder
+-> dominant winner + large margin
+-> AUTO when configured scopes agree and entropy remains low
+```
+
+Strong, mutually inconsistent routes from different context scopes become `ALARM`.
+
+Thresholds are configuration, not model prompts, and can therefore be changed later without
+rerunning Jev. Current environment controls include:
+
+```text
+MIA_JEV_AUTO_MIN_SELECTED_PROBABILITY
+MIA_JEV_AUTO_MIN_MARGIN
+MIA_JEV_AUTO_MAX_RUNNER_UP_RATIO
+MIA_JEV_AUTO_MAX_ENTROPY
+MIA_JEV_OPTIONAL_MIN_SELECTED_PROBABILITY
+MIA_JEV_OPTIONAL_MIN_MARGIN
+MIA_JEV_OPTIONAL_MAX_RUNNER_UP_RATIO
+MIA_JEV_OPTIONAL_MAX_ENTROPY
+```
+
+The starting values are hypotheses for inspection, not claims of statistical calibration.
+
+### Tests added for milestone 2
+
+- `test_jev_diagnostics.py`
+- `test_jev_decision_policy.py`
+
+They include the explicit 85/15 versus 85/7/... behavior, threshold retuning without model calls,
+and high-confidence disagreement between context scopes.
