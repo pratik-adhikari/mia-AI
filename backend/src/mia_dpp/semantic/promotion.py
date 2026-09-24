@@ -141,33 +141,6 @@ def _candidate_targets(
     return tuple(targets)
 
 
-def _remove_evidence(
-    mapping: MappingResult,
-    evidence_id: str,
-) -> dict[str, object]:
-    return {
-        "mapped": tuple(item for item in mapping.mapped if item.evidence_id != evidence_id),
-        "ambiguous": tuple(
-            item for item in mapping.ambiguous if item.evidence_id != evidence_id
-        ),
-        "rejected": tuple(
-            item for item in mapping.rejected if item.evidence_id != evidence_id
-        ),
-        "unmatched_evidence_ids": tuple(
-            item for item in mapping.unmatched_evidence_ids if item != evidence_id
-        ),
-        "irrelevant_evidence_ids": tuple(
-            item for item in mapping.irrelevant_evidence_ids if item != evidence_id
-        ),
-        "rejected_evidence_ids": tuple(
-            item for item in mapping.rejected_evidence_ids if item != evidence_id
-        ),
-        "outcomes": tuple(
-            item for item in mapping.outcomes if item.evidence_id != evidence_id
-        ),
-    }
-
-
 def _replace_with(
     mapping: MappingResult,
     *,
@@ -176,10 +149,41 @@ def _replace_with(
     status: EvidenceOutcomeStatus,
     reason: str,
 ) -> MappingResult:
-    values = _remove_evidence(mapping, record.id)
-    mapped = list(values["mapped"])
-    ambiguous = list(values["ambiguous"])
-    unmatched = list(values["unmatched_evidence_ids"])
+    mapped = [
+        item
+        for item in mapping.mapped
+        if item.evidence_id != record.id
+    ]
+    ambiguous = [
+        item
+        for item in mapping.ambiguous
+        if item.evidence_id != record.id
+    ]
+    rejected = tuple(
+        item
+        for item in mapping.rejected
+        if item.evidence_id != record.id
+    )
+    unmatched = [
+        item
+        for item in mapping.unmatched_evidence_ids
+        if item != record.id
+    ]
+    irrelevant = tuple(
+        item
+        for item in mapping.irrelevant_evidence_ids
+        if item != record.id
+    )
+    rejected_ids = tuple(
+        item
+        for item in mapping.rejected_evidence_ids
+        if item != record.id
+    )
+    outcomes = [
+        item
+        for item in mapping.outcomes
+        if item.evidence_id != record.id
+    ]
 
     if field_mapping is not None:
         if status is EvidenceOutcomeStatus.MAPPED:
@@ -189,7 +193,6 @@ def _replace_with(
     elif status is EvidenceOutcomeStatus.UNMAPPED:
         unmatched.append(record.id)
 
-    outcomes = list(values["outcomes"])
     outcomes.append(
         EvidenceOutcome(
             evidence_id=record.id,
@@ -202,13 +205,12 @@ def _replace_with(
     return MappingResult(
         mapped=tuple(mapped),
         ambiguous=tuple(ambiguous),
-        rejected=values["rejected"],
+        rejected=rejected,
         unmatched_evidence_ids=tuple(unmatched),
-        irrelevant_evidence_ids=values["irrelevant_evidence_ids"],
-        rejected_evidence_ids=values["rejected_evidence_ids"],
+        irrelevant_evidence_ids=irrelevant,
+        rejected_evidence_ids=rejected_ids,
         outcomes=tuple(outcomes),
     )
-
 
 def _conflict_ids(
     conflicts: tuple[OpenPropertyConflict, ...],
