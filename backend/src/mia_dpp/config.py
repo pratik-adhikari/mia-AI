@@ -104,7 +104,7 @@ class Settings(BaseSettings):
     jev_grouping_max_groups: int = Field(
         default=200,
         ge=1,
-        le=1000,
+        le=253,
         validation_alias="MIA_JEV_GROUPING_MAX_GROUPS",
     )
     mia_database_url: str | None = Field(
