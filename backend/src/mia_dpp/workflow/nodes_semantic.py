@@ -21,6 +21,10 @@ from mia_dpp.semantic.eclass_resolution import (
 )
 from mia_dpp.semantic.grouping import build_grouping_report
 from mia_dpp.semantic.idta_routing import IdtaRoutingReport, route_views
+from mia_dpp.semantic.open_property import (
+    OpenPropertyProposalReport,
+    build_open_property_proposals,
+)
 from mia_dpp.workflow.context import MiaContext
 from mia_dpp.workflow.state import MiaWorkflowState
 from mia_dpp.workflow.workspace import RunWorkspace
@@ -387,3 +391,70 @@ async def analyze_eclass_shadow(
         "eclass_diagnostics_artifact_id": diagnostics_id,
         "eclass_policy_artifact_id": policy_id,
     }
+
+
+async def shadow_open_property_proposals(
+    state: MiaWorkflowState,
+    runtime: Runtime[MiaContext],
+) -> dict[str, Any]:
+    """Build non-authoritative wildcard MappingTarget proposals from verified ECLASS consensus."""
+
+    work = RunWorkspace(state, runtime.context)
+    resolution_id = state.get("eclass_resolution_artifact_id")
+    diagnostics_id = state.get("eclass_diagnostics_artifact_id")
+    if not resolution_id or not diagnostics_id:
+        work.event(
+            "semantic.open_property_shadow_skipped",
+            "ECLASS resolution/diagnostics are unavailable, so wildcard proposals were skipped.",
+            metadata={"shadowMode": True},
+        )
+        return {}
+
+    package = work.load_state("evidence_artifact_id", ProductKnowledgePackage)
+    normalization = work.load_state("normalization_artifact_id", NormalizationReport)
+    resolution = work.load(resolution_id, EclassResolutionReport)
+    diagnostics = work.load(
+        diagnostics_id,
+        __import__(
+            "mia_dpp.semantic.eclass_diagnostics",
+            fromlist=["EclassDiagnosticsReport"],
+        ).EclassDiagnosticsReport,
+    )
+    report: OpenPropertyProposalReport = build_open_property_proposals(
+        package=package,
+        normalization=normalization,
+        eclass_resolution=resolution,
+        eclass_diagnostics=diagnostics,
+        policy_settings=work.ctx.jev_decision_policy,
+        templates=work.ctx.templates,
+    )
+    artifact_id = work.put_model(
+        "semantic/open-property-proposals-shadow.json",
+        report,
+        derived_from=(
+            resolution_id,
+            diagnostics_id,
+            work.state_id("normalization_artifact_id"),
+        ),
+    )
+    disposition_counts: dict[str, int] = {}
+    for proposal in report.proposals:
+        disposition_counts[proposal.disposition.value] = (
+            disposition_counts.get(proposal.disposition.value, 0) + 1
+        )
+    conflict_counts: dict[str, int] = {}
+    for conflict in report.conflicts:
+        conflict_counts[conflict.kind.value] = (
+            conflict_counts.get(conflict.kind.value, 0) + 1
+        )
+    work.event(
+        "semantic.open_property_shadow_completed",
+        "Built shadow Technical Data ArbitraryProperty proposals and conflict diagnostics.",
+        metadata={
+            "artifactId": artifact_id,
+            "dispositions": disposition_counts,
+            "conflicts": conflict_counts,
+            "shadowMode": True,
+        },
+    )
+    return {"open_property_proposals_artifact_id": artifact_id}
