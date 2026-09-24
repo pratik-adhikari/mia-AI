@@ -1,5 +1,9 @@
 export type MappingStatus = "auto" | "review" | "approved" | "rejected";
-export type MappingOrigin = "deterministic" | "semantic_agent" | "human";
+export type MappingOrigin =
+  | "deterministic"
+  | "semantic_agent"
+  | "semantic_engine"
+  | "human";
 export type Severity = "info" | "warning" | "error";
 export type ValidationCategory = "metamodel" | "template" | "policy";
 export type RequirementKind = "value" | "structural";
@@ -74,6 +78,13 @@ export interface TemplateRelease {
   metamodelVersion: string;
 }
 
+export interface ListInstanceBinding {
+  templatePath: string[];
+  instanceKey: string;
+  sourceContextPath: string[];
+  label: string | null;
+}
+
 export interface MappingTarget {
   templateKey: string;
   templateRelease: string;
@@ -81,6 +92,7 @@ export interface MappingTarget {
   instancePath: string[];
   idShort: string;
   semanticId: SemanticReference;
+  listInstanceBindings: ListInstanceBinding[];
 }
 
 export interface FieldMapping {
@@ -207,9 +219,12 @@ export interface MappingKnowledgeEntry {
   scope: "user" | "organization" | "global";
   ownerId: string | null;
   sourceField: string;
+  sourceContextPath: string[];
   exampleValues: string[];
   targetTemplate: string;
   targetPath: string[];
+  targetInstancePath: string[];
+  listInstanceBindings: ListInstanceBinding[];
   semanticId: string;
   manufacturer: string | null;
   domain: string | null;
@@ -290,6 +305,9 @@ export interface SemanticReviewItem {
   status: EvidenceOutcomeStatus;
   requirementId: string | null;
   alternativeRequirementIds: string[];
+  targetKind: "requirement" | "direct";
+  alternativeTargets: MappingTarget[];
+  reviewPriority: "optional" | "confirm" | "alarm" | null;
   reason: string;
   mapping: ProposedFieldMapping | null;
 }
@@ -303,6 +321,7 @@ export interface AgentReviewDecision {
     | "irrelevant"
     | "reject";
   correctedRequirementId?: string | null;
+  correctedSemanticId?: string | null;
   correctedValue?: string | null;
   comment?: string | null;
 }
@@ -521,6 +540,7 @@ export interface ProductWorkSnapshot {
   templateReleases: string[];
   evidenceArtifactId: string | null;
   reviewedMappingArtifactId: string | null;
+  semanticPromotionArtifactId?: string | null;
   coverageArtifactId: string | null;
   dppArtifactId: string | null;
   aasArtifactId: string | null;
@@ -547,6 +567,10 @@ export interface HumanReviewRecord {
   finalMappingId: string | null;
   finalRequirementId: string | null;
   correctedEvidenceId: string | null;
+  proposedSemanticId?: string | null;
+  finalSemanticId?: string | null;
+  proposedListInstanceBindings?: ListInstanceBinding[];
+  finalListInstanceBindings?: ListInstanceBinding[];
   action:
     | "accepted_mapping" | "corrected_target" | "corrected_value"
     | "supplied_value" | "supplied_dummy" | "rejected_evidence"
