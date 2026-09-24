@@ -43,6 +43,12 @@ def _mia(catalogue: ProductCatalogue, graph: object) -> Mia:
     mia._response_view = _ResponseView()
     mia._graph = graph
     mia._checkpoint_cm = None
+    mia._agent_client = None
+    mia.settings = SimpleNamespace(
+        local_mode=False,
+        vercel_environment=False,
+        agent_server_url=None,
+    )
     return mia
 
 
@@ -107,3 +113,165 @@ def test_message_during_interrupt_is_persisted_without_advancing_graph(tmp_path)
     messages = catalogue.list_messages("thread-review")
     assert [item.role.value for item in messages] == ["user", "assistant"]
     assert all(item.run_id == run.id for item in messages)
+
+
+
+def test_refresh_restarts_active_product_in_same_chat(tmp_path) -> None:
+    catalogue = ProductCatalogue(tmp_path / "catalogue.sqlite3")
+    product, _ = catalogue.get_or_create_product("https://example.com/refresh-same-chat")
+    run = catalogue.start_run(product.id, "thread-refresh-same-chat")
+
+    class Graph:
+        invocations: list[dict[str, Any]] = []
+
+        async def aget_state(self, config):
+            return _Snapshot(
+                {
+                    "thread_id": "thread-refresh-same-chat",
+                    "product_id": product.id,
+                    "run_id": run.id,
+                    "product_url": product.canonical_url,
+                    "status": "running",
+                }
+            )
+
+        async def ainvoke(self, update, **kwargs):
+            self.invocations.append(update)
+            new_run = catalogue.start_run(
+                product.id,
+                "thread-refresh-same-chat",
+                refresh_requested=bool(update.get("refresh_requested")),
+                seeded_from_run_id=run.id,
+            )
+            return {
+                **update,
+                "thread_id": "thread-refresh-same-chat",
+                "product_id": product.id,
+                "run_id": new_run.id,
+                "status": "running",
+                "reply": "Refresh restarted.",
+                "decision_summary": "Refresh restarted.",
+            }
+
+    graph = Graph()
+    response = asyncio.run(
+        _mia(catalogue, graph).message(
+            AgentRequest(
+                thread_id="new-thread-that-must-not-survive",
+                message="Import product website: https://example.com/refresh-same-chat",
+                refresh_requested=True,
+            )
+        )
+    )
+
+    assert response.thread_id == "thread-refresh-same-chat"
+    assert catalogue.get_run(run.id).status is RunStatus.INCOMPLETE
+    replacement = catalogue.latest_active_run(product.id)
+    assert replacement is not None
+    assert replacement.id != run.id
+    assert replacement.thread_id == "thread-refresh-same-chat"
+    assert replacement.refresh_requested is True
+    assert catalogue.get_thread(
+        "thread-refresh-same-chat",
+        user_id="local-development",
+    ).workflow_generation == 1
+    assert graph.invocations[-1]["refresh_requested"] is True
+
+
+def test_zombie_running_run_restarts_from_saved_work_in_same_chat(tmp_path) -> None:
+    catalogue = ProductCatalogue(tmp_path / "catalogue.sqlite3")
+    product, _ = catalogue.get_or_create_product("https://example.com/zombie")
+    run = catalogue.start_run(product.id, "thread-zombie")
+
+    class Graph:
+        async def aget_state(self, config):
+            # No human interrupt: RUNNING in the database is stale/recoverable.
+            return _Snapshot(
+                {
+                    "thread_id": "thread-zombie",
+                    "product_id": product.id,
+                    "run_id": run.id,
+                    "product_url": product.canonical_url,
+                    "status": "running",
+                }
+            )
+
+        async def ainvoke(self, update, **kwargs):
+            new_run = catalogue.start_run(
+                product.id,
+                "thread-zombie",
+                refresh_requested=bool(update.get("refresh_requested")),
+                seeded_from_run_id=run.id,
+            )
+            return {
+                **update,
+                "thread_id": "thread-zombie",
+                "product_id": product.id,
+                "run_id": new_run.id,
+                "status": "running",
+                "reply": "Recovered saved work.",
+                "decision_summary": "Recovered saved work.",
+            }
+
+    response = asyncio.run(
+        _mia(catalogue, Graph()).message(
+            AgentRequest(
+                thread_id="another-thread",
+                message="Import product website: https://example.com/zombie",
+            )
+        )
+    )
+
+    assert response.thread_id == "thread-zombie"
+    assert catalogue.get_run(run.id).status is RunStatus.INCOMPLETE
+    replacement = catalogue.latest_active_run(product.id)
+    assert replacement is not None
+    assert replacement.id != run.id
+    assert replacement.refresh_requested is False
+    assert catalogue.get_thread(
+        "thread-zombie",
+        user_id="local-development",
+    ).workflow_generation == 1
+
+
+def test_awaiting_human_run_is_not_restarted_as_zombie(tmp_path) -> None:
+    catalogue = ProductCatalogue(tmp_path / "catalogue.sqlite3")
+    product, _ = catalogue.get_or_create_product("https://example.com/waiting-human")
+    run = catalogue.start_run(product.id, "thread-waiting-human")
+    catalogue.set_run_status(run.id, RunStatus.AWAITING_HUMAN)
+
+    class Graph:
+        invoked = False
+
+        async def aget_state(self, config):
+            return _Snapshot(
+                {
+                    "thread_id": "thread-waiting-human",
+                    "product_id": product.id,
+                    "run_id": run.id,
+                    "review_required": True,
+                },
+                interrupted=True,
+            )
+
+        async def ainvoke(self, update, **kwargs):
+            self.invoked = True
+            raise AssertionError("human review checkpoint must remain paused")
+
+    graph = Graph()
+    response = asyncio.run(
+        _mia(catalogue, graph).message(
+            AgentRequest(
+                thread_id="other-thread",
+                message="Import product website: https://example.com/waiting-human",
+            )
+        )
+    )
+
+    assert response.thread_id == "thread-waiting-human"
+    assert catalogue.get_run(run.id).status is RunStatus.AWAITING_HUMAN
+    assert catalogue.get_thread(
+        "thread-waiting-human",
+        user_id="local-development",
+    ).workflow_generation == 0
+    assert graph.invoked is False

@@ -47,6 +47,7 @@ class ThreadRecord(WireModel):
     updated_at: AwareDatetime = Field(default_factory=utc_now)
     last_message_at: AwareDatetime | None = None
     deleted_at: AwareDatetime | None = None
+    workflow_generation: int = Field(default=0, ge=0)
 
 
 class ProductIdentifierRole(StrEnum):

@@ -373,6 +373,28 @@ class ProductCatalogue:
             if thread.deleted_at is None
         )
 
+    def advance_thread_workflow_generation(
+        self,
+        thread_id: str,
+        *,
+        user_id: str,
+    ) -> ThreadRecord:
+        """Start a clean internal checkpoint generation without creating a new visible chat."""
+
+        thread = self._require(self.get_thread(thread_id, user_id=user_id), thread_id)
+        now = _now()
+        updated = thread.model_copy(
+            update={
+                "workflow_generation": thread.workflow_generation + 1,
+                "updated_at": now,
+            }
+        )
+        self._execute(
+            "UPDATE threads SET payload=?,updated_at=? WHERE id=? AND user_id=?",
+            (updated.model_dump_json(), now.isoformat(), thread_id, user_id),
+        )
+        return updated
+
     def delete_thread(self, thread_id: str, *, user_id: str) -> ThreadRecord:
         """Hide chat history without deleting product/run artifacts needed for reuse and audit."""
 

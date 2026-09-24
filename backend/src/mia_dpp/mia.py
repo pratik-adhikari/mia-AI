@@ -43,6 +43,7 @@ from mia_dpp.tools.web.tool import WebExtractionTool
 from mia_dpp.workflow.context import MiaContext
 from mia_dpp.workflow.graph import create_graph
 from mia_dpp.workflow.identity import direct_product_url
+from mia_dpp.workflow.state import reset_product_state
 
 
 @dataclass
@@ -126,7 +127,8 @@ class Mia:
         user_id: str = LOCAL_USER_ID,
     ) -> AgentResponse:
         requested_thread_id = request.thread_id
-        merged_active_run: ProductRun | None = None
+        active_product_run: ProductRun | None = None
+        redirected_to_active_thread = False
         direct_url = direct_product_url(request.message)
         if direct_url is not None:
             product, _ = self.context.catalogue.get_or_create_product(
@@ -134,8 +136,9 @@ class Mia:
                 user_id=user_id,
             )
             active = self.context.catalogue.latest_active_run(product.id, user_id=user_id)
-            if active is not None and active.thread_id != requested_thread_id:
-                merged_active_run = active
+            if active is not None:
+                active_product_run = active
+                redirected_to_active_thread = active.thread_id != requested_thread_id
                 thread_id = active.thread_id
             else:
                 thread_id = requested_thread_id or f"thread-{uuid.uuid4().hex}"
@@ -176,28 +179,71 @@ class Mia:
         )
         values = self._snapshot_values(snapshot)
 
-        if merged_active_run is not None:
-            self.context.catalogue.assign_message_to_run(message.id, merged_active_run.id)
+        if active_product_run is not None:
+            checkpoint_status = self._snapshot_status(snapshot)
+            has_human_interrupt = self._snapshot_interrupt(snapshot) is not None
+            should_restart = request.refresh_requested or (
+                active_product_run.status is RunStatus.RUNNING
+                and not has_human_interrupt
+            )
+            if should_restart:
+                reason = (
+                    "Source refresh requested; restarted product work in the same chat."
+                    if request.refresh_requested
+                    else (
+                        "Recovered a RUNNING run with no human interrupt by restarting its "
+                        "workflow generation in the same chat."
+                    )
+                )
+                response = await self._restart_product_work_in_same_thread(
+                    thread_id=thread_id,
+                    user_id=user_id,
+                    active_run=active_product_run,
+                    product_url=direct_url or "",
+                    user_message=request.message,
+                    refresh_requested=request.refresh_requested,
+                    previous_values=values,
+                    trace_offset=trace_offset,
+                    message_id=message.id,
+                    reason=reason,
+                )
+                if redirected_to_active_thread:
+                    response = response.model_copy(
+                        update={
+                            "reply": (
+                                "This product already had an active chat, so I continued there.\n\n"
+                                + response.reply
+                            )
+                        }
+                    )
+                return response
+
+            self.context.catalogue.assign_message_to_run(message.id, active_product_run.id)
             if values:
                 response = self._response_view.build(values, trace_offset=trace_offset)
             else:
                 response = AgentResponse(
-                    thread_id=merged_active_run.thread_id,
+                    thread_id=active_product_run.thread_id,
                     reply="Existing work for this product is already active.",
                     status=(
                         AgentStatus.AWAITING_REVIEW
-                        if merged_active_run.status is RunStatus.AWAITING_HUMAN
+                        if active_product_run.status is RunStatus.AWAITING_HUMAN
                         else AgentStatus.RUNNING
                     ),
                     decision_summary="Reused the active product workflow.",
                 )
             response = response.model_copy(
                 update={
-                    "thread_id": merged_active_run.thread_id,
+                    "thread_id": active_product_run.thread_id,
                     "reply": (
-                        "This product already has active work, so I merged this request into "
-                        "the existing chat.\n\n" + response.reply
-                    ),
+                        (
+                            "This product already has active work, so I merged this request into "
+                            "the existing chat.\n\n"
+                        )
+                        if redirected_to_active_thread
+                        else ""
+                    )
+                    + response.reply,
                     "decision_summary": (
                         "The existing active product workflow was reused instead of starting "
                         "a concurrent run."
@@ -395,6 +441,66 @@ class Mia:
         self._record_assistant(response, user_id=user_id)
         return response
 
+    async def _restart_product_work_in_same_thread(
+        self,
+        *,
+        thread_id: str,
+        user_id: str,
+        active_run: ProductRun,
+        product_url: str,
+        user_message: str,
+        refresh_requested: bool,
+        previous_values: dict[str, Any],
+        trace_offset: int,
+        message_id: str,
+        reason: str,
+    ) -> AgentResponse:
+        """Recover or refresh product work with a new checkpoint generation in the same chat."""
+
+        self.context.catalogue.finish_run(
+            active_run.id,
+            RunStatus.INCOMPLETE,
+            error=reason,
+        )
+        self.context.catalogue.advance_thread_workflow_generation(
+            thread_id,
+            user_id=user_id,
+        )
+        update: dict[str, Any] = {
+            **reset_product_state(product_url=product_url),
+            "thread_id": thread_id,
+            "user_id": user_id,
+            "user_message": user_message,
+            "refresh_requested": refresh_requested,
+            "discovery_history_json": previous_values.get("discovery_history_json", "[]"),
+            "target_submodels": previous_values.get(
+                "target_submodels",
+                ("digital_nameplate", "technical_data"),
+            ),
+            "max_research_attempts": previous_values.get("max_research_attempts", 2),
+            "research_attempts": 0,
+            "status": "running",
+        }
+        if self._use_agent_server:
+            result = await self._run_agent_server(thread_id, user_id, run_input=update)
+        else:
+            graph = await self._ensure_graph()
+            result = await graph.ainvoke(
+                update,
+                config=self._config(thread_id, user_id),
+                context=self.context,
+            )
+        self._assign_message_to_latest_run(message_id, thread_id, user_id=user_id)
+        response = self._response_view.build(dict(result), trace_offset=trace_offset)
+        response = response.model_copy(
+            update={
+                "thread_id": thread_id,
+                "decision_summary": reason,
+            }
+        )
+        self._record_assistant(response, user_id=user_id)
+        return response
+
     async def _ensure_graph(self) -> Any:
         if self._graph is None:
             self._checkpoint_cm = open_checkpointer(self.settings)
@@ -417,10 +523,16 @@ class Mia:
             self._agent_client = get_client(url=self.settings.agent_server_url)
         return self._agent_client
 
-    @staticmethod
-    def _agent_server_thread_id(thread_id: str, user_id: str) -> str:
-        # Keep arbitrary public/API thread IDs and user identifiers out of Agent Server URLs.
-        return str(uuid.uuid5(uuid.NAMESPACE_URL, f"mia-dpp:{user_id}:{thread_id}"))
+    def _agent_server_thread_id(self, thread_id: str, user_id: str) -> str:
+        # Workflow generations let one visible chat restart safely without reusing an old checkpoint.
+        thread = self.context.catalogue.get_thread(thread_id, user_id=user_id)
+        generation = thread.workflow_generation if thread is not None else 0
+        return str(
+            uuid.uuid5(
+                uuid.NAMESPACE_URL,
+                f"mia-dpp:{user_id}:{thread_id}:generation:{generation}",
+            )
+        )
 
     async def _agent_server_snapshot(self, thread_id: str, user_id: str) -> Any | None:
         if not self._use_agent_server:
@@ -816,7 +928,12 @@ class Mia:
                 return cast(object, interrupts[0])
         return None
 
-    @staticmethod
-    def _config(thread_id: str, user_id: str) -> dict[str, dict[str, str]]:
-        # Clerk users may choose the same client-side thread ID; checkpoint keys must not collide.
-        return {"configurable": {"thread_id": f"{user_id}:{thread_id}"}}
+    def _config(self, thread_id: str, user_id: str) -> dict[str, dict[str, str]]:
+        # A new workflow generation creates a clean checkpoint namespace inside the same visible chat.
+        thread = self.context.catalogue.get_thread(thread_id, user_id=user_id)
+        generation = thread.workflow_generation if thread is not None else 0
+        return {
+            "configurable": {
+                "thread_id": f"{user_id}:{thread_id}:generation:{generation}"
+            }
+        }

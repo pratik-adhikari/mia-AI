@@ -281,6 +281,7 @@ export interface ThreadRecord {
   updatedAt: string;
   lastMessageAt: string | null;
   deletedAt?: string | null;
+  workflowGeneration?: number;
 }
 
 export interface SemanticReviewItem {

@@ -286,3 +286,29 @@ priority is:
 
 If a human explicitly requests source refresh, fresh source acquisition still bypasses cached DPP
 reuse.
+
+
+## Refresh and stale-run recovery stay inside the same chat
+
+A same-product redirect must not merely show the existing chat and ignore the user's new intent.
+
+Two cases now deliberately restart execution while preserving the visible thread:
+
+- **Refresh Sources**: the active run is closed as `INCOMPLETE`, the thread advances to a new
+  workflow generation, and the graph starts again with `refreshRequested=true`. This reacquires
+  external sources in the existing chat instead of opening another conversation.
+- **Recoverable RUNNING state**: if the catalogue says `RUNNING` but the checkpoint has no human
+  interrupt, the run is treated as stale/recoverable. It is closed as `INCOMPLETE`, a new workflow
+  generation starts in the same chat, and `refreshRequested=false` lets durable product work be
+  reused instead of crawling again.
+
+A genuine `AWAITING_HUMAN` checkpoint is never treated as a zombie. It remains paused until the
+review/value API resumes its interrupt.
+
+### Workflow generations
+
+The public chat/thread ID does not change during recovery. Instead, `ThreadRecord.workflowGeneration`
+increments and becomes part of the internal LangGraph checkpoint/Agent Server thread key.
+
+This gives the recovered workflow a clean checkpoint namespace without deleting the old checkpoint,
+while the user continues seeing one uninterrupted chat history.
