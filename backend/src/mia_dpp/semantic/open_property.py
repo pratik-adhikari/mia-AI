@@ -18,9 +18,11 @@ from mia_dpp.semantic.decision_policy import DecisionPolicySettings, DecisionPri
 from mia_dpp.semantic.eclass import EclassProperty
 from mia_dpp.semantic.eclass_diagnostics import (
     EclassDiagnosticsReport,
+    EclassEvidenceDiagnostics,
     classify_eclass_diagnostics,
 )
 from mia_dpp.semantic.eclass_resolution import (
+    EclassEvidenceResolution,
     EclassResolutionReport,
     EclassRetrievalStatus,
     NO_ECLASS_MATCH,
@@ -164,13 +166,13 @@ def _source_value(record: EvidenceRecord) -> str:
 
 def _result_by_evidence(
     resolution: EclassResolutionReport,
-) -> dict[str, object]:
+) -> dict[str, EclassEvidenceResolution]:
     return {item.evidence_id: item for item in resolution.results}
 
 
 def _diagnostics_by_evidence(
     diagnostics: EclassDiagnosticsReport,
-) -> dict[str, object]:
+) -> dict[str, EclassEvidenceDiagnostics]:
     return {item.evidence_id: item for item in diagnostics.evidence}
 
 
