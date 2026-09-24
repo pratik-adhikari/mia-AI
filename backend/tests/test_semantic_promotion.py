@@ -21,7 +21,6 @@ from mia_dpp.domain.mappings import (
     MappingOrigin,
     MappingResult,
     MappingStatus,
-    SemanticReviewItem,
 )
 from mia_dpp.semantic.decision_policy import DecisionPriority
 from mia_dpp.semantic.eclass import EclassProperty
@@ -40,6 +39,7 @@ from mia_dpp.semantic.open_property import (
     OpenPropertyDisposition,
     OpenPropertyProposal,
     OpenPropertyProposalReport,
+    SemanticSlotIdentity,
     technical_property_area_binding,
 )
 from mia_dpp.semantic.promotion import promote_open_properties
@@ -125,7 +125,11 @@ def _inputs(
         irdi="0173-1#02-POWER-ALT#001",
         preferred_name="AlternativePower",
     )
-    target = _target(repository, record, concept_a) if disposition is OpenPropertyDisposition.PROPOSED else None
+    target = (
+        _target(repository, record, concept_a)
+        if disposition is OpenPropertyDisposition.PROPOSED
+        else None
+    )
     proposal = OpenPropertyProposal(
         evidence_id=record.id,
         disposition=disposition,
@@ -143,10 +147,7 @@ def _inputs(
         semantic_slot=(
             None
             if target is None
-            else __import__(
-                "mia_dpp.semantic.open_property",
-                fromlist=["SemanticSlotIdentity"],
-            ).SemanticSlotIdentity(
+            else SemanticSlotIdentity(
                 key="slot-" + "a" * 24,
                 template_key="technical_data",
                 template_release=repository.load("technical_data").release.release,
