@@ -439,3 +439,113 @@ classification and can be retuned from saved distributions without new ECLASS or
 They verify JSON V2 parsing and path conversion, direct-IRDI verification, route gating, rejected
 candidate handling, retrieval-empty versus semantic no-match, tied-route suppression, and
 multi-scope ECLASS agreement/disagreement.
+
+## Milestone 5 implemented: shadow open Technical Property proposals
+
+The shadow graph now continues:
+
+```text
+verified ECLASS multi-scope consensus
+  -> deterministic ArbitraryProperty proposal
+  -> semantic-slot identity
+  -> wildcard conflict diagnostics
+  -> existing trusted mapping pipeline
+```
+
+Artifact:
+
+```text
+semantic/open-property-proposals-shadow.json
+```
+
+The artifact is diagnostic only. No existing `MappingResult`, review interrupt, coverage result, or
+AAS compiler input consumes it.
+
+### Proposal eligibility
+
+A wildcard proposal is created only when:
+
+- ECLASS retrieval produced directly verified properties;
+- the cross-scope ECLASS consensus is one of those verified IRDIs;
+- the ECLASS decision policy is not `ALARM`.
+
+`NO_ECLASS_MATCH`, unresolved classification, retrieval failures, and strong scope disagreement
+remain explicit non-proposed dispositions.
+
+### Target construction
+
+The proposal uses the same authoritative `mapping_target()` constructor as the existing mapper.
+The official wildcard path is now named once as:
+
+```text
+TechnicalData
+  / TechnicalPropertyAreas
+  / []
+  / ArbitraryProperty
+```
+
+The proposed target gets:
+
+- template key/release from the verified IDTA Technical Data template;
+- semantic ID from the verified ECLASS IRDI;
+- deterministic `idShort` from the authoritative ECLASS preferred name;
+- wildcard instance path produced by `mapping_target()`.
+
+The compiler and proposal code now share `sanitize_id_short()` and `ID_SHORT_PATTERN`, preventing
+identifier-normalization drift.
+
+### Context-aware semantic slot
+
+Each proposal also receives a semantic-slot identity derived from:
+
+```text
+template key
+template release
+wildcard template path
+verified ECLASS IRDI
+source context identity
+```
+
+This means the same ECLASS concept under `Motor A` and `Motor B` is intentionally treated as two
+different semantic slots even though the current compiler cannot yet project separate
+`TechnicalPropertyArea` list instances.
+
+### Conflict diagnostics
+
+The shadow report distinguishes four cases:
+
+1. `value_conflict`
+   - same semantic slot;
+   - different normalized values.
+
+2. `redundant_duplicate`
+   - same semantic slot;
+   - equivalent normalized values;
+   - semantically harmless, but promotion must deduplicate because the compiler requires unique
+     wildcard instance paths.
+
+3. `id_short_collision`
+   - different ECLASS semantic concepts;
+   - their authoritative preferred names sanitize to the same AAS `idShort`.
+
+4. `projection_context_collision`
+   - same ECLASS concept;
+   - different source/component contexts;
+   - current compiler would collapse both into the same wildcard instance path.
+
+The fourth case deliberately blocks any assumption that component identity has already been solved
+by the existing compiler.
+
+### Normalized conflict comparison
+
+Value-conflict detection uses the derived normalized value rather than raw source spelling.
+For example `0.03 mm` and `0,03 mm` produce the same normalized fingerprint and are treated as a
+redundant duplicate rather than contradictory values.
+
+### Tests added for milestone 5
+
+- `test_open_property_proposals.py`
+
+It verifies deterministic wildcard target construction, verified IRDI propagation, stable
+context-aware slots, value conflicts, normalized duplicates, `idShort` collisions, component
+context projection collisions, and the rule that ECLASS `ALARM` decisions never create targets.
