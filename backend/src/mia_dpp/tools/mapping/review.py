@@ -234,7 +234,7 @@ class MappingReviewService:
         evidence_id = item.evidence_id
         mapping = item.mapping
         if normalized == "keep":
-            if item.status is EvidenceOutcomeStatus.UNCERTAIN:
+            if item.status is EvidenceOutcomeStatus.UNCERTAIN and item.target_kind != "direct":
                 raise ValueError("uncertain evidence requires an explicit target or disposition")
             if mapping is None and item.target_kind == "direct":
                 raise ValueError("direct-target review has no proposed mapping to keep")
@@ -252,7 +252,21 @@ class MappingReviewService:
                         "human_comment": comment,
                     }
                 )
-            reviewed = item.model_copy(update={"mapping": mapping})
+            reviewed = item.model_copy(
+                update={
+                    "status": (
+                        EvidenceOutcomeStatus.MAPPED
+                        if item.target_kind == "direct" and mapping is not None
+                        else item.status
+                    ),
+                    "reason": (
+                        "Human confirmed the verified semantic target."
+                        if item.target_kind == "direct" and mapping is not None
+                        else item.reason
+                    ),
+                    "mapping": mapping,
+                }
+            )
             return package, self._replace(package, mapping_result, reviewed), reviewed
 
         if normalized in {"unmapped", "irrelevant", "reject"}:
