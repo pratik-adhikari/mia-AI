@@ -22,6 +22,7 @@ class MappingStatus(StrEnum):
 class MappingOrigin(StrEnum):
     DETERMINISTIC = "deterministic"
     SEMANTIC_AGENT = "semantic_agent"
+    SEMANTIC_ENGINE = "semantic_engine"
     HUMAN = "human"
 
 
@@ -318,12 +319,15 @@ class TextMappingProposal(WireModel):
 
 
 class SemanticReviewItem(WireModel):
-    """One row in the complete consolidated mapping review."""
+    """One trusted review row for either a fixed requirement or verified direct target."""
 
     id: str = Field(pattern=r"^review-[0-9a-f]{24}$")
     evidence_id: str = Field(min_length=1)
     status: EvidenceOutcomeStatus
     requirement_id: str | None = Field(default=None, pattern=r"^req-[0-9a-f]{24}$")
     alternative_requirement_ids: tuple[str, ...] = ()
+    target_kind: Literal["requirement", "direct"] = "requirement"
+    alternative_targets: tuple[MappingTarget, ...] = ()
+    review_priority: Literal["confirm", "alarm"] | None = None
     reason: str = Field(min_length=1, max_length=600)
     mapping: FieldMapping | None = None
