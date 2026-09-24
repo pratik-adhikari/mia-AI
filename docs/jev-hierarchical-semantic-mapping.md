@@ -549,3 +549,119 @@ redundant duplicate rather than contradictory values.
 It verifies deterministic wildcard target construction, verified IRDI propagation, stable
 context-aware slots, value conflicts, normalized duplicates, `idShort` collisions, component
 context projection collisions, and the rule that ECLASS `ALARM` decisions never create targets.
+
+## Milestone 6 implemented: TechnicalPropertyArea list-instance identity
+
+The open-property shadow path can now preserve repeated component/source groups all the way into
+the compiler instead of collapsing every wildcard property into one `TechnicalPropertyArea`.
+
+### Deterministic first area-assignment strategy
+
+The first implemented strategy is intentionally simple and lossless:
+
+```text
+source context path
+  -> stable TechnicalPropertyArea list-instance key
+```
+
+For example:
+
+```text
+Technical Specifications / Motor A
+  -> list-instance-...
+
+Technical Specifications / Motor B
+  -> different list-instance-...
+```
+
+All evidence under the same preserved source context receives the same area binding. Different
+context paths receive different bindings.
+
+This is the deterministic baseline. Future Jev experiments may recommend merging or splitting
+source groups, but the compiler no longer depends on such experiments to represent repeated areas.
+
+### MappingTarget extension
+
+`MappingTarget` now has optional `list_instance_bindings`.
+
+Each binding records:
+
+- the official template path ending in `[]`;
+- a stable internal instance key;
+- the source context path that produced the instance;
+- a human-readable source label.
+
+Existing fixed mappings and old wildcard mappings remain valid because the field defaults to an
+empty tuple. A regression test verifies that legacy serialized `MappingTarget` payloads that do
+not contain this field still load successfully.
+
+### Projection identity
+
+`instance_path` remains the official-template instance path. Repeated-list identity is kept
+separately.
+
+The compiler therefore compares:
+
+```text
+projection identity = instance path + list-instance bindings
+```
+
+rather than treating `instance_path` alone as globally unique.
+
+This allows:
+
+```text
+Motor A / RatedPower
+Motor B / RatedPower
+```
+
+to share the same wildcard property path while remaining different projection targets.
+
+### Compiler materialization
+
+When the compiler enters a `SubmodelElementList`, it partitions relevant mappings by the binding
+for that list prototype and instantiates the official prototype once per partition.
+
+Conceptually:
+
+```text
+TechnicalPropertyAreas
+├── [] instance: Motor A
+│   ├── RatedPower = 500
+│   └── Voltage = 48
+└── [] instance: Motor B
+    ├── RatedPower = 700
+    └── Voltage = 48
+```
+
+The internal list-instance key is not injected as an unsupported AAS field. It controls structural
+projection and remains available in mapping provenance/history.
+
+### Conflict behavior after list-instance support
+
+The previous false collision for the same ECLASS concept in different source contexts is removed.
+
+Two properties conflict only if their complete projection identity collides or their semantic
+slot rules conflict. This means the same `RatedPower` concept is valid in Motor A and Motor B.
+
+Existing diagnostics still catch:
+
+- different values in the same semantic slot;
+- redundant duplicate evidence in the same semantic slot;
+- different semantic concepts that sanitize to the same `idShort` in the same list instance;
+- malformed or missing list bindings that would still collapse different contexts.
+
+### Tests added/updated for milestone 6
+
+- `test_list_instance_compiler.py`
+- `test_open_property_proposals.py`
+
+They verify:
+
+- Motor A and Motor B receive different deterministic list-instance keys;
+- the compiler emits two actual TechnicalPropertyArea list entries;
+- properties sharing one source context stay in one area;
+- duplicate projection identities remain rejected;
+- legacy unbound wildcard mappings still compile as one list instance;
+- malformed list bindings are rejected;
+- old serialized mapping targets still load without the new field.
