@@ -8,6 +8,7 @@ from typing import Literal
 from pydantic import AwareDatetime, Field
 
 from mia_dpp.domain.base import WireModel, utc_now
+from mia_dpp.domain.mappings import ListInstanceBinding
 from mia_dpp.domain.product import DppReleaseStatus
 
 
@@ -120,6 +121,10 @@ class HumanReviewRecord(WireModel):
     final_value: str | None = None
     proposed_target_path: tuple[str, ...] = ()
     final_target_path: tuple[str, ...] = ()
+    proposed_semantic_id: str | None = None
+    final_semantic_id: str | None = None
+    proposed_list_instance_bindings: tuple[ListInstanceBinding, ...] = ()
+    final_list_instance_bindings: tuple[ListInstanceBinding, ...] = ()
     action: HumanReviewAction
     actor_name: str | None = Field(default=None, max_length=200)
     comment: str | None = Field(default=None, max_length=1000)
