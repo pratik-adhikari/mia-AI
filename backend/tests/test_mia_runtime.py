@@ -475,7 +475,7 @@ def test_general_chat_reply_does_not_advance_langgraph(tmp_path) -> None:
         async def run(self, message, *, thread_id, user_id, recent_messages=()):
             assert message == "What are you doing right now?"
             assert thread_id == "thread-general-chat"
-            assert recent_messages[-1]["content"] == message
+            assert recent_messages == ()
             return ConversationTurn(
                 action=ConversationAction.REPLY,
                 reply="There is no active product workflow yet.",
@@ -591,3 +591,45 @@ def test_retry_work_creates_new_fenced_generation_from_failed_attempt(tmp_path) 
     ).workflow_generation == 1
     assert graph.invocations[-1]["reuse_mode"] == "continue_saved_work"
     assert response.thread_id == "thread-retry"
+
+
+
+def test_conversational_url_question_does_not_create_product(tmp_path) -> None:
+    catalogue = ProductCatalogue(tmp_path / "catalogue.sqlite3")
+    catalogue.get_or_create_thread("thread-url-question", "local-development")
+
+    class Graph:
+        async def aget_state(self, config):
+            raise AssertionError("read-only URL question must not touch checkpoints")
+
+    class Conversation:
+        async def run(self, message, *, thread_id, user_id, recent_messages=()):
+            assert "https://example.com/product" in message
+            return ConversationTurn(
+                action=ConversationAction.REPLY,
+                reply="I have not imported that URL in this conversation.",
+                decision_summary="Answered without mutating product state.",
+            )
+
+    class Query:
+        def work_status(self, thread_id, *, user_id):
+            return WorkStatusView(thread_id=thread_id)
+
+    mia = _mia(catalogue, Graph())
+    mia.conversation = Conversation()
+    mia.query = Query()
+
+    response = asyncio.run(
+        mia.message(
+            AgentRequest(
+                thread_id="thread-url-question",
+                message=(
+                    "Have we already imported https://example.com/product, "
+                    "or is it only mentioned here?"
+                ),
+            )
+        )
+    )
+
+    assert response.status is AgentStatus.AWAITING_INPUT
+    assert catalogue.list_products() == ()
