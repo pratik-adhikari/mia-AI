@@ -43,6 +43,7 @@ class MiaContext:
         ContextScope.FULL_PRODUCT,
     )
     jev_grouping_max_groups: int = 200
+    eclass_shadow_enabled: bool = False
     eclass_provider: EclassPropertyProvider | None = None
     eclass_resolution_scopes: tuple[ContextScope, ...] = (
         ContextScope.SIBLINGS,
