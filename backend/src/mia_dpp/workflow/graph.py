@@ -19,6 +19,7 @@ from mia_dpp.workflow.nodes_mapping import (
     integrate_background_research,
     semantic_mapping,
 )
+from mia_dpp.workflow.nodes_semantic import build_semantic_context, normalize_evidence
 from mia_dpp.workflow.nodes_product import (
     advance_product,
     extract_evidence,
@@ -72,6 +73,8 @@ def _build_evidence_stage(context: MiaContext | None) -> Any:
         stage,
         (
             extract_evidence,
+            normalize_evidence,
+            build_semantic_context,
             build_targets,
             deterministic_mapping,
             semantic_mapping,
@@ -84,7 +87,9 @@ def _build_evidence_stage(context: MiaContext | None) -> Any:
         context,
     )
     stage.add_edge(START, "extract_evidence")
-    stage.add_edge("extract_evidence", "build_targets")
+    stage.add_edge("extract_evidence", "normalize_evidence")
+    stage.add_edge("normalize_evidence", "build_semantic_context")
+    stage.add_edge("build_semantic_context", "build_targets")
     stage.add_edge("build_targets", "deterministic_mapping")
     stage.add_edge("deterministic_mapping", "semantic_mapping")
     stage.add_conditional_edges("semantic_mapping", after_semantic_mapping, SEMANTIC_ROUTES)
