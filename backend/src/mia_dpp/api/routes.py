@@ -442,6 +442,28 @@ async def workflow_graph_stream(
     )
 
 
+@router.post(
+    "/api/threads/{thread_id}/retry",
+    response_model=AgentResponse,
+)
+async def retry_thread_work(
+    thread_id: str,
+    http_request: Request,
+    user_id: AuthenticatedUser,
+) -> AgentResponse:
+    """Retry a failed/incomplete product run as a new fenced workflow generation."""
+
+    try:
+        return await _application(http_request).retry_work(
+            thread_id,
+            user_id=user_id,
+        )
+    except KeyError as error:
+        raise HTTPException(status_code=404, detail="unknown thread or product") from error
+    except ValueError as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
+
+
 @router.get(
     "/api/threads/{thread_id}/work-status",
     response_model=WorkStatusView,
