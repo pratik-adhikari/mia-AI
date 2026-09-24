@@ -61,7 +61,9 @@ export function MappingRow({
       <p className="mt-2 inline-block rounded-full bg-mist px-2 py-0.5 font-mono text-[10px] text-muted">
         {m.mappingOrigin === "semantic_agent"
           ? "AI-assisted proposal"
-          : m.mappingOrigin === "human"
+          : m.mappingOrigin === "semantic_engine"
+            ? "Jev + verified registry semantics"
+            : m.mappingOrigin === "human"
             ? "Human supplied/corrected"
             : "Deterministic mapping"}
         {m.humanReviewed ? " · reviewed" : ""}
@@ -216,9 +218,17 @@ export function MappingReviewRow({
   onChange: (decision: AgentReviewDecision) => void;
 }) {
   const [comment, setComment] = useState(decision?.comment ?? "");
-  const currentTarget = item.requirementId ?? item.alternativeRequirementIds[0] ?? "";
+  const currentTarget =
+    item.targetKind === "direct"
+      ? item.mapping?.target.semanticId.keys[0]?.value ??
+        item.alternativeTargets[0]?.semanticId.keys[0]?.value ??
+        ""
+      : item.requirementId ?? item.alternativeRequirementIds[0] ?? "";
   const action = decision?.decision ?? "";
-  const target = decision?.correctedRequirementId ?? currentTarget;
+  const target =
+    item.targetKind === "direct"
+      ? decision?.correctedSemanticId ?? currentTarget
+      : decision?.correctedRequirementId ?? currentTarget;
   const value = decision?.correctedValue ?? String(evidence.value);
   const origin = item.mapping?.mappingOrigin ?? "semantic_agent";
 
@@ -227,6 +237,7 @@ export function MappingReviewRow({
       reviewId: item.id,
       decision: decision?.decision ?? "keep",
       correctedRequirementId: decision?.correctedRequirementId ?? null,
+      correctedSemanticId: decision?.correctedSemanticId ?? null,
       correctedValue: decision?.correctedValue ?? null,
       comment: comment.trim() || null,
       ...next,
@@ -244,7 +255,22 @@ export function MappingReviewRow({
       </div>
       <p className="mt-2 text-[12px] leading-relaxed text-muted">{item.reason}</p>
       <p className="mt-2 font-mono text-[10px] text-muted">Origin: {origin}{item.mapping ? ` · ${item.mapping.target.idShort}` : " · no target"}</p>
-      {item.alternativeRequirementIds.length > 0 && <p className="mt-1 text-[11px] text-muted">Alternatives: {item.alternativeRequirementIds.join(", ")}</p>}
+      {item.alternativeRequirementIds.length > 0 && (
+        <p className="mt-1 text-[11px] text-muted">
+          Alternatives: {item.alternativeRequirementIds.join(", ")}
+        </p>
+      )}
+      {item.targetKind === "direct" && item.alternativeTargets.length > 0 && (
+        <p className="mt-1 text-[11px] text-muted">
+          Verified ECLASS alternatives:{" "}
+          {item.alternativeTargets
+            .map(
+              (candidate) =>
+                `${candidate.idShort} [${candidate.semanticId.keys[0]?.value ?? "unknown"}]`
+            )
+            .join(", ")}
+        </p>
+      )}
 
       <div className="mt-3 grid gap-2 sm:grid-cols-2">
         <label className="text-[11px] text-muted">
@@ -255,7 +281,7 @@ export function MappingReviewRow({
             className="mt-1 w-full rounded-lg border border-hairline bg-paper px-3 py-2 text-[12px] text-ink"
           >
             {item.status === "uncertain" && <option value="">Choose…</option>}
-            <option value="keep">Keep current result</option>
+            {item.mapping && <option value="keep">Keep current result</option>}
             <option value="change_target">Change target/value</option>
             <option value="unmapped">Mark unmapped</option>
             <option value="irrelevant">Mark irrelevant</option>
@@ -275,14 +301,37 @@ export function MappingReviewRow({
       {action === "change_target" && (
         <div className="mt-2 grid gap-2 sm:grid-cols-2">
           <label className="text-[11px] text-muted">
-            Official target
+            {item.targetKind === "direct" ? "Verified ECLASS concept" : "Official target"}
             <select
               value={target}
-              onChange={(event) => update({ correctedRequirementId: event.target.value })}
+              onChange={(event) =>
+                item.targetKind === "direct"
+                  ? update({
+                      correctedSemanticId: event.target.value,
+                      correctedRequirementId: null,
+                    })
+                  : update({
+                      correctedRequirementId: event.target.value,
+                      correctedSemanticId: null,
+                    })
+              }
               className="mt-1 w-full rounded-lg border border-hairline bg-paper px-3 py-2 font-mono text-[11px] text-ink"
             >
               <option value="">Choose target…</option>
-              {targets.map((requirement) => <option key={requirement.id} value={requirement.id}>{requirement.templatePath.join(" / ")}</option>)}
+              {item.targetKind === "direct"
+                ? item.alternativeTargets.map((candidate) => {
+                    const semanticId = candidate.semanticId.keys[0]?.value ?? "";
+                    return (
+                      <option key={semanticId} value={semanticId}>
+                        {candidate.idShort} · {semanticId}
+                      </option>
+                    );
+                  })
+                : targets.map((requirement) => (
+                    <option key={requirement.id} value={requirement.id}>
+                      {requirement.templatePath.join(" / ")}
+                    </option>
+                  ))}
             </select>
           </label>
           <label className="text-[11px] text-muted">
