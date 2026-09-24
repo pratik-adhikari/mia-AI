@@ -135,10 +135,7 @@ def _strong_conflicting_choices(
             and item.diagnostics.choice_is_argmax
         )
     }
-    return (
-        len(strong_choices) > 1
-        and diagnostics.scope_agreement <= settings.alarm_max_scope_agreement
-    )
+    return len(strong_choices) > 1
 
 
 def classify_eclass_diagnostics(
