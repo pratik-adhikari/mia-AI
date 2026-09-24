@@ -11,6 +11,12 @@ ARBITRARY_PROPERTY_PATH = (
     "AssetSpecificProperties",
     "ArbitraryProperty",
 )
+TECHNICAL_DATA_ARBITRARY_PROPERTY_PATH = (
+    "TechnicalData",
+    "TechnicalPropertyAreas",
+    "[]",
+    "ArbitraryProperty",
+)
 
 
 def external_reference(value: str) -> SemanticReference:
