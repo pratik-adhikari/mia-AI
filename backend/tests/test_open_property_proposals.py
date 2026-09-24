@@ -258,6 +258,10 @@ def test_equivalent_normalized_values_do_not_conflict() -> None:
         item.kind is OpenPropertyConflictKind.VALUE_CONFLICT
         for item in report.conflicts
     )
+    assert any(
+        item.kind is OpenPropertyConflictKind.REDUNDANT_DUPLICATE
+        for item in report.conflicts
+    )
 
 
 def test_different_concepts_with_same_sanitized_name_are_id_short_collision() -> None:
