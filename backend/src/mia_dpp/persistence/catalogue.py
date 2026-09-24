@@ -733,7 +733,11 @@ class ProductCatalogue:
         domain: str | None,
         product_family: str | None,
         comment: str | None,
-    ) -> MappingKnowledgeEntry:
+        actor_name: str | None = None,
+    ) -> MappingKnowledgeEntry | None:
+        # A DUMMY is a workflow placeholder, never reusable semantic knowledge.
+        if mapping.human_value_kind == "dummy":
+            return None
         status = (
             MappingKnowledgeStatus.TRUSTED
             if decision in {"approve", "correct", "keep", "change_target"}

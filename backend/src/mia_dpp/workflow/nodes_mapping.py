@@ -17,6 +17,7 @@ from mia_dpp.domain.product import BackgroundJobStatus, RunStatus
 from mia_dpp.domain.product_work import ProductWorkStage
 from mia_dpp.domain.targets import RequirementKind, TemplateIndex
 from mia_dpp.services.deep_research import merge_mapping_results
+from mia_dpp.services.human_review_audit import mapping_review_records, supplied_value_record
 from mia_dpp.tools.mapping.coverage import coverage as calculate_coverage
 from mia_dpp.tools.mapping.mapper import DeterministicWebsiteMapper
 from mia_dpp.workflow.context import MiaContext
@@ -277,11 +278,12 @@ async def human_review(
     result = work.load_state("semantic_mapping_artifact_id", MappingResult)
     reviewed: list[SemanticReviewItem] = []
     for decision in request.decisions:
+        before = by_id[decision.review_id]
         package, result, item = work.ctx.mapping_review.decide(
             package,
             result,
             index,
-            by_id[decision.review_id],
+            before,
             decision=decision.decision,
             thread_id=state["thread_id"],
             corrected_requirement_id=decision.corrected_requirement_id,
@@ -289,6 +291,18 @@ async def human_review(
             comment=decision.comment,
         )
         reviewed.append(item)
+        for audit in mapping_review_records(
+            user_id=work.user_id,
+            product_id=work.product_id,
+            run_id=work.run_id,
+            thread_id=state["thread_id"],
+            mapping_cycle_id=state.get("mapping_cycle_id"),
+            actor_name=request.actor_name,
+            decision=decision,
+            before=before,
+            after=item,
+        ):
+            work.ctx.catalogue.add_human_review(audit)
         if item.mapping is not None:
             product = work.ctx.catalogue.get_product(work.product_id, user_id=work.user_id)
             domain = (urlsplit(product.canonical_url).hostname or "") if product else None
@@ -532,6 +546,21 @@ async def human_value(
         thread_id=state["thread_id"],
         actor_name=request.actor_name,
         use_dummy=request.use_dummy,
+    )
+    supplied_mapping = result.mapped[-1]
+    supplied_evidence = package.evidence[-1]
+    work.ctx.catalogue.add_human_review(
+        supplied_value_record(
+            user_id=work.user_id,
+            product_id=work.product_id,
+            run_id=work.run_id,
+            thread_id=state["thread_id"],
+            requirement_id=requirement_id,
+            evidence_id=supplied_evidence.id,
+            mapping_id=supplied_mapping.id,
+            actor_name=request.actor_name,
+            use_dummy=request.use_dummy,
+        )
     )
     evidence_id = work.put_model(
         "evidence/product-knowledge-human.json",

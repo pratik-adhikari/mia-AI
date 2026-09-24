@@ -286,7 +286,12 @@ class MappingReviewService:
         if corrected_value is not None and corrected_value.strip() != str(record.value):
             corrected = True
             original = record
-            record = self._human_evidence(record, corrected_value.strip(), thread_id)
+            record = self._human_evidence(
+                record,
+                corrected_value.strip(),
+                thread_id,
+                actor_name=actor_name,
+            )
             package = package.model_copy(
                 update={
                     "evidence": (
@@ -354,6 +359,7 @@ class MappingReviewService:
             cleaned,
             thread_id,
             is_dummy=use_dummy,
+            actor_name=actor_name,
         )
         package = package.model_copy(update={"evidence": (*package.evidence, evidence)})
         mapping = self._human_mapping(
@@ -556,6 +562,8 @@ class MappingReviewService:
         original: EvidenceRecord,
         value: str,
         thread_id: str,
+        *,
+        actor_name: str | None,
     ) -> EvidenceRecord:
         acquired_at = datetime.now(UTC)
         identity = f"{thread_id}\0{original.id}\0{value}\0{acquired_at.isoformat()}"
@@ -567,6 +575,9 @@ class MappingReviewService:
             unit=original.unit,
             context_path=original.context_path,
             source_type=SourceType.HUMAN,
+            human_actor_name=actor_name,
+            human_value_kind="verified",
+            human_reason="Human corrected a source-derived value during mapping review.",
             source_uri=f"mia://conversation/{thread_id}/review",
             source_content_sha256=hashlib.sha256(value.encode()).hexdigest(),
             source_location=SourceLocation(excerpt=value),
@@ -584,6 +595,7 @@ class MappingReviewService:
         thread_id: str,
         *,
         is_dummy: bool,
+        actor_name: str | None,
     ) -> EvidenceRecord:
         acquired_at = datetime.now(UTC)
         identity = f"{thread_id}\0{requirement.id}\0{value}\0{acquired_at.isoformat()}"
@@ -593,6 +605,13 @@ class MappingReviewService:
             source_label=requirement.id_short or requirement.template_path[-1],
             value=value,
             source_type=SourceType.HUMAN,
+            human_actor_name=actor_name,
+            human_value_kind="dummy" if is_dummy else "verified",
+            human_reason=(
+                "Human approved a placeholder because the mandatory value was unavailable."
+                if is_dummy
+                else "Human supplied a missing mandatory value."
+            ),
             source_uri=f"mia://conversation/{thread_id}/requirement/{requirement.id}",
             source_content_sha256=hashlib.sha256(value.encode()).hexdigest(),
             source_location=SourceLocation(excerpt=value),
