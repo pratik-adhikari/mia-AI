@@ -36,18 +36,18 @@ from mia_dpp.api.schemas import (
 )
 from mia_dpp.domain.mappings import MappingResult
 from mia_dpp.domain.product import (
-    DppReleaseStatus,
     BackgroundJob,
     BackgroundJobStatus,
     ChatMessage,
+    DppReleaseStatus,
     RunStatus,
     ThreadRecord,
 )
 from mia_dpp.domain.targets import TemplateSummary
 from mia_dpp.errors import MiaError
 from mia_dpp.mia import Mia
-from mia_dpp.storage.models import WorkspaceArtifact
 from mia_dpp.services.product_query import EvidenceSearchHit, WorkStatusView
+from mia_dpp.storage.models import WorkspaceArtifact
 from mia_dpp.tools.mapping.models import (
     MappingKnowledgeEntry,
 )
