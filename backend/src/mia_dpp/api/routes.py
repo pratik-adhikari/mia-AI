@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import secrets
@@ -46,6 +47,7 @@ from mia_dpp.domain.targets import TemplateSummary
 from mia_dpp.errors import MiaError
 from mia_dpp.mia import Mia
 from mia_dpp.storage.models import WorkspaceArtifact
+from mia_dpp.services.product_query import EvidenceSearchHit, WorkStatusView
 from mia_dpp.tools.mapping.models import (
     MappingKnowledgeEntry,
 )
@@ -437,6 +439,104 @@ async def workflow_graph_stream(
         events(),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@router.get(
+    "/api/threads/{thread_id}/work-status",
+    response_model=WorkStatusView,
+)
+async def thread_work_status(
+    thread_id: str,
+    http_request: Request,
+    user_id: AuthenticatedUser,
+) -> WorkStatusView:
+    """Return durable run/snapshot status without reading LangGraph checkpoints."""
+
+    try:
+        return _application(http_request).query.work_status(
+            thread_id,
+            user_id=user_id,
+        )
+    except KeyError as error:
+        raise HTTPException(status_code=404, detail="unknown thread") from error
+
+
+@router.get(
+    "/api/threads/{thread_id}/evidence/search",
+    response_model=tuple[EvidenceSearchHit, ...],
+)
+async def search_thread_evidence(
+    thread_id: str,
+    http_request: Request,
+    user_id: AuthenticatedUser,
+    q: str = Query(min_length=1, max_length=500),
+    limit: int = Query(default=8, ge=1, le=25),
+) -> tuple[EvidenceSearchHit, ...]:
+    """Search source-backed product evidence while work continues independently."""
+
+    try:
+        return _application(http_request).query.search_evidence(
+            thread_id,
+            q,
+            user_id=user_id,
+            limit=limit,
+        )
+    except KeyError as error:
+        raise HTTPException(status_code=404, detail="unknown thread") from error
+
+
+@router.get("/api/threads/{thread_id}/events/stream")
+async def thread_event_stream(
+    thread_id: str,
+    http_request: Request,
+    user_id: AuthenticatedUser,
+) -> StreamingResponse:
+    """Stream persisted workflow events and status; no in-memory worker coupling."""
+
+    application = _application(http_request)
+    if application.context.catalogue.get_thread(thread_id, user_id=user_id) is None:
+        raise HTTPException(status_code=404, detail="unknown thread")
+
+    async def events():
+        seen: set[str] = set()
+        last_status: str | None = None
+        try:
+            while True:
+                if await http_request.is_disconnected():
+                    break
+                status = application.query.work_status(thread_id, user_id=user_id)
+                status_json = status.model_dump_json(by_alias=True)
+                if status_json != last_status:
+                    last_status = status_json
+                    yield f"event: status\ndata: {status_json}\n\n"
+
+                for event in application.store.list_events(
+                    thread_id,
+                    user_id=user_id,
+                ):
+                    if event.id in seen:
+                        continue
+                    seen.add(event.id)
+                    yield (
+                        "event: workflow\ndata: "
+                        + event.model_dump_json(by_alias=True)
+                        + "\n\n"
+                    )
+                await asyncio.sleep(1.0)
+        except asyncio.CancelledError:
+            raise
+        except Exception as error:
+            payload = json.dumps({"errorType": type(error).__name__})
+            yield f"event: error\ndata: {payload}\n\n"
+
+    return StreamingResponse(
+        events(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+        },
     )
 
 
