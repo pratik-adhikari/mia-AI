@@ -11,6 +11,7 @@ from aas_core3 import jsonization, verification
 
 from mia_dpp.aas import AasCompiler, AasValidator, gap_report_from_validation
 from mia_dpp.aas.models import (
+    AasArtifact,
     DppPackage,
     GapReport,
     Severity,
@@ -27,6 +28,7 @@ from mia_dpp.domain.evidence import (
     SourceLocation,
 )
 from mia_dpp.domain.mappings import FieldMapping, MappingStatus
+from mia_dpp.domain.targets import TemplateRelease
 from mia_dpp.errors import MappingError
 
 DPP_TEMPLATE_KEY = "digital_nameplate"
@@ -120,10 +122,10 @@ def build_dpp(
 
     compiler = AasCompiler(templates)
     validator = AasValidator()
-    artifacts = []
+    artifacts: list[AasArtifact] = []
     validation_reports: list[ValidationReport] = []
     gap_reports: list[GapReport] = []
-    template_releases = []
+    template_releases: list[TemplateRelease] = []
 
     for key in ordered_keys:
         template = templates.load(key)
