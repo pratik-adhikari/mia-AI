@@ -40,6 +40,8 @@ class MiaWorkflowState(TypedDict, total=False):
 
     # Durable stage artifacts (large payloads never live in checkpoints)
     evidence_artifact_id: str
+    normalization_artifact_id: str
+    semantic_context_artifact_id: str
     targets_artifact_id: str
     deterministic_mapping_artifact_id: str
     semantic_mapping_artifact_id: str
@@ -99,6 +101,8 @@ def reset_product_state(
         "image_url": "",
         "known_source_urls": (),
         "evidence_artifact_id": "",
+        "normalization_artifact_id": "",
+        "semantic_context_artifact_id": "",
         "targets_artifact_id": "",
         "deterministic_mapping_artifact_id": "",
         "semantic_mapping_artifact_id": "",
