@@ -10,7 +10,7 @@ from pydantic import Field, model_validator
 
 from mia_dpp.domain.base import WireModel
 from mia_dpp.domain.evidence import EvidenceRecord, ProductKnowledgePackage
-from mia_dpp.domain.mappings import MappingResult
+from mia_dpp.domain.mappings import ListInstanceBinding, MappingResult
 from mia_dpp.domain.targets import Requirement, TemplateIndex
 
 
@@ -122,9 +122,12 @@ class MappingKnowledgeEntry(WireModel):
     scope: MappingKnowledgeScope = MappingKnowledgeScope.USER
     owner_id: str | None = "local-development"
     source_field: str
+    source_context_path: tuple[str, ...] = ()
     example_values: tuple[str, ...]
     target_template: str
     target_path: tuple[str, ...]
+    target_instance_path: tuple[str, ...] = ()
+    list_instance_bindings: tuple[ListInstanceBinding, ...] = ()
     semantic_id: str
     manufacturer: str | None = None
     domain: str | None = None
