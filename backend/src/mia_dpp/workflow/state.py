@@ -53,6 +53,7 @@ class MiaWorkflowState(TypedDict, total=False):
     targets_artifact_id: str
     deterministic_mapping_artifact_id: str
     semantic_mapping_artifact_id: str
+    semantic_promotion_artifact_id: str
     review_items_artifact_id: str
     conflict_artifact_id: str
     reviewed_mapping_artifact_id: str
@@ -122,6 +123,7 @@ def reset_product_state(
         "targets_artifact_id": "",
         "deterministic_mapping_artifact_id": "",
         "semantic_mapping_artifact_id": "",
+        "semantic_promotion_artifact_id": "",
         "review_items_artifact_id": "",
         "conflict_artifact_id": "",
         "reviewed_mapping_artifact_id": "",
