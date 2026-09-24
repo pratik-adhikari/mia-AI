@@ -45,6 +45,7 @@ class MiaWorkflowState(TypedDict, total=False):
     jev_idta_routing_artifact_id: str
     jev_routing_diagnostics_artifact_id: str
     jev_decision_policy_artifact_id: str
+    jev_semantic_grouping_artifact_id: str
     targets_artifact_id: str
     deterministic_mapping_artifact_id: str
     semantic_mapping_artifact_id: str
@@ -109,6 +110,7 @@ def reset_product_state(
         "jev_idta_routing_artifact_id": "",
         "jev_routing_diagnostics_artifact_id": "",
         "jev_decision_policy_artifact_id": "",
+        "jev_semantic_grouping_artifact_id": "",
         "targets_artifact_id": "",
         "deterministic_mapping_artifact_id": "",
         "semantic_mapping_artifact_id": "",
