@@ -107,6 +107,32 @@ class Settings(BaseSettings):
         le=253,
         validation_alias="MIA_JEV_GROUPING_MAX_GROUPS",
     )
+    eclass_shadow_enabled: bool = Field(
+        default=False,
+        validation_alias="MIA_ECLASS_SHADOW_ENABLED",
+    )
+    eclass_certificate_file: Path | None = Field(
+        default=None,
+        validation_alias="MIA_ECLASS_CERTIFICATE_FILE",
+    )
+    eclass_key_file: Path | None = Field(
+        default=None,
+        validation_alias="MIA_ECLASS_KEY_FILE",
+    )
+    eclass_json_base_url: str = Field(
+        default="https://eclass-cdp.com/jsonapi/v2",
+        validation_alias="MIA_ECLASS_JSON_BASE_URL",
+    )
+    eclass_search_parameter: str = Field(
+        default="preferredName",
+        validation_alias="MIA_ECLASS_SEARCH_PARAMETER",
+    )
+    eclass_candidate_limit: int = Field(
+        default=12,
+        ge=1,
+        le=64,
+        validation_alias="MIA_ECLASS_CANDIDATE_LIMIT",
+    )
     mia_database_url: str | None = Field(
         default=None,
         validation_alias="MIA_DATABASE_URL",
