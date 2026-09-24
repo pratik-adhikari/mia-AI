@@ -180,6 +180,18 @@ def test_verified_consensus_builds_deterministic_arbitrary_property_target() -> 
         "Position_repeatability",
     )
     assert proposal.target.semantic_id.primary_value == concept.irdi
+    assert len(proposal.target.list_instance_bindings) == 1
+    area = proposal.target.list_instance_bindings[0]
+    assert area.template_path == (
+        "TechnicalData",
+        "TechnicalPropertyAreas",
+        "[]",
+    )
+    assert area.source_context_path == (
+        "Technical Specifications",
+        "Motion Performance",
+    )
+    assert area.label == "Motion Performance"
     assert proposal.semantic_slot is not None
     assert proposal.semantic_slot.context_path == (
         "Technical Specifications",
@@ -304,7 +316,7 @@ def test_different_concepts_with_same_sanitized_name_are_id_short_collision() ->
     assert conflicts[0].id_short == "Power_rating"
 
 
-def test_same_concept_in_different_component_contexts_flags_projection_collision() -> None:
+def test_same_concept_in_different_component_contexts_get_distinct_area_bindings() -> None:
     concept = EclassProperty(
         irdi="0173-1#02-POWER#001",
         preferred_name="Rated power",
@@ -340,16 +352,21 @@ def test_same_concept_in_different_component_contexts_flags_projection_collision
         ),
     )
 
-    projection_conflicts = [
-        item
-        for item in report.conflicts
-        if item.kind is OpenPropertyConflictKind.PROJECTION_CONTEXT_COLLISION
-    ]
-    assert len(projection_conflicts) == 1
-    assert not any(
-        item.kind is OpenPropertyConflictKind.ID_SHORT_COLLISION
-        for item in report.conflicts
+    proposals = {
+        item.evidence_id: item
+        for item in report.proposals
+    }
+    left = proposals["ev-1"]
+    right = proposals["ev-2"]
+    assert left.target is not None
+    assert right.target is not None
+    assert left.target.instance_path == right.target.instance_path
+    assert left.target.projection_identity != right.target.projection_identity
+    assert (
+        left.target.list_instance_bindings[0].instance_key
+        != right.target.list_instance_bindings[0].instance_key
     )
+    assert report.conflicts == ()
 
 
 def test_strong_eclass_scope_disagreement_does_not_create_target() -> None:
