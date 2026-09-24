@@ -35,6 +35,7 @@ from mia_dpp.persistence.catalogue import ActiveProductRunExists, LOCAL_USER_ID
 from mia_dpp.persistence.workspace import WorkspaceView
 from mia_dpp.runtime.checkpoints import open_checkpointer
 from mia_dpp.runtime.factory import create_artifact_store, create_catalogue
+from mia_dpp.semantic.jev import OpenRouterJevClient
 from mia_dpp.services.deep_research import DeepResearchService
 from mia_dpp.tools.mapping.models import SemanticMapper
 from mia_dpp.tools.mapping.review import MappingReviewService
@@ -91,6 +92,17 @@ class Mia:
         semantic = semantic_mapper or (
             PydanticBatchSemanticMapper(agent_model) if agent_model is not None else None
         )
+        jev_decider = None
+        if self.settings.jev_shadow_enabled:
+            if self.settings.openrouter_api_key is None:
+                raise ValueError(
+                    "MIA_JEV_SHADOW_ENABLED requires OPENROUTER_API_KEY"
+                )
+            jev_decider = OpenRouterJevClient(
+                api_key=self.settings.openrouter_api_key.get_secret_value(),
+                model=self.settings.jev_model,
+                max_concurrency=self.settings.jev_max_concurrency,
+            )
         discovery = PydanticDiscoveryAgent(agent_model, search) if agent_model is not None else None
         research = (
             PydanticResearchAgent(agent_model, search)
@@ -107,6 +119,8 @@ class Mia:
             search=search,
             research_agent=research,
             semantic_mapper=semantic,
+            jev_decider=jev_decider,
+            jev_routing_max_concurrency=self.settings.jev_max_concurrency,
         )
         self.store = WorkspaceView(catalogue, artifacts)
         self.deep_research = DeepResearchService(self.context)
