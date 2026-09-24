@@ -64,8 +64,8 @@ class ProductReuseService:
             )
         )
         if research_unintegrated:
-            evidence_id = (
-snapshot_evidence_id or pending_research.metadata.get("seedEvidenceArtifactId")
+            evidence_id = snapshot_evidence_id or pending_research.metadata.get(
+                "seedEvidenceArtifactId"
             )
             if (
                 isinstance(evidence_id, str)
@@ -78,9 +78,7 @@ snapshot_evidence_id or pending_research.metadata.get("seedEvidenceArtifactId")
                         snapshot.run_id if snapshot is not None else pending_research.run_id
                     ),
                     evidence_artifact_id=evidence_id,
-                    reviewed_mapping_artifact_id=(
-snapshot_reviewed_mapping_id
-                    ),
+                    reviewed_mapping_artifact_id=snapshot_reviewed_mapping_id,
                     pending_research_job_id=pending_research.id,
                 )
 
