@@ -46,6 +46,7 @@ class OpenPropertyDisposition(StrEnum):
 
 class OpenPropertyConflictKind(StrEnum):
     VALUE_CONFLICT = "value_conflict"
+    REDUNDANT_DUPLICATE = "redundant_duplicate"
     ID_SHORT_COLLISION = "id_short_collision"
     PROJECTION_CONTEXT_COLLISION = "projection_context_collision"
 
@@ -357,6 +358,27 @@ def detect_open_property_conflicts(
                     left.normalized_value_fingerprint
                     == right.normalized_value_fingerprint
                 ):
+                    identity = (
+                        OpenPropertyConflictKind.REDUNDANT_DUPLICATE.value,
+                        left.evidence_id,
+                        right.evidence_id,
+                    )
+                    if identity in seen:
+                        continue
+                    seen.add(identity)
+                    conflicts.append(
+                        OpenPropertyConflict(
+                            kind=OpenPropertyConflictKind.REDUNDANT_DUPLICATE,
+                            left_evidence_id=left.evidence_id,
+                            right_evidence_id=right.evidence_id,
+                            semantic_slot_key=slot_key,
+                            reason=(
+                                "Equivalent evidence resolves to the same semantic slot and "
+                                "wildcard instance path; promotion must deduplicate it before "
+                                "compilation."
+                            ),
+                        )
+                    )
                     continue
                 identity = (
                     OpenPropertyConflictKind.VALUE_CONFLICT.value,
