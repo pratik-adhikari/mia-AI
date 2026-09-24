@@ -180,19 +180,48 @@ class Mia:
         values = self._snapshot_values(snapshot)
 
         if active_product_run is not None:
-            checkpoint_status = self._snapshot_status(snapshot)
-            has_human_interrupt = self._snapshot_interrupt(snapshot) is not None
+            lease_live = self.context.catalogue.run_lease_is_live(active_product_run)
+            if (
+                request.refresh_requested
+                and active_product_run.status is RunStatus.RUNNING
+                and lease_live
+            ):
+                self.context.catalogue.request_thread_refresh(thread_id, user_id=user_id)
+                self.context.catalogue.assign_message_to_run(message.id, active_product_run.id)
+                if values:
+                    response = self._response_view.build(values, trace_offset=trace_offset)
+                else:
+                    response = AgentResponse(
+                        thread_id=active_product_run.thread_id,
+                        reply="Existing work for this product is still running.",
+                        status=AgentStatus.RUNNING,
+                        decision_summary="Source refresh queued behind the live product execution.",
+                    )
+                response = response.model_copy(
+                    update={
+                        "thread_id": active_product_run.thread_id,
+                        "reply": (
+                            "Source refresh is queued in this same chat and will start as soon as "
+                            "the current live execution safely returns.\n\n" + response.reply
+                        ),
+                        "decision_summary": (
+                            "Kept the live execution and queued refresh instead of terminating it."
+                        ),
+                    }
+                )
+                self._record_assistant(response, user_id=user_id)
+                return response
+
             should_restart = request.refresh_requested or (
-                active_product_run.status is RunStatus.RUNNING
-                and not has_human_interrupt
+                active_product_run.status is RunStatus.RUNNING and not lease_live
             )
             if should_restart:
                 reason = (
                     "Source refresh requested; restarted product work in the same chat."
                     if request.refresh_requested
                     else (
-                        "Recovered a RUNNING run with no human interrupt by restarting its "
-                        "workflow generation in the same chat."
+                        "Recovered a RUNNING run only after its execution lease expired, "
+                        "using a new workflow generation in the same chat."
                     )
                 )
                 response = await self._restart_product_work_in_same_thread(
@@ -206,6 +235,7 @@ class Mia:
                     trace_offset=trace_offset,
                     message_id=message.id,
                     reason=reason,
+                    allow_terminal=False,
                 )
                 if redirected_to_active_thread:
                     response = response.model_copy(
@@ -322,7 +352,31 @@ class Mia:
             self._record_failure(thread_id, error, user_id=user_id)
             raise
         self._assign_message_to_latest_run(message.id, thread_id, user_id=user_id)
-        response = self._response_view.build(dict(result), trace_offset=trace_offset)
+        result_values = dict(result)
+        thread = self.context.catalogue.get_thread(thread_id, user_id=user_id)
+        if (
+            thread is not None
+            and thread.pending_refresh_requested
+            and result_values.get("product_id")
+            and result_values.get("run_id")
+            and result_values.get("product_url")
+        ):
+            completed_run = self.context.catalogue.get_run(str(result_values["run_id"]))
+            if completed_run is not None:
+                return await self._restart_product_work_in_same_thread(
+                    thread_id=thread_id,
+                    user_id=user_id,
+                    active_run=completed_run,
+                    product_url=str(result_values["product_url"]),
+                    user_message="Refresh sources requested while previous product work was running.",
+                    refresh_requested=True,
+                    previous_values=result_values,
+                    trace_offset=trace_offset,
+                    message_id=None,
+                    reason="Queued source refresh started after the live execution returned.",
+                    allow_terminal=True,
+                )
+        response = self._response_view.build(result_values, trace_offset=trace_offset)
         self._record_assistant(response, user_id=user_id)
         return response
 
@@ -452,26 +506,57 @@ class Mia:
         refresh_requested: bool,
         previous_values: dict[str, Any],
         trace_offset: int,
-        message_id: str,
+        message_id: str | None,
         reason: str,
+        allow_terminal: bool,
     ) -> AgentResponse:
-        """Recover or refresh product work with a new checkpoint generation in the same chat."""
+        """Recover or refresh product work atomically in the same visible chat."""
 
-        self.context.catalogue.finish_run(
-            active_run.id,
-            RunStatus.INCOMPLETE,
-            error=reason,
-        )
-        self.context.catalogue.advance_thread_workflow_generation(
-            thread_id,
+        thread = self.context.catalogue.get_thread(thread_id, user_id=user_id)
+        if thread is None:
+            raise KeyError(thread_id)
+        durable = self.context.catalogue.get_product_work_snapshot(
+            active_run.product_id,
             user_id=user_id,
+        )
+        replacement = self.context.catalogue.claim_product_restart(
+            user_id=user_id,
+            product_id=active_run.product_id,
+            expected_run_id=active_run.id,
+            expected_generation=thread.workflow_generation,
+            reason=reason,
+            refresh_requested=refresh_requested,
+            require_expired_lease=(
+                active_run.status is RunStatus.RUNNING and not allow_terminal
+            ),
+            allow_terminal=allow_terminal,
         )
         update: dict[str, Any] = {
             **reset_product_state(product_url=product_url),
             "thread_id": thread_id,
             "user_id": user_id,
             "user_message": user_message,
+            "product_id": replacement.product_id,
+            "run_id": replacement.id,
             "refresh_requested": refresh_requested,
+            "reuse_mode": (
+                "refresh_sources" if refresh_requested else "continue_saved_work"
+            ),
+            "reuse_prior_work": bool(
+                not refresh_requested and durable is not None and durable.evidence_artifact_id
+            ),
+            "seeded_from_run_id": active_run.id,
+            "evidence_artifact_id": (
+                durable.evidence_artifact_id
+                if durable is not None and durable.evidence_artifact_id
+                else ""
+            ),
+            "reviewed_mapping_artifact_id": (
+                durable.reviewed_mapping_artifact_id
+                if durable is not None and durable.reviewed_mapping_artifact_id
+                else ""
+            ),
+            "product_snapshot_version": durable.version if durable is not None else 0,
             "discovery_history_json": previous_values.get("discovery_history_json", "[]"),
             "target_submodels": previous_values.get(
                 "target_submodels",
@@ -490,7 +575,8 @@ class Mia:
                 config=self._config(thread_id, user_id),
                 context=self.context,
             )
-        self._assign_message_to_latest_run(message_id, thread_id, user_id=user_id)
+        if message_id is not None:
+            self.context.catalogue.assign_message_to_run(message_id, replacement.id)
         response = self._response_view.build(dict(result), trace_offset=trace_offset)
         response = response.model_copy(
             update={

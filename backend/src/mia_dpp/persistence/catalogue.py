@@ -6,7 +6,7 @@ import hashlib
 import importlib.resources
 import sqlite3
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from threading import Lock
 from types import TracebackType
@@ -128,6 +128,7 @@ CREATE TABLE IF NOT EXISTS dpp_versions(
 """
 
 LOCAL_USER_ID = "local-development"
+RUN_EXECUTION_LEASE = timedelta(minutes=30)
 
 
 def _now() -> datetime:
@@ -448,6 +449,8 @@ class ProductCatalogue:
         if not self.user_owns_product(user_id, product_id):
             raise PermissionError("unknown product")
 
+        now = _now()
+        status = RunStatus.REUSED if reused_from_run_id else RunStatus.RUNNING
         run = ProductRun(
             id=_new_id("run"),
             product_id=product_id,
@@ -455,7 +458,12 @@ class ProductCatalogue:
             refresh_requested=refresh_requested,
             reused_from_run_id=reused_from_run_id,
             seeded_from_run_id=seeded_from_run_id,
-            status=RunStatus.REUSED if reused_from_run_id else RunStatus.RUNNING,
+            status=status,
+            execution_lease_token=(_new_id("lease") if status is RunStatus.RUNNING else None),
+            execution_lease_expires_at=(
+                now + RUN_EXECUTION_LEASE if status is RunStatus.RUNNING else None
+            ),
+            last_heartbeat_at=(now if status is RunStatus.RUNNING else None),
         )
         with self._connect() as db:
             if self._database_url is None:
@@ -495,7 +503,23 @@ class ProductCatalogue:
 
     def set_run_status(self, run_id: str, status: RunStatus) -> ProductRun:
         run = self._require(self.get_run(run_id), run_id)
-        run = run.model_copy(update={"status": status})
+        now = _now()
+        run = run.model_copy(
+            update={
+                "status": status,
+                "execution_lease_token": (
+                    run.execution_lease_token or _new_id("lease")
+                    if status is RunStatus.RUNNING
+                    else None
+                ),
+                "execution_lease_expires_at": (
+                    now + RUN_EXECUTION_LEASE if status is RunStatus.RUNNING else None
+                ),
+                "last_heartbeat_at": (
+                    now if status is RunStatus.RUNNING else run.last_heartbeat_at
+                ),
+            }
+        )
         self._execute(
             "UPDATE runs SET status=?, payload=? WHERE id=?",
             (status.value, run.model_dump_json(), run_id),
@@ -517,6 +541,8 @@ class ProductCatalogue:
                 "finished_at": _now(),
                 "metrics": metrics or run.metrics,
                 "error": error,
+                "execution_lease_token": None,
+                "execution_lease_expires_at": None,
             }
         )
         self._execute(
@@ -524,6 +550,163 @@ class ProductCatalogue:
             (status.value, run.model_dump_json(), run_id),
         )
         return run
+
+    def run_lease_is_live(
+        self,
+        run: ProductRun,
+        *,
+        now: datetime | None = None,
+    ) -> bool:
+        if run.status is not RunStatus.RUNNING or run.execution_lease_expires_at is None:
+            return False
+        return run.execution_lease_expires_at > (now or _now())
+
+    def renew_run_lease(self, run_id: str) -> ProductRun:
+        run = self._require(self.get_run(run_id), run_id)
+        if run.status is not RunStatus.RUNNING:
+            return run
+        now = _now()
+        renewed = run.model_copy(
+            update={
+                "execution_lease_token": run.execution_lease_token or _new_id("lease"),
+                "execution_lease_expires_at": now + RUN_EXECUTION_LEASE,
+                "last_heartbeat_at": now,
+            }
+        )
+        self._execute(
+            "UPDATE runs SET payload=? WHERE id=? AND status=?",
+            (renewed.model_dump_json(), run_id, RunStatus.RUNNING.value),
+        )
+        return renewed
+
+    def request_thread_refresh(self, thread_id: str, *, user_id: str) -> ThreadRecord:
+        thread = self._require(self.get_thread(thread_id, user_id=user_id), thread_id)
+        if thread.pending_refresh_requested:
+            return thread
+        now = _now()
+        updated = thread.model_copy(
+            update={"pending_refresh_requested": True, "updated_at": now}
+        )
+        self._execute(
+            "UPDATE threads SET payload=?,updated_at=? WHERE id=? AND user_id=?",
+            (updated.model_dump_json(), now.isoformat(), thread_id, user_id),
+        )
+        return updated
+
+    def claim_product_restart(
+        self,
+        *,
+        user_id: str,
+        product_id: str,
+        expected_run_id: str,
+        expected_generation: int,
+        reason: str,
+        refresh_requested: bool,
+        require_expired_lease: bool,
+        allow_terminal: bool = False,
+    ) -> ProductRun:
+        """Atomically replace one safely recoverable run inside the same visible chat."""
+
+        now = _now()
+        with self._connect() as db:
+            if self._database_url is None:
+                db.execute("BEGIN IMMEDIATE")
+            else:
+                db.execute("SELECT id FROM products WHERE id=? FOR UPDATE", (product_id,))
+            row = db.execute(
+                "SELECT runs.payload,threads.payload FROM runs "
+                "JOIN threads ON threads.id=runs.thread_id "
+                "WHERE runs.id=? AND runs.product_id=? AND threads.user_id=?",
+                (expected_run_id, product_id, user_id),
+            ).fetchone()
+            if row is None:
+                raise KeyError(expected_run_id)
+            previous = ProductRun.model_validate_json(row[0])
+            thread = ThreadRecord.model_validate_json(row[1])
+            if thread.workflow_generation != expected_generation:
+                raise ActiveProductRunExists(previous)
+            active_statuses = {RunStatus.RUNNING, RunStatus.AWAITING_HUMAN}
+            if previous.status not in active_statuses and not allow_terminal:
+                raise ActiveProductRunExists(previous)
+            if require_expired_lease and self.run_lease_is_live(previous, now=now):
+                raise ActiveProductRunExists(previous)
+
+            other_rows = db.execute(
+                "SELECT runs.payload FROM runs JOIN threads ON threads.id=runs.thread_id "
+                "WHERE runs.product_id=? AND threads.user_id=? AND runs.id<>? "
+                "AND runs.status IN (?,?)",
+                (
+                    product_id,
+                    user_id,
+                    previous.id,
+                    RunStatus.RUNNING.value,
+                    RunStatus.AWAITING_HUMAN.value,
+                ),
+            ).fetchall()
+            if other_rows:
+                raise ActiveProductRunExists(ProductRun.model_validate_json(other_rows[0][0]))
+
+            if previous.status in active_statuses:
+                closed = previous.model_copy(
+                    update={
+                        "status": RunStatus.INCOMPLETE,
+                        "finished_at": now,
+                        "error": reason,
+                        "execution_lease_token": None,
+                        "execution_lease_expires_at": None,
+                    }
+                )
+                db.execute(
+                    "UPDATE runs SET status=?,payload=? WHERE id=? AND status IN (?,?)",
+                    (
+                        closed.status.value,
+                        closed.model_dump_json(),
+                        closed.id,
+                        RunStatus.RUNNING.value,
+                        RunStatus.AWAITING_HUMAN.value,
+                    ),
+                )
+            advanced = thread.model_copy(
+                update={
+                    "workflow_generation": thread.workflow_generation + 1,
+                    "pending_refresh_requested": False,
+                    "updated_at": now,
+                }
+            )
+            db.execute(
+                "UPDATE threads SET payload=?,updated_at=? "
+                "WHERE id=? AND user_id=?",
+                (
+                    advanced.model_dump_json(),
+                    now.isoformat(),
+                    thread.id,
+                    user_id,
+                ),
+            )
+            replacement = ProductRun(
+                id=_new_id("run"),
+                product_id=product_id,
+                thread_id=thread.id,
+                refresh_requested=refresh_requested,
+                seeded_from_run_id=previous.id,
+                status=RunStatus.RUNNING,
+                execution_lease_token=_new_id("lease"),
+                execution_lease_expires_at=now + RUN_EXECUTION_LEASE,
+                last_heartbeat_at=now,
+            )
+            db.execute(
+                "INSERT INTO runs(id,product_id,thread_id,status,payload,started_at) "
+                "VALUES(?,?,?,?,?,?)",
+                (
+                    replacement.id,
+                    replacement.product_id,
+                    replacement.thread_id,
+                    replacement.status.value,
+                    replacement.model_dump_json(),
+                    replacement.started_at.isoformat(),
+                ),
+            )
+            return replacement
 
     def get_run(self, run_id: str) -> ProductRun | None:
         return self._one(ProductRun, "SELECT payload FROM runs WHERE id=?", (run_id,))
@@ -656,6 +839,9 @@ class ProductCatalogue:
         *,
         metadata: dict[str, Any] | None = None,
     ) -> RunEvent:
+        run = self.get_run(run_id)
+        if run is not None and run.status is RunStatus.RUNNING:
+            self.renew_run_lease(run_id)
         event = RunEvent(
             id=_new_id("event"),
             run_id=run_id,

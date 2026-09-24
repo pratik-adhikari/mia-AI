@@ -312,3 +312,25 @@ increments and becomes part of the internal LangGraph checkpoint/Agent Server th
 
 This gives the recovered workflow a clean checkpoint namespace without deleting the old checkpoint,
 while the user continues seeing one uninterrupted chat history.
+
+
+## Execution leases and safe same-chat recovery
+
+A database run with status `RUNNING` is not automatically stale. It may be executing normally
+between LangGraph nodes and have no human interrupt.
+
+Every live run therefore carries a renewable execution lease. A same-product request follows these
+rules:
+
+- `AWAITING_HUMAN` always joins the existing interrupt;
+- `RUNNING` with an unexpired lease joins the existing work and never terminates it;
+- `RUNNING` with an expired lease may be recovered;
+- an explicit refresh arriving during a live lease is queued on the same thread instead of killing
+  the executor.
+
+Recovery is claimed transactionally under the product lock. The transaction verifies the expected
+active run and thread generation, closes the stale/safely-paused run, advances the internal workflow
+generation, clears a queued refresh, and reserves the replacement run. Only after that atomic claim
+does LangGraph start the replacement checkpoint.
+
+This prevents the earlier unsafe inference that "RUNNING + no human interrupt = zombie".

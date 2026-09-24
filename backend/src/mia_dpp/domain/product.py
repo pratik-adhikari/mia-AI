@@ -48,6 +48,7 @@ class ThreadRecord(WireModel):
     last_message_at: AwareDatetime | None = None
     deleted_at: AwareDatetime | None = None
     workflow_generation: int = Field(default=0, ge=0)
+    pending_refresh_requested: bool = False
 
 
 class ProductIdentifierRole(StrEnum):
@@ -95,6 +96,9 @@ class ProductRun(WireModel):
     seeded_from_run_id: str | None = None
     started_at: AwareDatetime = Field(default_factory=utc_now)
     finished_at: AwareDatetime | None = None
+    execution_lease_token: str | None = None
+    execution_lease_expires_at: AwareDatetime | None = None
+    last_heartbeat_at: AwareDatetime | None = None
     error: str | None = None
     metrics: dict[str, int | float | str | bool | None] = Field(default_factory=dict)
 
