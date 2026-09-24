@@ -678,12 +678,7 @@ class ProductCatalogue:
         *,
         expected_version: int | None = None,
     ) -> ProductWorkSnapshot:
-        """Optimistically replace the authoritative product snapshot.
-
-        The caller may have read a snapshot, performed expensive mapping/research work, and then
-        attempted to save after another workflow already advanced the same product. A conditional
-        version write prevents the older workflow from silently erasing the newer durable state.
-        """
+        """Atomically advance the current snapshot and append its immutable revision."""
 
         if not self.user_owns_product(snapshot.user_id, snapshot.product_id):
             raise PermissionError("unknown product")
@@ -698,15 +693,57 @@ class ProductCatalogue:
                 raise ProductSnapshotConflict(
                     f"expected snapshot version {expected_version}, but no snapshot exists"
                 )
+            stored = snapshot.model_copy(update={"version": 1, "updated_at": now})
+            expected = 0
+        else:
+            expected = existing.version if expected_version is None else expected_version
+            if expected != existing.version:
+                raise ProductSnapshotConflict(
+                    f"snapshot changed from version {expected} to {existing.version}"
+                )
             stored = snapshot.model_copy(
                 update={
-                    "version": 1,
+                    "version": existing.version + 1,
+                    "created_at": existing.created_at,
                     "updated_at": now,
                 }
             )
-            inserted = self._execute(
-                "INSERT INTO product_work_snapshots(user_id,product_id,version,payload,updated_at) "
-                "VALUES(?,?,?,?,?) ON CONFLICT(user_id,product_id) DO NOTHING",
+
+        with self._connect() as db:
+            if existing is None:
+                changed = db.execute(
+                    "INSERT INTO product_work_snapshots("
+                    "user_id,product_id,version,payload,updated_at"
+                    ") VALUES(?,?,?,?,?) ON CONFLICT(user_id,product_id) DO NOTHING",
+                    (
+                        stored.user_id,
+                        stored.product_id,
+                        stored.version,
+                        stored.model_dump_json(),
+                        stored.updated_at.isoformat(),
+                    ),
+                ).rowcount
+            else:
+                changed = db.execute(
+                    "UPDATE product_work_snapshots SET version=?,payload=?,updated_at=? "
+                    "WHERE user_id=? AND product_id=? AND version=?",
+                    (
+                        stored.version,
+                        stored.model_dump_json(),
+                        stored.updated_at.isoformat(),
+                        stored.user_id,
+                        stored.product_id,
+                        expected,
+                    ),
+                ).rowcount
+            if changed != 1:
+                raise ProductSnapshotConflict(
+                    "another workflow updated the product snapshot before this write completed"
+                )
+            db.execute(
+                "INSERT INTO product_work_snapshot_history("
+                "user_id,product_id,version,payload,created_at"
+                ") VALUES(?,?,?,?,?)",
                 (
                     stored.user_id,
                     stored.product_id,
@@ -715,41 +752,24 @@ class ProductCatalogue:
                     stored.updated_at.isoformat(),
                 ),
             )
-            if inserted != 1:
-                raise ProductSnapshotConflict(
-                    "another workflow created the product snapshot first"
-                )
-            return stored
-
-        expected = existing.version if expected_version is None else expected_version
-        if expected != existing.version:
-            raise ProductSnapshotConflict(
-                f"snapshot changed from version {expected} to {existing.version}"
-            )
-        stored = snapshot.model_copy(
-            update={
-                "version": existing.version + 1,
-                "created_at": existing.created_at,
-                "updated_at": now,
-            }
-        )
-        updated = self._execute(
-            "UPDATE product_work_snapshots SET version=?,payload=?,updated_at=? "
-            "WHERE user_id=? AND product_id=? AND version=?",
-            (
-                stored.version,
-                stored.model_dump_json(),
-                stored.updated_at.isoformat(),
-                stored.user_id,
-                stored.product_id,
-                expected,
-            ),
-        )
-        if updated != 1:
-            raise ProductSnapshotConflict(
-                "another workflow updated the product snapshot before this write completed"
-            )
         return stored
+
+    def list_product_work_snapshot_history(
+        self,
+        product_id: str,
+        *,
+        user_id: str = LOCAL_USER_ID,
+    ) -> tuple[ProductWorkSnapshot, ...]:
+        """Return immutable product-state revisions oldest first for audit/recovery."""
+
+        if not self.user_owns_product(user_id, product_id):
+            return ()
+        return self._many(
+            ProductWorkSnapshot,
+            "SELECT payload FROM product_work_snapshot_history "
+            "WHERE user_id=? AND product_id=? ORDER BY version",
+            (user_id, product_id),
+        )
 
     def add_human_review(self, review: HumanReviewRecord) -> HumanReviewRecord:
         """Append an immutable human decision; existing records are never updated."""

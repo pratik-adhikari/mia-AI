@@ -49,7 +49,16 @@ export default function ProductDetailPage() {
     return <main className="min-h-screen bg-mist p-8 text-sm text-muted">Loading product…</main>;
   }
 
-  const { product, runs, dppVersions, artifacts, snapshot, humanReviews, identifiers } = detail;
+  const {
+    product,
+    runs,
+    dppVersions,
+    artifacts,
+    snapshot,
+    snapshotHistory,
+    humanReviews,
+    identifiers,
+  } = detail;
   const title = product.name ?? product.manufacturerProductId ?? "Unnamed product";
   const resumableRun = runs.find((run) => run.status === "running" || run.status === "awaiting_human");
 
@@ -150,6 +159,34 @@ export default function ProductDetailPage() {
               <div><p className="text-muted">Human review pending</p><p className="mt-1 text-ink">{snapshot.humanReviewPending ? "Yes" : "No"}</p></div>
             </div>
             {snapshot.lastError && <p className="mt-4 text-xs text-red-700">{snapshot.lastError}</p>}
+          </section>
+        )}
+
+        {snapshotHistory.length > 0 && (
+          <section className="mt-8 rounded-2xl border border-hairline bg-paper p-6">
+            <h2 className="text-lg font-semibold text-ink">Saved state history</h2>
+            <div className="mt-4 overflow-x-auto">
+              <table className="w-full min-w-[620px] text-left text-sm">
+                <thead className="text-xs uppercase tracking-wide text-muted">
+                  <tr>
+                    <th className="pb-3 font-medium">Version</th>
+                    <th className="pb-3 font-medium">Stage</th>
+                    <th className="pb-3 font-medium">Run</th>
+                    <th className="pb-3 font-medium">Updated</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-hairline">
+                  {[...snapshotHistory].reverse().map((item) => (
+                    <tr key={item.id + "-" + item.version}>
+                      <td className="py-3 font-mono text-xs text-ink">v{item.version}</td>
+                      <td className="py-3 text-ink">{item.workflowStage.replaceAll("_", " ")}</td>
+                      <td className="py-3 font-mono text-xs text-muted">{item.runId}</td>
+                      <td className="py-3 text-muted">{time(item.updatedAt)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           </section>
         )}
 

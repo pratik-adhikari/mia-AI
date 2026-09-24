@@ -230,3 +230,22 @@ to identity keys.
 The identifier registry is the basis for future cross-URL reconciliation. It intentionally stores
 and queries identity keys before implementing automatic product-record merging, so duplicate
 histories can be detected without performing unsafe merges.
+
+
+## Snapshot revisions and atomic pointer updates
+
+The current `ProductWorkSnapshot` is optimized for fast continuation, but a version counter alone is
+not enough for recovery/audit if old payloads disappear.
+
+Every successful snapshot write now performs two database changes in the same transaction:
+
+1. conditionally advance the current snapshot using optimistic version checking;
+2. append the exact new payload to immutable `product_work_snapshot_history`.
+
+If either write fails, neither is committed. A stale workflow therefore cannot create a misleading
+history revision or overwrite current state.
+
+Large artifacts are still persisted before the snapshot pointer moves. If a process crashes after an
+artifact is written but before the snapshot transaction commits, that artifact may be orphaned, but
+the previous snapshot remains authoritative and resumable. This is deliberate: an orphan artifact is
+safer than a snapshot pointing to incomplete state.

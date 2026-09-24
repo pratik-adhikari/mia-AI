@@ -311,6 +311,9 @@ def test_stale_snapshot_write_cannot_overwrite_newer_product_state(tmp_path: Pat
         )
 
     assert catalogue.get_product_work_snapshot(product.id, user_id="user-a") == newer
+    history = catalogue.list_product_work_snapshot_history(product.id, user_id="user-a")
+    assert [item.version for item in history] == [1, 2]
+    assert history[-1] == newer
 
 
 

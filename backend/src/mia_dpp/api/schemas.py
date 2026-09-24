@@ -49,6 +49,7 @@ class ProductDetail(WireModel):
     dpp_versions: tuple[DppVersion, ...] = ()
     artifacts: tuple[StoredArtifact, ...] = ()
     snapshot: ProductWorkSnapshot | None = None
+    snapshot_history: tuple[ProductWorkSnapshot, ...] = ()
     human_reviews: tuple[HumanReviewRecord, ...] = ()
     identifiers: tuple[ProductIdentifier, ...] = ()
 

@@ -578,6 +578,7 @@ export interface ProductDetail {
   dppVersions: DppVersionRecord[];
   artifacts: StoredArtifact[];
   snapshot: ProductWorkSnapshot | null;
+  snapshotHistory: ProductWorkSnapshot[];
   humanReviews: HumanReviewRecord[];
   identifiers: ProductIdentifier[];
 }
