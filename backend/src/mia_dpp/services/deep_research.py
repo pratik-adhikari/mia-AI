@@ -79,28 +79,34 @@ class DeepResearchService:
                 raise KeyError(job_id)
             return existing
 
-        work = self._workspace(claimed)
+        work: RunWorkspace | None = None
         iteration = int(claimed.metadata.get("iteration", 0)) + 1
         batch_started = perf_counter()
-        work.event(
-            "research.batch.started",
-            f"Deep research batch {iteration} started.",
-            metadata={"jobId": claimed.id, "iteration": iteration},
-        )
         try:
+            work = self._workspace(claimed)
+            work.event(
+                "research.batch.started",
+                f"Deep research batch {iteration} started.",
+                metadata={"jobId": claimed.id, "iteration": iteration},
+            )
             metadata, complete = await self._process_batch(claimed, work, iteration=iteration)
         except Exception as error:
             detail = str(error)[:2000] or type(error).__name__
-            work.event(
-                "research.failed",
-                "Deep research batch failed and remains retryable.",
-                metadata={
-                    "jobId": claimed.id,
-                    "iteration": iteration,
-                    "durationMs": round((perf_counter() - batch_started) * 1000, 2),
-                    "error": detail,
-                },
-            )
+            if work is not None:
+                try:
+                    work.event(
+                        "research.failed",
+                        "Deep research batch failed and remains retryable.",
+                        metadata={
+                            "jobId": claimed.id,
+                            "iteration": iteration,
+                            "durationMs": round((perf_counter() - batch_started) * 1000, 2),
+                            "error": detail,
+                        },
+                    )
+                except Exception:
+                    # Recovery may have fenced the old run. Job terminalization must still happen.
+                    pass
             self._context.catalogue.finish_background_job(
                 claimed.id,
                 user_id=user_id,
@@ -144,6 +150,13 @@ class DeepResearchService:
                 metadata={**metadata, "phase": "queued"},
             )
 
+        # If recovery superseded this job while the batch was running, do not publish job metadata
+        # through the fenced old workspace. The replacement job remains the durable continuation.
+        if finished.status in {
+            BackgroundJobStatus.CANCELLED,
+            BackgroundJobStatus.FAILED,
+        }:
+            return finished
         work.put_model(
             "background/deep-crawl-job.json",
             finished,

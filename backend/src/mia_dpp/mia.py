@@ -306,6 +306,21 @@ class Mia:
                     "status": "running",
                 }
             )
+        invocation_thread = self.context.catalogue.get_thread(thread_id, user_id=user_id)
+        invocation_generation = (
+            invocation_thread.workflow_generation if invocation_thread is not None else 0
+        )
+        invocation_run = (
+            self.context.catalogue.get_run(str(values["run_id"]))
+            if values.get("run_id")
+            else self.context.catalogue.run_for_thread_generation(
+                thread_id,
+                invocation_generation,
+                user_id=user_id,
+            )
+        )
+        invocation_run_id = invocation_run.id if invocation_run is not None else None
+
         if not self.configured and "http" in request.message.casefold():
             response = AgentResponse(
                 thread_id=thread_id,
@@ -348,17 +363,19 @@ class Mia:
             self._record_assistant(response, user_id=user_id)
             return response
         except Exception as error:
-            failing_run_id = str(values.get("run_id")) if values.get("run_id") else None
-            self._assign_message_to_latest_run(message.id, thread_id, user_id=user_id)
-            self._record_failure(
-                thread_id,
-                error,
-                user_id=user_id,
-                run_id=failing_run_id,
-            )
+            if invocation_run_id is not None:
+                self.context.catalogue.assign_message_to_run(message.id, invocation_run_id)
+                self._record_failure(
+                    thread_id,
+                    error,
+                    user_id=user_id,
+                    run_id=invocation_run_id,
+                )
             raise
-        self._assign_message_to_latest_run(message.id, thread_id, user_id=user_id)
         result_values = dict(result)
+        result_run_id = result_values.get("run_id")
+        if result_run_id:
+            self.context.catalogue.assign_message_to_run(message.id, str(result_run_id))
         thread = self.context.catalogue.get_thread(thread_id, user_id=user_id)
         if (
             thread is not None

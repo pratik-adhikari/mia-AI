@@ -2,7 +2,9 @@ import pytest
 """Durable product identity/history behavior independent of the agent runtime."""
 
 from concurrent.futures import ThreadPoolExecutor
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from threading import Event
 
 from mia_dpp.domain.product import (
     BackgroundJobStatus,
@@ -424,3 +426,231 @@ def test_artifact_access_is_scoped_to_the_producing_thread_owner(tmp_path: Path)
 
     assert catalogue.get_artifact(artifact.id, user_id="user-a") == artifact
     assert catalogue.get_artifact(artifact.id, user_id="user-b") is None
+
+
+
+@pytest.mark.parametrize("mutation", ("snapshot", "finish", "dpp", "artifact"))
+def test_recovery_wins_lock_before_stale_authoritative_mutation(
+    tmp_path: Path,
+    mutation: str,
+) -> None:
+    catalogue = ProductCatalogue(tmp_path / f"race-{mutation}.sqlite3")
+    catalogue.get_or_create_thread(f"thread-race-{mutation}", "user-a")
+    product, _ = catalogue.get_or_create_product(
+        f"https://example.com/race-{mutation}",
+        user_id="user-a",
+    )
+    old = catalogue.start_run(product.id, f"thread-race-{mutation}", user_id="user-a")
+    initial_snapshot = None
+    if mutation == "snapshot":
+        initial_snapshot = catalogue.save_product_work_snapshot(
+            ProductWorkSnapshot(
+                id=f"snapshot-race-{mutation}",
+                user_id="user-a",
+                product_id=product.id,
+                run_id=old.id,
+                thread_id=old.thread_id,
+                workflow_stage=ProductWorkStage.EVIDENCE,
+            )
+        )
+    expired = old.model_copy(
+        update={"execution_lease_expires_at": datetime.now(UTC) - timedelta(seconds=1)}
+    )
+    catalogue._execute(
+        "UPDATE runs SET payload=? WHERE id=?",
+        (expired.model_dump_json(), old.id),
+    )
+
+    recovery_has_lock = Event()
+    allow_recovery = Event()
+    original_lease_check = catalogue.run_lease_is_live
+
+    def paused_lease_check(run, *, now=None):
+        recovery_has_lock.set()
+        assert allow_recovery.wait(timeout=5)
+        return original_lease_check(run, now=now)
+
+    catalogue.run_lease_is_live = paused_lease_check  # type: ignore[method-assign]
+
+    def recover():
+        return catalogue.claim_product_restart(
+            user_id="user-a",
+            product_id=product.id,
+            expected_run_id=old.id,
+            expected_generation=0,
+            reason="race recovery",
+            refresh_requested=False,
+            require_expired_lease=True,
+        )
+
+    def stale_mutation():
+        if mutation == "snapshot":
+            assert initial_snapshot is not None
+            return catalogue.save_product_work_snapshot(
+                initial_snapshot.model_copy(
+                    update={"workflow_stage": ProductWorkStage.MAPPING}
+                ),
+                expected_version=initial_snapshot.version,
+            )
+        if mutation == "finish":
+            return catalogue.finish_run(old.id, RunStatus.COMPLETED)
+        if mutation == "dpp":
+            return catalogue.create_dpp_version(
+                product.id,
+                old.id,
+                dpp_artifact_id="dpp-race",
+                deployable=True,
+            )
+        return catalogue.register_artifact(
+            StoredArtifact(
+                id="artifact-race",
+                key="evidence/race.json",
+                content_type="application/json",
+                sha256="0" * 64,
+                size=2,
+                storage_uri="race/evidence.json",
+                product_id=product.id,
+                run_id=old.id,
+            )
+        )
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        recovery_future = pool.submit(recover)
+        assert recovery_has_lock.wait(timeout=5)
+        stale_future = pool.submit(stale_mutation)
+        allow_recovery.set()
+        replacement = recovery_future.result(timeout=5)
+        with pytest.raises(RuntimeError, match="workflow generation"):
+            stale_future.result(timeout=5)
+
+    assert catalogue.get_run(replacement.id).status is RunStatus.RUNNING
+    if mutation == "snapshot":
+        assert initial_snapshot is not None
+        assert catalogue.get_product_work_snapshot(
+            product.id,
+            user_id="user-a",
+        ) == initial_snapshot
+    elif mutation == "dpp":
+        assert catalogue.list_dpp_versions(product.id, user_id="user-a") == ()
+    elif mutation == "artifact":
+        assert catalogue.get_artifact("artifact-race", user_id="user-a") is None
+
+
+def test_recovery_supersedes_and_requeues_background_research(tmp_path: Path) -> None:
+    catalogue = ProductCatalogue(tmp_path / "research-recovery.sqlite3")
+    catalogue.get_or_create_thread("thread-research-recovery", "user-a")
+    product, _ = catalogue.get_or_create_product(
+        "https://example.com/research-recovery",
+        user_id="user-a",
+    )
+    old = catalogue.start_run(product.id, "thread-research-recovery", user_id="user-a")
+    job = catalogue.create_background_job(
+        user_id="user-a",
+        thread_id=old.thread_id,
+        product_id=product.id,
+        run_id=old.id,
+        metadata={
+            "seedEvidenceArtifactId": "evidence-seed",
+            "sourceGeneration": 3,
+            "phase": "queued",
+        },
+    )
+    claimed = catalogue.claim_background_job(job.id, user_id="user-a")
+    assert claimed is not None and claimed.status is BackgroundJobStatus.RUNNING
+
+    expired = old.model_copy(
+        update={"execution_lease_expires_at": datetime.now(UTC) - timedelta(seconds=1)}
+    )
+    catalogue._execute(
+        "UPDATE runs SET payload=? WHERE id=?",
+        (expired.model_dump_json(), old.id),
+    )
+    replacement = catalogue.claim_product_restart(
+        user_id="user-a",
+        product_id=product.id,
+        expected_run_id=old.id,
+        expected_generation=0,
+        reason="recover foreground",
+        refresh_requested=False,
+        require_expired_lease=True,
+    )
+
+    old_job = catalogue.get_background_job(job.id, user_id="user-a")
+    jobs = catalogue.list_background_jobs(user_id="user-a", thread_id=old.thread_id)
+    successor = next(item for item in jobs if item.run_id == replacement.id)
+
+    assert old_job is not None and old_job.status is BackgroundJobStatus.CANCELLED
+    assert successor.status is BackgroundJobStatus.QUEUED
+    assert successor.metadata["sourceGeneration"] == 3
+    assert successor.metadata["supersededJobId"] == job.id
+
+
+
+def test_stale_snapshot_write_commits_before_recovery_when_it_holds_lock_first(
+    tmp_path: Path,
+) -> None:
+    catalogue = ProductCatalogue(tmp_path / "race-old-first.sqlite3")
+    catalogue.get_or_create_thread("thread-race-old-first", "user-a")
+    product, _ = catalogue.get_or_create_product(
+        "https://example.com/race-old-first",
+        user_id="user-a",
+    )
+    old = catalogue.start_run(product.id, "thread-race-old-first", user_id="user-a")
+    first = catalogue.save_product_work_snapshot(
+        ProductWorkSnapshot(
+            id="snapshot-race-old-first",
+            user_id="user-a",
+            product_id=product.id,
+            run_id=old.id,
+            thread_id=old.thread_id,
+            workflow_stage=ProductWorkStage.EVIDENCE,
+        )
+    )
+    expired = old.model_copy(
+        update={"execution_lease_expires_at": datetime.now(UTC) - timedelta(seconds=1)}
+    )
+    catalogue._execute(
+        "UPDATE runs SET payload=? WHERE id=?",
+        (expired.model_dump_json(), old.id),
+    )
+
+    writer_has_lock = Event()
+    allow_writer = Event()
+    original_lock = catalogue._lock_current_run
+
+    def paused_lock(db, run_id):
+        run, thread = original_lock(db, run_id)
+        writer_has_lock.set()
+        assert allow_writer.wait(timeout=5)
+        return run, thread
+
+    catalogue._lock_current_run = paused_lock  # type: ignore[method-assign]
+
+    def write_snapshot():
+        return catalogue.save_product_work_snapshot(
+            first.model_copy(update={"workflow_stage": ProductWorkStage.MAPPING}),
+            expected_version=first.version,
+        )
+
+    def recover():
+        return catalogue.claim_product_restart(
+            user_id="user-a",
+            product_id=product.id,
+            expected_run_id=old.id,
+            expected_generation=0,
+            reason="race recovery",
+            refresh_requested=False,
+            require_expired_lease=True,
+        )
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        write_future = pool.submit(write_snapshot)
+        assert writer_has_lock.wait(timeout=5)
+        recovery_future = pool.submit(recover)
+        allow_writer.set()
+        written = write_future.result(timeout=5)
+        replacement = recovery_future.result(timeout=5)
+
+    assert written.version == 2
+    assert catalogue.get_product_work_snapshot(product.id, user_id="user-a") == written
+    assert catalogue.get_run(replacement.id).status is RunStatus.RUNNING

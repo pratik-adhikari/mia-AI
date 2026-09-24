@@ -456,3 +456,22 @@ The lease is still event-renewed rather than a separate heartbeat. With fencing 
 Source freshness is tracked separately from workflow execution generation. A fresh acquisition or explicit Refresh starts a new source generation; continuation/recovery keeps the existing one.
 
 Every background research job records the source generation that seeded it. Reuse/integration only selects completed research from the snapshot's current source generation, so a slow pre-refresh job cannot become current merely because it completed later.
+
+
+## Atomic generation fencing
+
+Workflow-generation validation and authoritative database mutation now share the same product-level serialization transaction used by recovery. SQLite uses BEGIN IMMEDIATE; PostgreSQL locks the product row with FOR UPDATE. The run and thread are reloaded while that lock is held, generation is checked, and only then may the mutation commit.
+
+This gives exactly two legal race outcomes: an old mutation acquires the lock first and commits before recovery, or recovery acquires it first, advances the generation, and the old mutation is rejected. Recovery can no longer commit and then be followed by a stale authoritative database write.
+
+Artifact bytes are intentionally uploaded before catalogue registration. Registration itself is atomically fenced. If recovery wins during a slow upload, the uploaded bytes may be orphaned in storage, but stale metadata is not registered and those bytes never become authoritative/reachable workflow state.
+
+## Recovery-safe background research
+
+For this MVP, deep research follows foreground workflow ownership while retaining source-generation lineage. When recovery replaces a run without source refresh, queued, running, or failed research owned by the old run is cancelled as superseded and an equivalent queued job is created for the replacement run with the same source-generation metadata. Refresh cancels old research without requeueing it because the new source generation must discover its own research work.
+
+Background-job state transitions are monotonic around recovery: a worker cannot overwrite a job that recovery already cancelled. Workspace construction is inside the protected error path, and fenced event logging cannot prevent job terminalization.
+
+## Failure attribution for fresh invocations
+
+The normal message path no longer treats an unknown failing execution as the latest active run. Before graph invocation it captures the thread workflow generation and any run already known for that generation. Only that exact run may be failed on exception. If a fresh graph creates a run and later loses a recovery race before its run identity is returned, the error path leaves run status untouched rather than risking the replacement run. On success, message ownership is assigned from the run ID returned by the graph.

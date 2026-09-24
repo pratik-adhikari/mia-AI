@@ -559,31 +559,34 @@ class ProductCatalogue:
         return run
 
     def set_run_status(self, run_id: str, status: RunStatus) -> ProductRun:
-        run = self.assert_run_generation(run_id)
-        if run.status not in {RunStatus.RUNNING, RunStatus.AWAITING_HUMAN}:
-            raise RuntimeError(f"run {run_id} is no longer mutable")
         now = _now()
-        run = run.model_copy(
-            update={
-                "status": status,
-                "execution_lease_token": (
-                    run.execution_lease_token or _new_id("lease")
-                    if status is RunStatus.RUNNING
-                    else None
-                ),
-                "execution_lease_expires_at": (
-                    now + RUN_EXECUTION_LEASE if status is RunStatus.RUNNING else None
-                ),
-                "last_heartbeat_at": (
-                    now if status is RunStatus.RUNNING else run.last_heartbeat_at
-                ),
-            }
-        )
-        self._execute(
-            "UPDATE runs SET status=?, payload=? WHERE id=?",
-            (status.value, run.model_dump_json(), run_id),
-        )
-        return run
+        with self._connect() as db:
+            run, _ = self._lock_current_run(db, run_id)
+            if run.status not in {RunStatus.RUNNING, RunStatus.AWAITING_HUMAN}:
+                raise RuntimeError(f"run {run_id} is no longer mutable")
+            updated = run.model_copy(
+                update={
+                    "status": status,
+                    "execution_lease_token": (
+                        run.execution_lease_token or _new_id("lease")
+                        if status is RunStatus.RUNNING
+                        else None
+                    ),
+                    "execution_lease_expires_at": (
+                        now + RUN_EXECUTION_LEASE if status is RunStatus.RUNNING else None
+                    ),
+                    "last_heartbeat_at": (
+                        now if status is RunStatus.RUNNING else run.last_heartbeat_at
+                    ),
+                }
+            )
+            changed = db.execute(
+                "UPDATE runs SET status=?,payload=? WHERE id=? AND status=?",
+                (status.value, updated.model_dump_json(), run_id, run.status.value),
+            ).rowcount
+            if changed != 1:
+                raise RuntimeError(f"run {run_id} changed while status was being updated")
+        return updated
 
     def finish_run(
         self,
@@ -593,24 +596,28 @@ class ProductCatalogue:
         metrics: dict[str, int | float | str | bool | None] | None = None,
         error: str | None = None,
     ) -> ProductRun:
-        run = self.assert_run_generation(run_id)
-        if run.status not in {RunStatus.RUNNING, RunStatus.AWAITING_HUMAN, RunStatus.REUSED}:
-            raise RuntimeError(f"run {run_id} is no longer mutable")
-        run = run.model_copy(
-            update={
-                "status": status,
-                "finished_at": _now(),
-                "metrics": metrics or run.metrics,
-                "error": error,
-                "execution_lease_token": None,
-                "execution_lease_expires_at": None,
-            }
-        )
-        self._execute(
-            "UPDATE runs SET status=?, payload=? WHERE id=?",
-            (status.value, run.model_dump_json(), run_id),
-        )
-        return run
+        now = _now()
+        with self._connect() as db:
+            run, _ = self._lock_current_run(db, run_id)
+            if run.status not in {RunStatus.RUNNING, RunStatus.AWAITING_HUMAN, RunStatus.REUSED}:
+                raise RuntimeError(f"run {run_id} is no longer mutable")
+            finished = run.model_copy(
+                update={
+                    "status": status,
+                    "finished_at": now,
+                    "metrics": metrics or run.metrics,
+                    "error": error,
+                    "execution_lease_token": None,
+                    "execution_lease_expires_at": None,
+                }
+            )
+            changed = db.execute(
+                "UPDATE runs SET status=?,payload=? WHERE id=? AND status=?",
+                (status.value, finished.model_dump_json(), run_id, run.status.value),
+            ).rowcount
+            if changed != 1:
+                raise RuntimeError(f"run {run_id} changed while it was being finalized")
+        return finished
 
     def run_lease_is_live(
         self,
@@ -623,21 +630,24 @@ class ProductCatalogue:
         return run.execution_lease_expires_at > (now or _now())
 
     def renew_run_lease(self, run_id: str) -> ProductRun:
-        run = self.assert_run_generation(run_id)
-        if run.status is not RunStatus.RUNNING:
-            return run
         now = _now()
-        renewed = run.model_copy(
-            update={
-                "execution_lease_token": run.execution_lease_token or _new_id("lease"),
-                "execution_lease_expires_at": now + RUN_EXECUTION_LEASE,
-                "last_heartbeat_at": now,
-            }
-        )
-        self._execute(
-            "UPDATE runs SET payload=? WHERE id=? AND status=?",
-            (renewed.model_dump_json(), run_id, RunStatus.RUNNING.value),
-        )
+        with self._connect() as db:
+            run, _ = self._lock_current_run(db, run_id)
+            if run.status is not RunStatus.RUNNING:
+                return run
+            renewed = run.model_copy(
+                update={
+                    "execution_lease_token": run.execution_lease_token or _new_id("lease"),
+                    "execution_lease_expires_at": now + RUN_EXECUTION_LEASE,
+                    "last_heartbeat_at": now,
+                }
+            )
+            changed = db.execute(
+                "UPDATE runs SET payload=? WHERE id=? AND status=?",
+                (renewed.model_dump_json(), run_id, RunStatus.RUNNING.value),
+            ).rowcount
+            if changed != 1:
+                raise RuntimeError(f"run {run_id} changed while its lease was renewed")
         return renewed
 
     def request_thread_refresh(self, thread_id: str, *, user_id: str) -> ThreadRecord:
@@ -756,6 +766,64 @@ class ProductCatalogue:
                 execution_lease_expires_at=now + RUN_EXECUTION_LEASE,
                 last_heartbeat_at=now,
             )
+            job_rows = db.execute(
+                "SELECT payload FROM background_jobs WHERE user_id=? AND run_id=? "
+                "AND status IN (?,?,?)",
+                (
+                    user_id,
+                    previous.id,
+                    BackgroundJobStatus.QUEUED.value,
+                    BackgroundJobStatus.RUNNING.value,
+                    BackgroundJobStatus.FAILED.value,
+                ),
+            ).fetchall()
+            successor_jobs: list[BackgroundJob] = []
+            for job_row in job_rows:
+                old_job = BackgroundJob.model_validate_json(job_row[0])
+                cancelled = old_job.model_copy(
+                    update={
+                        "status": BackgroundJobStatus.CANCELLED,
+                        "updated_at": now,
+                        "completed_at": now,
+                        "error": "Superseded by product workflow recovery.",
+                        "metadata": {
+                            **old_job.metadata,
+                            "phase": "superseded",
+                            "supersededByRunId": replacement.id,
+                        },
+                    }
+                )
+                db.execute(
+                    "UPDATE background_jobs SET status=?,payload=?,updated_at=? "
+                    "WHERE id=? AND user_id=? AND status IN (?,?,?)",
+                    (
+                        BackgroundJobStatus.CANCELLED.value,
+                        cancelled.model_dump_json(),
+                        now.isoformat(),
+                        old_job.id,
+                        user_id,
+                        BackgroundJobStatus.QUEUED.value,
+                        BackgroundJobStatus.RUNNING.value,
+                        BackgroundJobStatus.FAILED.value,
+                    ),
+                )
+                if not refresh_requested:
+                    successor_jobs.append(
+                        BackgroundJob(
+                            id=_new_id("job"),
+                            user_id=user_id,
+                            thread_id=thread.id,
+                            product_id=product_id,
+                            run_id=replacement.id,
+                            job_type=old_job.job_type,
+                            metadata={
+                                **old_job.metadata,
+                                "phase": "queued",
+                                "supersededJobId": old_job.id,
+                            },
+                        )
+                    )
+
             db.execute(
                 "INSERT INTO runs(id,product_id,thread_id,status,payload,started_at) "
                 "VALUES(?,?,?,?,?,?)",
@@ -768,7 +836,61 @@ class ProductCatalogue:
                     replacement.started_at.isoformat(),
                 ),
             )
+            for job in successor_jobs:
+                db.execute(
+                    "INSERT INTO background_jobs"
+                    "(id,user_id,thread_id,product_id,run_id,job_type,status,payload,"
+                    "created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?) "
+                    "ON CONFLICT(run_id,job_type) DO NOTHING",
+                    (
+                        job.id,
+                        job.user_id,
+                        job.thread_id,
+                        job.product_id,
+                        job.run_id,
+                        job.job_type,
+                        job.status.value,
+                        job.model_dump_json(),
+                        job.created_at.isoformat(),
+                        job.updated_at.isoformat(),
+                    ),
+                )
             return replacement
+
+    def _lock_current_run(
+        self,
+        db: _Connection,
+        run_id: str,
+    ) -> tuple[ProductRun, ThreadRecord]:
+        """Lock the run's product and verify workflow generation inside this transaction."""
+
+        if self._database_url is None:
+            db.execute("BEGIN IMMEDIATE")
+        row = db.execute(
+            "SELECT product_id FROM runs WHERE id=?",
+            (run_id,),
+        ).fetchone()
+        if row is None:
+            raise KeyError(run_id)
+        product_id = str(row[0])
+        if self._database_url is not None:
+            db.execute("SELECT id FROM products WHERE id=? FOR UPDATE", (product_id,))
+        row = db.execute(
+            "SELECT runs.payload,threads.payload FROM runs "
+            "JOIN threads ON threads.id=runs.thread_id "
+            "WHERE runs.id=?",
+            (run_id,),
+        ).fetchone()
+        if row is None:
+            raise KeyError(run_id)
+        run = ProductRun.model_validate_json(row[0])
+        thread = ThreadRecord.model_validate_json(row[1])
+        if run.workflow_generation != thread.workflow_generation:
+            raise RuntimeError(
+                f"run {run_id} belongs to workflow generation {run.workflow_generation}, "
+                f"current generation is {thread.workflow_generation}"
+            )
+        return run, thread
 
     def assert_run_generation(self, run_id: str) -> ProductRun:
         """Reject durable mutations from an executor that belongs to an old generation."""
@@ -845,6 +967,19 @@ class ProductCatalogue:
             (user_id, max(1, min(limit, 100))),
         )
         return tuple(ProductRun.model_validate_json(row[0]) for row in rows)
+
+    def run_for_thread_generation(
+        self,
+        thread_id: str,
+        generation: int,
+        *,
+        user_id: str = LOCAL_USER_ID,
+    ) -> ProductRun | None:
+        runs = self.list_runs_for_thread(thread_id, user_id=user_id)
+        return next(
+            (run for run in reversed(runs) if run.workflow_generation == generation),
+            None,
+        )
 
     def add_message(
         self,
@@ -923,20 +1058,34 @@ class ProductCatalogue:
         *,
         metadata: dict[str, Any] | None = None,
     ) -> RunEvent:
-        run = self.assert_run_generation(run_id)
-        if run.status is RunStatus.RUNNING:
-            self.renew_run_lease(run_id)
-        event = RunEvent(
-            id=_new_id("event"),
-            run_id=run_id,
-            event_type=event_type,
-            summary=summary,
-            metadata=metadata or {},
-        )
-        self._execute(
-            "INSERT INTO events(id, run_id, timestamp, payload) VALUES(?,?,?,?)",
-            (event.id, run_id, event.timestamp.isoformat(), event.model_dump_json()),
-        )
+        now = _now()
+        with self._connect() as db:
+            run, _ = self._lock_current_run(db, run_id)
+            if run.status is RunStatus.RUNNING:
+                run = run.model_copy(
+                    update={
+                        "execution_lease_token": run.execution_lease_token or _new_id("lease"),
+                        "execution_lease_expires_at": now + RUN_EXECUTION_LEASE,
+                        "last_heartbeat_at": now,
+                    }
+                )
+                changed = db.execute(
+                    "UPDATE runs SET payload=? WHERE id=? AND status=?",
+                    (run.model_dump_json(), run_id, RunStatus.RUNNING.value),
+                ).rowcount
+                if changed != 1:
+                    raise RuntimeError(f"run {run_id} changed while adding an event")
+            event = RunEvent(
+                id=_new_id("event"),
+                run_id=run_id,
+                event_type=event_type,
+                summary=summary,
+                metadata=metadata or {},
+            )
+            db.execute(
+                "INSERT INTO events(id,run_id,timestamp,payload) VALUES(?,?,?,?)",
+                (event.id, run_id, event.timestamp.isoformat(), event.model_dump_json()),
+            )
         return event
 
     def list_events(self, run_id: str, *, user_id: str | None = None) -> tuple[RunEvent, ...]:
@@ -951,19 +1100,38 @@ class ProductCatalogue:
         )
 
     def register_artifact(self, artifact: StoredArtifact) -> StoredArtifact:
-        self._execute(
-            "INSERT INTO artifacts(id, product_id, run_id, payload, created_at) "
-            "VALUES(?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET "
-            "product_id=excluded.product_id, run_id=excluded.run_id, "
-            "payload=excluded.payload, created_at=excluded.created_at",
-            (
-                artifact.id,
-                artifact.product_id,
-                artifact.run_id,
-                artifact.model_dump_json(),
-                artifact.created_at.isoformat(),
-            ),
-        )
+        if artifact.run_id is None:
+            self._execute(
+                "INSERT INTO artifacts(id,product_id,run_id,payload,created_at) "
+                "VALUES(?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET "
+                "product_id=excluded.product_id,run_id=excluded.run_id,"
+                "payload=excluded.payload,created_at=excluded.created_at",
+                (
+                    artifact.id,
+                    artifact.product_id,
+                    artifact.run_id,
+                    artifact.model_dump_json(),
+                    artifact.created_at.isoformat(),
+                ),
+            )
+            return artifact
+        with self._connect() as db:
+            run, _ = self._lock_current_run(db, artifact.run_id)
+            if artifact.product_id is not None and artifact.product_id != run.product_id:
+                raise RuntimeError("artifact product does not match its owning run")
+            db.execute(
+                "INSERT INTO artifacts(id,product_id,run_id,payload,created_at) "
+                "VALUES(?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET "
+                "product_id=excluded.product_id,run_id=excluded.run_id,"
+                "payload=excluded.payload,created_at=excluded.created_at",
+                (
+                    artifact.id,
+                    artifact.product_id,
+                    artifact.run_id,
+                    artifact.model_dump_json(),
+                    artifact.created_at.isoformat(),
+                ),
+            )
         return artifact
 
     def get_artifact(
@@ -1041,40 +1209,24 @@ class ProductCatalogue:
         *,
         expected_version: int | None = None,
     ) -> ProductWorkSnapshot:
-        """Atomically advance the current snapshot and append its immutable revision."""
+        """Advance the snapshot under the same product lock used by recovery."""
 
-        if not self.user_owns_product(snapshot.user_id, snapshot.product_id):
-            raise PermissionError("unknown product")
-        self.assert_run_generation(snapshot.run_id)
-        existing = self.get_product_work_snapshot(
-            snapshot.product_id,
-            user_id=snapshot.user_id,
-        )
         now = _now()
-
-        if existing is None:
-            if expected_version not in {None, 0}:
-                raise ProductSnapshotConflict(
-                    f"expected snapshot version {expected_version}, but no snapshot exists"
-                )
-            stored = snapshot.model_copy(update={"version": 1, "updated_at": now})
-            expected = 0
-        else:
-            expected = existing.version if expected_version is None else expected_version
-            if expected != existing.version:
-                raise ProductSnapshotConflict(
-                    f"snapshot changed from version {expected} to {existing.version}"
-                )
-            stored = snapshot.model_copy(
-                update={
-                    "version": existing.version + 1,
-                    "created_at": existing.created_at,
-                    "updated_at": now,
-                }
-            )
-
         with self._connect() as db:
+            run, thread = self._lock_current_run(db, snapshot.run_id)
+            if run.product_id != snapshot.product_id or thread.user_id != snapshot.user_id:
+                raise PermissionError("snapshot ownership does not match the current run")
+            row = db.execute(
+                "SELECT payload FROM product_work_snapshots WHERE user_id=? AND product_id=?",
+                (snapshot.user_id, snapshot.product_id),
+            ).fetchone()
+            existing = ProductWorkSnapshot.model_validate_json(row[0]) if row else None
             if existing is None:
+                if expected_version not in {None, 0}:
+                    raise ProductSnapshotConflict(
+                        f"expected snapshot version {expected_version}, but no snapshot exists"
+                    )
+                stored = snapshot.model_copy(update={"version": 1, "updated_at": now})
                 changed = db.execute(
                     "INSERT INTO product_work_snapshots("
                     "user_id,product_id,version,payload,updated_at"
@@ -1088,6 +1240,18 @@ class ProductCatalogue:
                     ),
                 ).rowcount
             else:
+                expected = existing.version if expected_version is None else expected_version
+                if expected != existing.version:
+                    raise ProductSnapshotConflict(
+                        f"snapshot changed from version {expected} to {existing.version}"
+                    )
+                stored = snapshot.model_copy(
+                    update={
+                        "version": existing.version + 1,
+                        "created_at": existing.created_at,
+                        "updated_at": now,
+                    }
+                )
                 changed = db.execute(
                     "UPDATE product_work_snapshots SET version=?,payload=?,updated_at=? "
                     "WHERE user_id=? AND product_id=? AND version=?",
@@ -1396,24 +1560,17 @@ class ProductCatalogue:
         release_status: DppReleaseStatus = DppReleaseStatus.VERIFIED,
         dummy_mapping_ids: tuple[str, ...] = (),
     ) -> DppVersion:
-        run = self.assert_run_generation(run_id)
-        if run.product_id != product_id:
-            raise RuntimeError("DPP run does not belong to the requested product")
         for _ in range(3):
             try:
                 with self._connect() as db:
-                    if self._database_url is None:
-                        db.execute("BEGIN IMMEDIATE")
-                    else:
-                        db.execute(
-                            "SELECT id FROM products WHERE id=? FOR UPDATE",
-                            (product_id,),
-                        )
+                    run, _ = self._lock_current_run(db, run_id)
+                    if run.product_id != product_id:
+                        raise RuntimeError("DPP run does not belong to the requested product")
                     row = db.execute(
-                        "SELECT COALESCE(MAX(version), 0) FROM dpp_versions WHERE product_id=?",
+                        "SELECT COALESCE(MAX(version),0) FROM dpp_versions WHERE product_id=?",
                         (product_id,),
                     ).fetchone()
-                    if row is None:  # pragma: no cover - aggregate queries return one row
+                    if row is None:
                         raise RuntimeError("database did not return a DPP version")
                     version = int(row[0]) + 1
                     record = DppVersion(
@@ -1431,8 +1588,7 @@ class ProductCatalogue:
                     )
                     db.execute(
                         "INSERT INTO dpp_versions"
-                        "(id, product_id, run_id, version, payload, created_at) "
-                        "VALUES(?,?,?,?,?,?)",
+                        "(id,product_id,run_id,version,payload,created_at) VALUES(?,?,?,?,?,?)",
                         (
                             record.id,
                             product_id,
@@ -1644,17 +1800,41 @@ class ProductCatalogue:
         user_id: str,
         metadata: dict[str, Any],
     ) -> BackgroundJob:
-        """Persist monotonic progress metadata while a durable worker is running."""
+        """Persist progress only while this worker still owns a RUNNING job."""
 
-        job = self._require(self.get_background_job(job_id, user_id=user_id), job_id)
         now = _now()
-        updated = job.model_copy(
-            update={"updated_at": now, "metadata": {**job.metadata, **metadata}}
-        )
-        self._execute(
-            "UPDATE background_jobs SET payload=?,updated_at=? WHERE id=? AND user_id=?",
-            (updated.model_dump_json(), now.isoformat(), job_id, user_id),
-        )
+        with self._connect() as db:
+            row = db.execute(
+                "SELECT payload FROM background_jobs WHERE id=? AND user_id=?",
+                (job_id, user_id),
+            ).fetchone()
+            if row is None:
+                raise KeyError(job_id)
+            job = BackgroundJob.model_validate_json(row[0])
+            if job.status is not BackgroundJobStatus.RUNNING:
+                return job
+            updated = job.model_copy(
+                update={"updated_at": now, "metadata": {**job.metadata, **metadata}}
+            )
+            changed = db.execute(
+                "UPDATE background_jobs SET payload=?,updated_at=? "
+                "WHERE id=? AND user_id=? AND status=?",
+                (
+                    updated.model_dump_json(),
+                    now.isoformat(),
+                    job_id,
+                    user_id,
+                    BackgroundJobStatus.RUNNING.value,
+                ),
+            ).rowcount
+            if changed != 1:
+                row = db.execute(
+                    "SELECT payload FROM background_jobs WHERE id=? AND user_id=?",
+                    (job_id, user_id),
+                ).fetchone()
+                if row is None:
+                    raise KeyError(job_id)
+                return BackgroundJob.model_validate_json(row[0])
         return updated
 
     def requeue_background_job(
@@ -1664,28 +1844,47 @@ class ProductCatalogue:
         user_id: str,
         metadata: dict[str, Any] | None = None,
     ) -> BackgroundJob:
-        """Checkpoint one completed worker batch and make the same job claimable again."""
+        """Checkpoint a RUNNING batch unless recovery already superseded the job."""
 
-        job = self._require(self.get_background_job(job_id, user_id=user_id), job_id)
         now = _now()
-        queued = job.model_copy(
-            update={
-                "status": BackgroundJobStatus.QUEUED,
-                "updated_at": now,
-                "error": None,
-                "metadata": {**job.metadata, **(metadata or {})},
-            }
-        )
-        self._execute(
-            "UPDATE background_jobs SET status=?,payload=?,updated_at=? WHERE id=? AND user_id=?",
-            (
-                queued.status.value,
-                queued.model_dump_json(),
-                now.isoformat(),
-                job_id,
-                user_id,
-            ),
-        )
+        with self._connect() as db:
+            row = db.execute(
+                "SELECT payload FROM background_jobs WHERE id=? AND user_id=?",
+                (job_id, user_id),
+            ).fetchone()
+            if row is None:
+                raise KeyError(job_id)
+            job = BackgroundJob.model_validate_json(row[0])
+            if job.status is not BackgroundJobStatus.RUNNING:
+                return job
+            queued = job.model_copy(
+                update={
+                    "status": BackgroundJobStatus.QUEUED,
+                    "updated_at": now,
+                    "error": None,
+                    "metadata": {**job.metadata, **(metadata or {})},
+                }
+            )
+            changed = db.execute(
+                "UPDATE background_jobs SET status=?,payload=?,updated_at=? "
+                "WHERE id=? AND user_id=? AND status=?",
+                (
+                    queued.status.value,
+                    queued.model_dump_json(),
+                    now.isoformat(),
+                    job_id,
+                    user_id,
+                    BackgroundJobStatus.RUNNING.value,
+                ),
+            ).rowcount
+            if changed != 1:
+                row = db.execute(
+                    "SELECT payload FROM background_jobs WHERE id=? AND user_id=?",
+                    (job_id, user_id),
+                ).fetchone()
+                if row is None:
+                    raise KeyError(job_id)
+                return BackgroundJob.model_validate_json(row[0])
         return queued
 
     def finish_background_job(
@@ -1703,27 +1902,50 @@ class ProductCatalogue:
             BackgroundJobStatus.CANCELLED,
         }:
             raise ValueError("background job can only finish in a terminal state")
-        job = self._require(self.get_background_job(job_id, user_id=user_id), job_id)
         now = _now()
-        finished = job.model_copy(
-            update={
-                "status": status,
-                "updated_at": now,
-                "completed_at": now,
-                "error": error,
-                "metadata": {**job.metadata, **(metadata or {})},
-            }
-        )
-        self._execute(
-            "UPDATE background_jobs SET status=?,payload=?,updated_at=? WHERE id=? AND user_id=?",
-            (
-                status.value,
-                finished.model_dump_json(),
-                now.isoformat(),
-                job_id,
-                user_id,
-            ),
-        )
+        with self._connect() as db:
+            row = db.execute(
+                "SELECT payload FROM background_jobs WHERE id=? AND user_id=?",
+                (job_id, user_id),
+            ).fetchone()
+            if row is None:
+                raise KeyError(job_id)
+            job = BackgroundJob.model_validate_json(row[0])
+            if job.status in {
+                BackgroundJobStatus.COMPLETED,
+                BackgroundJobStatus.CANCELLED,
+            }:
+                return job
+            finished = job.model_copy(
+                update={
+                    "status": status,
+                    "updated_at": now,
+                    "completed_at": now,
+                    "error": error,
+                    "metadata": {**job.metadata, **(metadata or {})},
+                }
+            )
+            changed = db.execute(
+                "UPDATE background_jobs SET status=?,payload=?,updated_at=? "
+                "WHERE id=? AND user_id=? AND status IN (?,?)",
+                (
+                    status.value,
+                    finished.model_dump_json(),
+                    now.isoformat(),
+                    job_id,
+                    user_id,
+                    BackgroundJobStatus.RUNNING.value,
+                    BackgroundJobStatus.FAILED.value,
+                ),
+            ).rowcount
+            if changed != 1:
+                row = db.execute(
+                    "SELECT payload FROM background_jobs WHERE id=? AND user_id=?",
+                    (job_id, user_id),
+                ).fetchone()
+                if row is None:
+                    raise KeyError(job_id)
+                return BackgroundJob.model_validate_json(row[0])
         return finished
 
     def _raw_connect(self) -> _Connection:

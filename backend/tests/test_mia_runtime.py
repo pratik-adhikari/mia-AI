@@ -398,3 +398,53 @@ def test_stale_executor_failure_does_not_fail_replacement_run(tmp_path) -> None:
 
     assert catalogue.get_run(old.id).status is RunStatus.INCOMPLETE
     assert catalogue.get_run(replacement.id).status is RunStatus.RUNNING
+
+
+
+def test_initial_message_unknown_failure_never_fails_replacement_run(tmp_path) -> None:
+    catalogue = ProductCatalogue(tmp_path / "catalogue.sqlite3")
+    product, _ = catalogue.get_or_create_product("https://example.com/initial-fence")
+
+    class Graph:
+        async def aget_state(self, config):
+            return _Snapshot({})
+
+        async def ainvoke(self, update, **kwargs):
+            old = catalogue.start_run(product.id, "thread-initial-fence")
+            expired = old.model_copy(
+                update={
+                    "execution_lease_expires_at": datetime.now(UTC) - timedelta(seconds=1)
+                }
+            )
+            catalogue._execute(
+                "UPDATE runs SET payload=? WHERE id=?",
+                (expired.model_dump_json(), old.id),
+            )
+            replacement = catalogue.claim_product_restart(
+                user_id="local-development",
+                product_id=product.id,
+                expected_run_id=old.id,
+                expected_generation=0,
+                reason="concurrent recovery",
+                refresh_requested=False,
+                require_expired_lease=True,
+            )
+            self.replacement_id = replacement.id
+            raise RuntimeError("stale initial invocation failed")
+
+    graph = Graph()
+    with pytest.raises(RuntimeError, match="stale initial invocation failed"):
+        asyncio.run(
+            _mia(catalogue, graph).message(
+                AgentRequest(
+                    thread_id="thread-initial-fence",
+                    message="Create a DPP",
+                )
+            )
+        )
+
+    replacement = catalogue.get_run(graph.replacement_id)
+    assert replacement is not None
+    assert replacement.status is RunStatus.RUNNING
+    messages = catalogue.list_messages("thread-initial-fence")
+    assert messages[0].run_id is None
