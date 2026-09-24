@@ -144,3 +144,61 @@ def test_two_users_can_store_same_private_serial_independently(tmp_path: Path) -
     assert stored_b.owner_user_id == "user-b"
     assert stored_a in catalogue.list_product_identifiers(product.id, user_id="user-a")
     assert stored_b in catalogue.list_product_identifiers(product.id, user_id="user-b")
+
+
+
+def test_stale_generation_cannot_publish_product_metadata_or_identifiers(tmp_path: Path) -> None:
+    from datetime import timedelta
+
+    from mia_dpp.domain.product import RunStatus
+
+    catalogue = ProductCatalogue(tmp_path / "product-publication-fence.sqlite3")
+    catalogue.get_or_create_thread("thread-product-fence", "user-a")
+    product, _ = catalogue.get_or_create_product(
+        "https://example.com/product-fence",
+        user_id="user-a",
+    )
+    run = catalogue.start_run(product.id, "thread-product-fence", user_id="user-a")
+    identifier = discover_product_identifiers(
+        ProductKnowledgePackage(
+            product_id=product.id,
+            product_name="Stale publication",
+            evidence=(_evidence("ev-stale-gtin", "GTIN", "4012345678901"),),
+        ),
+        manufacturer="Example",
+    )[0]
+
+    expired = run.model_copy(
+        update={"execution_lease_expires_at": datetime.now(UTC) - timedelta(seconds=1)}
+    )
+    catalogue._execute(
+        "UPDATE runs SET payload=? WHERE id=?",
+        (expired.model_dump_json(), run.id),
+    )
+    replacement = catalogue.claim_product_restart(
+        user_id="user-a",
+        product_id=product.id,
+        expected_run_id=run.id,
+        expected_generation=0,
+        reason="recovery won",
+        refresh_requested=False,
+        require_expired_lease=True,
+    )
+
+    with pytest.raises(RuntimeError, match="workflow generation"):
+        catalogue.register_product_identifier(
+            identifier,
+            user_id="user-a",
+            run_id=run.id,
+        )
+    with pytest.raises(RuntimeError, match="workflow generation"):
+        catalogue.update_product(
+            product.model_copy(update={"name": "STALE NAME"}),
+            run_id=run.id,
+        )
+
+    persisted = catalogue.get_product(product.id, user_id="user-a")
+    assert persisted is not None
+    assert persisted.name != "STALE NAME"
+    assert catalogue.list_product_identifiers(product.id, user_id="user-a") == ()
+    assert catalogue.get_run(replacement.id).status is RunStatus.RUNNING

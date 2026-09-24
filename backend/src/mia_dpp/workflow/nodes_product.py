@@ -335,6 +335,7 @@ async def extract_evidence(
             work.ctx.catalogue.register_product_identifier(
                 identifier,
                 user_id=work.user_id,
+                run_id=work.run_id,
             )
         except ProductIdentifierConflict as error:
             possible_duplicate_ids.append(error.existing_product_id)
@@ -357,7 +358,8 @@ async def extract_evidence(
                 ),
                 "image_url": image_url or product.image_url,
             }
-        )
+        ),
+        run_id=work.run_id,
     )
     if possible_duplicate_ids:
         work.event(

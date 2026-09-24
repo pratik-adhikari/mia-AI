@@ -222,17 +222,37 @@ class ProductCatalogue:
         self._associate_product(user_id, found.id)
         return found, False
 
-    def update_product(self, product: ProductRecord) -> ProductRecord:
+    def update_product(
+        self,
+        product: ProductRecord,
+        *,
+        run_id: str | None = None,
+    ) -> ProductRecord:
         product = product.model_copy(update={"updated_at": _now()})
-        changed = self._execute(
-            "UPDATE products SET canonical_url=?, payload=?, updated_at=? WHERE id=?",
-            (
-                product.canonical_url,
-                product.model_dump_json(),
-                product.updated_at.isoformat(),
-                product.id,
-            ),
-        )
+        if run_id is None:
+            changed = self._execute(
+                "UPDATE products SET canonical_url=?,payload=?,updated_at=? WHERE id=?",
+                (
+                    product.canonical_url,
+                    product.model_dump_json(),
+                    product.updated_at.isoformat(),
+                    product.id,
+                ),
+            )
+        else:
+            with self._connect() as db:
+                run, _ = self._lock_current_run(db, run_id)
+                if run.product_id != product.id:
+                    raise RuntimeError("product update does not belong to the current run")
+                changed = db.execute(
+                    "UPDATE products SET canonical_url=?,payload=?,updated_at=? WHERE id=?",
+                    (
+                        product.canonical_url,
+                        product.model_dump_json(),
+                        product.updated_at.isoformat(),
+                        product.id,
+                    ),
+                ).rowcount
         if changed != 1:
             raise KeyError(product.id)
         return product
@@ -268,22 +288,45 @@ class ProductCatalogue:
         identifier: ProductIdentifier,
         *,
         user_id: str = LOCAL_USER_ID,
+        run_id: str | None = None,
     ) -> ProductIdentifier:
-        """Keep public product identity separate from account-owned physical instances."""
+        """Publish identifiers only while the producing workflow still owns the generation."""
 
-        if self.get_product(identifier.product_id, user_id=user_id) is None:
-            raise KeyError(identifier.product_id)
+        if run_id is None:
+            if self.get_product(identifier.product_id, user_id=user_id) is None:
+                raise KeyError(identifier.product_id)
+            with self._connect() as db:
+                return self._register_product_identifier_in_db(
+                    db,
+                    identifier,
+                    user_id=user_id,
+                )
+
+        with self._connect() as db:
+            run, thread = self._lock_current_run(db, run_id)
+            if run.product_id != identifier.product_id or thread.user_id != user_id:
+                raise PermissionError("identifier ownership does not match the current run")
+            return self._register_product_identifier_in_db(
+                db,
+                identifier,
+                user_id=user_id,
+            )
+
+    def _register_product_identifier_in_db(
+        self,
+        db: _Connection,
+        identifier: ProductIdentifier,
+        *,
+        user_id: str,
+    ) -> ProductIdentifier:
         if identifier.role is ProductIdentifierRole.INSTANCE:
             owner_scoped_id = "product-instance-" + hashlib.sha256(
                 f"{user_id}\0{identifier.id}".encode()
             ).hexdigest()[:24]
             owned = identifier.model_copy(
-                update={
-                    "id": owner_scoped_id,
-                    "owner_user_id": user_id,
-                }
+                update={"id": owner_scoped_id, "owner_user_id": user_id}
             )
-            self._execute(
+            db.execute(
                 "INSERT INTO product_instance_identifiers("
                 "id,user_id,product_id,payload,created_at"
                 ") VALUES(?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET "
@@ -300,7 +343,7 @@ class ProductCatalogue:
             return owned
 
         if identifier.role is ProductIdentifierRole.IDENTITY:
-            existing = self._fetchone(
+            existing = db.execute(
                 "SELECT product_id FROM product_identifiers "
                 "WHERE scheme=? AND COALESCE(namespace,'')=? "
                 "AND normalized_value=? AND role='identity' LIMIT 1",
@@ -309,11 +352,11 @@ class ProductCatalogue:
                     identifier.namespace or "",
                     identifier.normalized_value,
                 ),
-            )
+            ).fetchone()
             if existing is not None and str(existing[0]) != identifier.product_id:
                 raise ProductIdentifierConflict(str(existing[0]))
         try:
-            self._execute(
+            db.execute(
                 "INSERT INTO product_identifiers("
                 "id,product_id,scheme,namespace,normalized_value,role,payload,created_at"
                 ") VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET payload=excluded.payload",
@@ -333,7 +376,7 @@ class ProductCatalogue:
                 identifier.role is ProductIdentifierRole.IDENTITY
                 and self._is_unique_violation(error)
             ):
-                existing = self._fetchone(
+                existing = db.execute(
                     "SELECT product_id FROM product_identifiers "
                     "WHERE scheme=? AND COALESCE(namespace,'')=? "
                     "AND normalized_value=? AND role='identity' LIMIT 1",
@@ -342,7 +385,7 @@ class ProductCatalogue:
                         identifier.namespace or "",
                         identifier.normalized_value,
                     ),
-                )
+                ).fetchone()
                 if existing is not None:
                     raise ProductIdentifierConflict(str(existing[0])) from error
             raise
@@ -793,7 +836,7 @@ class ProductCatalogue:
                         },
                     }
                 )
-                db.execute(
+                cancelled_count = db.execute(
                     "UPDATE background_jobs SET status=?,payload=?,updated_at=? "
                     "WHERE id=? AND user_id=? AND status IN (?,?,?)",
                     (
@@ -806,8 +849,8 @@ class ProductCatalogue:
                         BackgroundJobStatus.RUNNING.value,
                         BackgroundJobStatus.FAILED.value,
                     ),
-                )
-                if not refresh_requested:
+                ).rowcount
+                if cancelled_count == 1 and not refresh_requested:
                     successor_jobs.append(
                         BackgroundJob(
                             id=_new_id("job"),
@@ -1300,23 +1343,30 @@ class ProductCatalogue:
         )
 
     def add_human_review(self, review: HumanReviewRecord) -> HumanReviewRecord:
-        """Append an immutable human decision; existing records are never updated."""
+        """Append an audit decision only while its producing workflow owns the generation."""
 
-        if not self.user_owns_product(review.user_id, review.product_id):
-            raise PermissionError("unknown product")
-        self._execute(
-            "INSERT INTO human_reviews(id,user_id,product_id,run_id,thread_id,created_at,payload) "
-            "VALUES(?,?,?,?,?,?,?)",
-            (
-                review.id,
-                review.user_id,
-                review.product_id,
-                review.run_id,
-                review.thread_id,
-                review.created_at.isoformat(),
-                review.model_dump_json(),
-            ),
-        )
+        with self._connect() as db:
+            run, thread = self._lock_current_run(db, review.run_id)
+            if (
+                run.product_id != review.product_id
+                or thread.id != review.thread_id
+                or thread.user_id != review.user_id
+            ):
+                raise PermissionError("human review ownership does not match the current run")
+            db.execute(
+                "INSERT INTO human_reviews("
+                "id,user_id,product_id,run_id,thread_id,created_at,payload"
+                ") VALUES(?,?,?,?,?,?,?)",
+                (
+                    review.id,
+                    review.user_id,
+                    review.product_id,
+                    review.run_id,
+                    review.thread_id,
+                    review.created_at.isoformat(),
+                    review.model_dump_json(),
+                ),
+            )
         return review
 
     def list_human_reviews(
@@ -1422,6 +1472,7 @@ class ProductCatalogue:
         comment: str | None,
         actor_name: str | None = None,
         user_id: str = LOCAL_USER_ID,
+        run_id: str | None = None,
     ) -> MappingKnowledgeEntry | None:
         # A DUMMY is a workflow placeholder, never reusable semantic knowledge.
         if mapping.human_value_kind == "dummy":
@@ -1431,16 +1482,32 @@ class ProductCatalogue:
             if decision in {"approve", "correct", "keep", "change_target"}
             else MappingKnowledgeStatus.CANDIDATE
         )
-        return self._upsert_mapping_knowledge(
-            mapping,
-            manufacturer=manufacturer,
-            domain=domain,
-            product_family=product_family,
-            status=status,
-            decision=decision,
-            comment=comment,
-            user_id=user_id,
-        )
+        if run_id is None:
+            return self._upsert_mapping_knowledge(
+                mapping,
+                manufacturer=manufacturer,
+                domain=domain,
+                product_family=product_family,
+                status=status,
+                decision=decision,
+                comment=comment,
+                user_id=user_id,
+            )
+        with self._connect() as db:
+            run, thread = self._lock_current_run(db, run_id)
+            if thread.user_id != user_id:
+                raise PermissionError("mapping review does not belong to this user")
+            return self._upsert_mapping_knowledge(
+                mapping,
+                manufacturer=manufacturer,
+                domain=domain,
+                product_family=product_family,
+                status=status,
+                decision=decision,
+                comment=comment,
+                user_id=user_id,
+                db=db,
+            )
 
     def list_mapping_knowledge(
         self,
@@ -1488,6 +1555,7 @@ class ProductCatalogue:
         decision: str | None = None,
         comment: str | None = None,
         user_id: str = LOCAL_USER_ID,
+        db: _Connection | None = None,
     ) -> MappingKnowledgeEntry:
         identity = "\0".join(
             (
@@ -1499,11 +1567,18 @@ class ProductCatalogue:
             )
         )
         entry_id = "knowledge-" + hashlib.sha256(identity.encode()).hexdigest()[:24]
-        existing = self._one(
-            MappingKnowledgeEntry,
-            "SELECT payload FROM mapping_knowledge WHERE id=?",
-            (entry_id,),
-        )
+        if db is None:
+            existing = self._one(
+                MappingKnowledgeEntry,
+                "SELECT payload FROM mapping_knowledge WHERE id=?",
+                (entry_id,),
+            )
+        else:
+            row = db.execute(
+                "SELECT payload FROM mapping_knowledge WHERE id=?",
+                (entry_id,),
+            ).fetchone()
+            existing = MappingKnowledgeEntry.model_validate_json(row[0]) if row else None
         now = _now()
         values = tuple(
             dict.fromkeys((*((existing.example_values) if existing else ()), mapping.source_value))
@@ -1540,11 +1615,14 @@ class ProductCatalogue:
                 else (existing.status if existing else status)
             ),
         )
-        self._execute(
-            "INSERT INTO mapping_knowledge(id, payload) VALUES(?, ?) "
-            "ON CONFLICT(id) DO UPDATE SET payload=excluded.payload",
-            (entry.id, entry.model_dump_json()),
+        sql = (
+            "INSERT INTO mapping_knowledge(id,payload) VALUES(?,?) "
+            "ON CONFLICT(id) DO UPDATE SET payload=excluded.payload"
         )
+        if db is None:
+            self._execute(sql, (entry.id, entry.model_dump_json()))
+        else:
+            db.execute(sql, (entry.id, entry.model_dump_json()))
         return entry
 
     def create_dpp_version(

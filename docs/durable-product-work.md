@@ -475,3 +475,12 @@ Background-job state transitions are monotonic around recovery: a worker cannot 
 ## Failure attribution for fresh invocations
 
 The normal message path no longer treats an unknown failing execution as the latest active run. Before graph invocation it captures the thread workflow generation and any run already known for that generation. Only that exact run may be failed on exception. If a fresh graph creates a run and later loses a recovery race before its run identity is returned, the error path leaves run status untouched rather than risking the replacement run. On success, message ownership is assigned from the run ID returned by the graph.
+
+
+## Fencing every workflow-derived durable publication
+
+The generation fence now covers not only workflow artifacts/snapshots/run state, but also durable facts learned or approved by that workflow. Human audit insertion, trusted mapping-knowledge promotion, product metadata updates, and identifier publication all prove the producing run still owns the current workflow generation before committing.
+
+Catalogue APIs keep their unfenced form for non-workflow/admin usage where appropriate, but workflow nodes pass their run ID explicitly. A superseded execution therefore cannot leave behind trusted semantic knowledge, human audit decisions, stale manufacturer/name/image data, or strong product identifiers after its normal artifacts have already been rejected.
+
+Research recovery also creates a successor job only when cancellation of the old unfinished job actually changed that row. If the worker completed before recovery acquired the cancellation update, the completed job remains authoritative and no duplicate successor is queued.

@@ -654,3 +654,56 @@ def test_stale_snapshot_write_commits_before_recovery_when_it_holds_lock_first(
     assert written.version == 2
     assert catalogue.get_product_work_snapshot(product.id, user_id="user-a") == written
     assert catalogue.get_run(replacement.id).status is RunStatus.RUNNING
+
+
+
+def test_completed_research_is_not_requeued_during_recovery(tmp_path: Path) -> None:
+    catalogue = ProductCatalogue(tmp_path / "completed-research-recovery.sqlite3")
+    catalogue.get_or_create_thread("thread-completed-research", "user-a")
+    product, _ = catalogue.get_or_create_product(
+        "https://example.com/completed-research",
+        user_id="user-a",
+    )
+    old = catalogue.start_run(
+        product.id,
+        "thread-completed-research",
+        user_id="user-a",
+    )
+    job = catalogue.create_background_job(
+        user_id="user-a",
+        thread_id=old.thread_id,
+        product_id=product.id,
+        run_id=old.id,
+        metadata={"sourceGeneration": 5},
+    )
+    catalogue.claim_background_job(job.id, user_id="user-a")
+    completed = catalogue.finish_background_job(
+        job.id,
+        user_id="user-a",
+        status=BackgroundJobStatus.COMPLETED,
+        metadata={"sourceGeneration": 5},
+    )
+    expired = old.model_copy(
+        update={"execution_lease_expires_at": datetime.now(UTC) - timedelta(seconds=1)}
+    )
+    catalogue._execute(
+        "UPDATE runs SET payload=? WHERE id=?",
+        (expired.model_dump_json(), old.id),
+    )
+
+    replacement = catalogue.claim_product_restart(
+        user_id="user-a",
+        product_id=product.id,
+        expected_run_id=old.id,
+        expected_generation=0,
+        reason="recover after research completion",
+        refresh_requested=False,
+        require_expired_lease=True,
+    )
+
+    jobs = catalogue.list_background_jobs(
+        user_id="user-a",
+        thread_id=old.thread_id,
+    )
+    assert completed in jobs
+    assert not any(item.run_id == replacement.id for item in jobs)

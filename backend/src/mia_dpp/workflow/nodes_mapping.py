@@ -105,6 +105,7 @@ async def human_review(
                 comment=decision.comment,
                 actor_name=request.actor_name,
                 user_id=work.user_id,
+                run_id=work.run_id,
             )
 
     evidence_id = work.put_model(
