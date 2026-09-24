@@ -200,18 +200,32 @@ class MappingReviewService:
             )
         }
         outcomes = {item.evidence_id: item for item in mapping_result.outcomes}
-        return tuple(
-            SemanticReviewItem(
-                id="review-" + hashlib.sha256(f"{cycle_id}\0{record.id}".encode()).hexdigest()[:24],
-                evidence_id=record.id,
-                status=outcomes[record.id].status,
-                requirement_id=outcomes[record.id].requirement_id,
-                alternative_requirement_ids=outcomes[record.id].alternative_requirement_ids,
-                reason=outcomes[record.id].reason,
-                mapping=mappings.get(record.id),
+        rows: list[SemanticReviewItem] = []
+        for record in package.evidence:
+            outcome = outcomes[record.id]
+            mapping = mappings.get(record.id)
+            rows.append(
+                SemanticReviewItem(
+                    id="review-"
+                    + hashlib.sha256(
+                        f"{cycle_id}\0{record.id}".encode()
+                    ).hexdigest()[:24],
+                    evidence_id=record.id,
+                    status=outcome.status,
+                    requirement_id=outcome.requirement_id,
+                    alternative_requirement_ids=outcome.alternative_requirement_ids,
+                    target_kind="direct" if outcome.direct_target else "requirement",
+                    alternative_targets=(
+                        (mapping.target,)
+                        if outcome.direct_target and mapping is not None
+                        else ()
+                    ),
+                    review_priority=("confirm" if outcome.direct_target else None),
+                    reason=outcome.reason,
+                    mapping=mapping,
+                )
             )
-            for record in package.evidence
-        )
+        return tuple(rows)
 
     def decide(
         self,
@@ -499,7 +513,14 @@ class MappingReviewService:
                 evidence_id=reviewed.evidence_id,
                 status=reviewed.status,
                 requirement_id=reviewed.requirement_id,
-                direct_target=reviewed.target_kind == "direct",
+                direct_target=(
+                    reviewed.target_kind == "direct"
+                    and reviewed.status
+                    in {
+                        EvidenceOutcomeStatus.MAPPED,
+                        EvidenceOutcomeStatus.UNCERTAIN,
+                    }
+                ),
                 alternative_requirement_ids=reviewed.alternative_requirement_ids,
                 reason=reviewed.reason,
                 mapping_origin=(
