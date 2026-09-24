@@ -159,3 +159,19 @@ current version. If another workflow has already written N+1, the stale write fa
 
 This matters especially for background research and multiple chats working on the same product:
 versioning is no longer only descriptive metadata; it now protects correctness.
+
+
+### Why background integration has its own route
+
+The semantic-mapping route and the background-integration route both use the words `review` and
+`coverage`, but they do not have the same destination graph.
+
+After initial semantic mapping, `coverage` intentionally passes through background-research
+integration first. After background-research integration itself, `coverage` must go directly to
+coverage calculation. Reusing the first route table would create a self-loop.
+
+The dedicated `after_background_integration` route therefore means:
+
+- conflict found -> human review;
+- no conflict -> coverage;
+- never route integration back into itself.

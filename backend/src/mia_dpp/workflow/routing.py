@@ -20,6 +20,12 @@ def after_semantic_mapping(state: MiaWorkflowState) -> Literal["review", "covera
     return "review" if state.get("review_required", False) else "coverage"
 
 
+def after_background_integration(state: MiaWorkflowState) -> Literal["review", "coverage"]:
+    """Background evidence may reopen review, otherwise continue directly to coverage."""
+
+    return "review" if state.get("review_required", False) else "coverage"
+
+
 def after_coverage(state: MiaWorkflowState) -> Literal["build", "research", "human"]:
     if state.get("required_unresolved", 0) == 0:
         return "build"
@@ -44,6 +50,10 @@ PRODUCT_ROUTES: dict[Hashable, str] = {
 SEMANTIC_ROUTES: dict[Hashable, str] = {
     "review": "human_review",
     "coverage": "integrate_background_research",
+}
+BACKGROUND_INTEGRATION_ROUTES: dict[Hashable, str] = {
+    "review": "human_review",
+    "coverage": "coverage",
 }
 PREPARATION_ROUTES: dict[Hashable, str] = {
     "build": "__end__",

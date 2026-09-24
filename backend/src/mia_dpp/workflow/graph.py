@@ -27,12 +27,14 @@ from mia_dpp.workflow.nodes_product import (
 )
 from mia_dpp.workflow.nodes_research import research
 from mia_dpp.workflow.routing import (
+    BACKGROUND_INTEGRATION_ROUTES,
     DISCOVERY_ROUTES,
     DONE_ROUTES,
     PREPARATION_ROUTES,
     PRODUCT_ROUTES,
     RESEARCH_ROUTES,
     SEMANTIC_ROUTES,
+    after_background_integration,
     after_coverage,
     after_discovery,
     after_product_done,
@@ -89,8 +91,8 @@ def _build_evidence_stage(context: MiaContext | None) -> Any:
     stage.add_edge("human_review", "integrate_background_research")
     stage.add_conditional_edges(
         "integrate_background_research",
-        after_semantic_mapping,
-        SEMANTIC_ROUTES,
+        after_background_integration,
+        BACKGROUND_INTEGRATION_ROUTES,
     )
     stage.add_conditional_edges("coverage", after_coverage, PREPARATION_ROUTES)
     stage.add_conditional_edges("research", after_research, RESEARCH_ROUTES)
