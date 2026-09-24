@@ -169,6 +169,7 @@ async def extract_evidence(
             "known_source_urls": source_urls,
             "product_name": package.product_name,
             "source_fingerprint": fingerprint,
+            "evidence_fingerprint": fingerprint,
             "product_snapshot_version": snapshot.version,
         }
 
@@ -345,6 +346,7 @@ async def extract_evidence(
         "image_url": image_url or "",
         "known_source_urls": source_urls,
         "source_fingerprint": fingerprint,
+        "evidence_fingerprint": fingerprint,
         "background_job_id": job.id,
         "product_snapshot_version": snapshot.version,
     }

@@ -14,12 +14,18 @@ from mia_dpp.agent.models import AgentReviewRequest, AgentValueRequest
 from mia_dpp.domain.evidence import ProductKnowledgePackage
 from mia_dpp.domain.mappings import CoverageStatus, MappingResult, SemanticReviewItem
 from mia_dpp.domain.product import BackgroundJobStatus, RunStatus
+from mia_dpp.domain.product_work import ProductWorkStage
 from mia_dpp.domain.targets import RequirementKind, TemplateIndex
 from mia_dpp.services.deep_research import merge_mapping_results
 from mia_dpp.tools.mapping.coverage import coverage as calculate_coverage
 from mia_dpp.tools.mapping.mapper import DeterministicWebsiteMapper
 from mia_dpp.workflow.context import MiaContext
 from mia_dpp.workflow.nodes_product import merge_packages
+from mia_dpp.workflow.product_snapshot import (
+    model_fingerprint,
+    semantic_mapper_fingerprint,
+    update_product_snapshot,
+)
 from mia_dpp.workflow.state import MiaWorkflowState
 from mia_dpp.workflow.workspace import RunWorkspace
 
@@ -39,7 +45,20 @@ async def build_targets(
         index,
         derived_from=(work.state_id("evidence_artifact_id"),),
     )
-    return {"targets_artifact_id": artifact_id}
+    target_fingerprint = model_fingerprint(index)
+    snapshot = update_product_snapshot(
+        work,
+        ProductWorkStage.TARGETS,
+        template_keys=tuple(item.key for item in index.selected_templates),
+        template_releases=tuple(item.release for item in index.selected_templates),
+        targets_artifact_id=artifact_id,
+        target_fingerprint=target_fingerprint,
+    )
+    return {
+        "targets_artifact_id": artifact_id,
+        "target_fingerprint": target_fingerprint,
+        "product_snapshot_version": snapshot.version,
+    }
 
 
 async def deterministic_mapping(
@@ -68,7 +87,24 @@ async def deterministic_mapping(
             "unmatched": len(result.unmatched_evidence_ids),
         },
     )
-    return {"deterministic_mapping_artifact_id": artifact_id}
+    mapping_input_fingerprint = model_fingerprint(
+        {
+            "evidenceFingerprint": state.get("evidence_fingerprint") or state.get("source_fingerprint"),
+            "targetFingerprint": state.get("target_fingerprint"),
+            "deterministic": result.model_dump(mode="json", by_alias=True),
+        }
+    )
+    snapshot = update_product_snapshot(
+        work,
+        ProductWorkStage.MAPPING,
+        deterministic_mapping_artifact_id=artifact_id,
+        mapping_input_fingerprint=mapping_input_fingerprint,
+    )
+    return {
+        "deterministic_mapping_artifact_id": artifact_id,
+        "mapping_input_fingerprint": mapping_input_fingerprint,
+        "product_snapshot_version": snapshot.version,
+    }
 
 
 async def semantic_mapping(
@@ -108,12 +144,21 @@ async def semantic_mapping(
                     "priorMappingArtifactId": str(reusable_mapping_id),
                 },
             )
+            snapshot = update_product_snapshot(
+                work,
+                ProductWorkStage.HUMAN_REVIEW if reviews else ProductWorkStage.MAPPING,
+                semantic_mapping_artifact_id=mapping_id,
+                reviewed_mapping_artifact_id=None,
+                mapping_cycle_id=cycle_id,
+                human_review_pending=bool(reviews),
+            )
             return {
                 "semantic_mapping_artifact_id": mapping_id,
                 "review_items_artifact_id": review_id,
                 "mapping_cycle_id": cycle_id,
                 "review_required": bool(reviews),
                 "reviewed_mapping_artifact_id": "",
+                "product_snapshot_version": snapshot.version,
             }
 
     mapper = work.ctx.semantic_mapper
@@ -176,11 +221,22 @@ async def semantic_mapping(
             "evidenceCount": len(package.evidence),
         },
     )
+    mapper_fingerprint = semantic_mapper_fingerprint(mapper)
+    snapshot = update_product_snapshot(
+        work,
+        ProductWorkStage.HUMAN_REVIEW if reviews else ProductWorkStage.MAPPING,
+        semantic_mapping_artifact_id=mapping_id,
+        semantic_mapper_fingerprint=mapper_fingerprint,
+        mapping_cycle_id=cycle_id,
+        human_review_pending=bool(reviews),
+    )
     return {
         "semantic_mapping_artifact_id": mapping_id,
         "review_items_artifact_id": review_id,
         "mapping_cycle_id": cycle_id,
         "review_required": bool(reviews),
+        "semantic_mapper_fingerprint": mapper_fingerprint or "",
+        "product_snapshot_version": snapshot.version,
     }
 
 
@@ -273,10 +329,27 @@ async def human_review(
         "mapping.review_completed",
         "Applied trusted human decisions to the complete mapping cycle.",
     )
+    review_fingerprint = model_fingerprint(
+        {
+            "cycle": state["mapping_cycle_id"],
+            "mapping": result.model_dump(mode="json", by_alias=True),
+        }
+    )
+    snapshot = update_product_snapshot(
+        work,
+        ProductWorkStage.HUMAN_REVIEW,
+        evidence_artifact_id=evidence_id,
+        reviewed_mapping_artifact_id=mapping_id,
+        review_fingerprint=review_fingerprint,
+        mapping_cycle_id=state["mapping_cycle_id"],
+        human_review_pending=False,
+    )
     return {
         "evidence_artifact_id": evidence_id,
         "reviewed_mapping_artifact_id": mapping_id,
         "review_required": False,
+        "review_fingerprint": review_fingerprint,
+        "product_snapshot_version": snapshot.version,
     }
 
 
@@ -310,10 +383,17 @@ async def coverage(
         f"Coverage has {len(unresolved)} unresolved mandatory value requirements.",
         metadata={"requiredUnresolved": len(unresolved)},
     )
+    snapshot = update_product_snapshot(
+        work,
+        ProductWorkStage.COVERAGE,
+        coverage_artifact_id=artifact_id,
+        unresolved_required_ids=unresolved,
+    )
     return {
         "coverage_artifact_id": artifact_id,
         "required_unresolved": len(unresolved),
         "missing_requirement_ids": unresolved,
+        "product_snapshot_version": snapshot.version,
     }
 
 
@@ -465,9 +545,20 @@ async def human_value(
     )
     work.ctx.catalogue.set_run_status(work.run_id, RunStatus.RUNNING)
     work.event("human.value_recorded", question, metadata={"requirementId": requirement_id})
+    review_fingerprint = model_fingerprint(result)
+    snapshot = update_product_snapshot(
+        work,
+        ProductWorkStage.HUMAN_INPUT,
+        evidence_artifact_id=evidence_id,
+        reviewed_mapping_artifact_id=reviewed_id,
+        review_fingerprint=review_fingerprint,
+        unresolved_required_ids=tuple(item for item in missing if item != requirement_id),
+    )
     return {
         "evidence_artifact_id": evidence_id,
         "reviewed_mapping_artifact_id": reviewed_id,
+        "review_fingerprint": review_fingerprint,
+        "product_snapshot_version": snapshot.version,
     }
 
 

@@ -58,6 +58,12 @@ class MiaWorkflowState(TypedDict, total=False):
     research_found_source: bool
     max_research_attempts: int
     source_fingerprint: str
+    evidence_fingerprint: str
+    target_fingerprint: str
+    mapping_input_fingerprint: str
+    semantic_mapper_fingerprint: str
+    review_fingerprint: str
+    build_input_fingerprint: str
     build_deployable: bool
 
     # Terminal communication
@@ -104,6 +110,12 @@ def reset_product_state(
         "research_attempts": 0,
         "research_found_source": False,
         "source_fingerprint": "",
+        "evidence_fingerprint": "",
+        "target_fingerprint": "",
+        "mapping_input_fingerprint": "",
+        "semantic_mapper_fingerprint": "",
+        "review_fingerprint": "",
+        "build_input_fingerprint": "",
         "build_deployable": False,
         "status": "running",
     }

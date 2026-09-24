@@ -11,7 +11,9 @@ from mia_dpp.aas.build import build_dpp
 from mia_dpp.domain.evidence import ProductKnowledgePackage
 from mia_dpp.domain.mappings import MappingResult, MappingStatus
 from mia_dpp.domain.product import RunStatus
+from mia_dpp.domain.product_work import ProductWorkStage
 from mia_dpp.workflow.context import MiaContext
+from mia_dpp.workflow.product_snapshot import model_fingerprint, update_product_snapshot
 from mia_dpp.workflow.state import MiaWorkflowState
 from mia_dpp.workflow.workspace import RunWorkspace
 
@@ -57,11 +59,28 @@ async def build_aas(
         "Built and deterministically validated the AAS artifact.",
         metadata={"deployable": package.deployable, "artifactSha256": package.artifact_sha256},
     )
+    build_input_fingerprint = model_fingerprint(
+        {
+            "evidence": package_input.model_dump(mode="json", by_alias=True),
+            "mapping": mapping.model_dump(mode="json", by_alias=True),
+        }
+    )
+    snapshot = update_product_snapshot(
+        work,
+        ProductWorkStage.VALIDATION,
+        dpp_artifact_id=dpp_id,
+        aas_artifact_id=aas_id,
+        validation_artifact_id=validation_id,
+        build_input_fingerprint=build_input_fingerprint,
+        last_error=None if package.deployable else "AAS validation did not produce a deployable artifact",
+    )
     return {
         "dpp_artifact_id": dpp_id,
         "aas_artifact_id": aas_id,
         "validation_artifact_id": validation_id,
         "build_deployable": package.deployable,
+        "build_input_fingerprint": build_input_fingerprint,
+        "product_snapshot_version": snapshot.version,
     }
 
 
@@ -81,6 +100,11 @@ async def store_result(
         error=None if deployable else "AAS validation did not produce a deployable artifact",
     )
     if not deployable:
+        update_product_snapshot(
+            work,
+            ProductWorkStage.FAILED,
+            last_error="AAS validation did not produce a deployable artifact",
+        )
         work.event(
             "dpp.validation_failed",
             "Stored failed build/validation artifacts without publishing a DPP version.",
@@ -107,6 +131,13 @@ async def store_result(
         work.ctx.catalogue.update_product(
             product.model_copy(update={"last_verified_at": utc_now()})
         )
+    update_product_snapshot(
+        work,
+        ProductWorkStage.COMPLETED,
+        unresolved_required_ids=(),
+        human_review_pending=False,
+        last_error=None,
+    )
     work.event(
         "dpp.version_created",
         f"Stored DPP version {version.version}.",
