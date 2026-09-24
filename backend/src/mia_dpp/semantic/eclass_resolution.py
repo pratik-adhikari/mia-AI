@@ -115,14 +115,11 @@ def technical_property_evidence_ids(
         grouped.setdefault(trace.focus_evidence_id, []).append(_route_key(trace))
 
     eligible: set[str] = set()
+    wanted = ("technical_data", _TECHNICAL_PROPERTY_PATH, "wildcard")
     for evidence_id, routes in grouped.items():
-        most_common, _ = Counter(routes).most_common(1)[0]
-        template_key, path, terminal = most_common
-        if (
-            template_key == "technical_data"
-            and path == _TECHNICAL_PROPERTY_PATH
-            and terminal == "wildcard"
-        ):
+        counts = Counter(routes)
+        wanted_count = counts[wanted]
+        if wanted_count > len(routes) / 2:
             eligible.add(evidence_id)
     return frozenset(eligible)
 
