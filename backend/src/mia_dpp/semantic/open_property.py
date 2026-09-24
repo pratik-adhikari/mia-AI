@@ -384,16 +384,18 @@ def detect_open_property_conflicts(
         assert item.target is not None
         by_instance_path[item.target.instance_path].append(item)
     for instance_path, items in by_instance_path.items():
-        distinct_slots = {
-            item.semantic_slot.key
+        distinct_semantic_ids = {
+            item.semantic_slot.semantic_id
             for item in items
             if item.semantic_slot is not None
         }
-        if len(distinct_slots) <= 1:
+        if len(distinct_semantic_ids) <= 1:
             continue
         for index, left in enumerate(items):
             for right in items[index + 1 :]:
-                if left.semantic_slot == right.semantic_slot:
+                assert left.semantic_slot is not None
+                assert right.semantic_slot is not None
+                if left.semantic_slot.semantic_id == right.semantic_slot.semantic_id:
                     continue
                 identity = (
                     OpenPropertyConflictKind.ID_SHORT_COLLISION.value,
