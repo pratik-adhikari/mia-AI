@@ -15,7 +15,12 @@ from mia_dpp.domain.evidence import (
     ProductKnowledgePackage,
     SourceLocation,
 )
-from mia_dpp.domain.mappings import FieldMapping, ListInstanceBinding, MappingStatus
+from mia_dpp.domain.mappings import (
+    FieldMapping,
+    ListInstanceBinding,
+    MappingStatus,
+    MappingTarget,
+)
 from mia_dpp.semantic.open_property import technical_property_area_binding
 from mia_dpp.tools.mapping.confidence import (
     MatchQuality,
@@ -252,3 +257,21 @@ def test_mapping_target_rejects_binding_outside_target_template_path() -> None:
             semantic_id="0173-1#02-POWER#001",
             list_instance_bindings=(invalid,),
         )
+
+
+def test_legacy_mapping_target_json_loads_without_list_bindings() -> None:
+    repository = OfficialTemplateRepository()
+    template = repository.load("technical_data")
+    target = mapping_target(
+        template,
+        TECHNICAL_DATA_ARBITRARY_PROPERTY_PATH,
+        id_short="RatedPower",
+        semantic_id="0173-1#02-POWER#001",
+    )
+    payload = target.model_dump(mode="json", exclude={"list_instance_bindings"})
+
+    restored = MappingTarget.model_validate(payload)
+
+    assert restored.list_instance_bindings == ()
+    assert restored.instance_path == target.instance_path
+    assert restored.semantic_id == target.semantic_id
