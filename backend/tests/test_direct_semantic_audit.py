@@ -14,12 +14,12 @@ from mia_dpp.domain.evidence import (
 )
 from mia_dpp.domain.mappings import (
     EvidenceOutcomeStatus,
+    FieldMapping,
     MappingAssessment,
     MappingBasis,
     MappingOrigin,
     MappingStatus,
     SemanticReviewItem,
-    FieldMapping,
 )
 from mia_dpp.domain.product_work import HumanReviewAction
 from mia_dpp.semantic.open_property import technical_property_area_binding
