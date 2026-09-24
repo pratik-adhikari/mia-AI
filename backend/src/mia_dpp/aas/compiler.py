@@ -108,6 +108,10 @@ class AasCompiler:
         package: ProductKnowledgePackage,
         mappings: Sequence[FieldMapping],
         template: SubmodelTemplate,
+        *,
+        aas_id: str | None = None,
+        asset_id: str | None = None,
+        submodel_id: str | None = None,
     ) -> AasArtifact:
         """Build one stable AAS artifact from accepted mappings."""
 
@@ -149,9 +153,12 @@ class AasCompiler:
             ],
         }
         suffix = sha256_json(stable_seed)[:32]
-        aas_id = f"urn:mia:aas:{suffix}"
-        asset_id = f"urn:mia:asset:{suffix}"
-        submodel_id = f"urn:mia:submodel:{template.release.key}:{suffix}"
+        aas_id = aas_id or f"urn:mia:aas:{suffix}"
+        asset_id = asset_id or f"urn:mia:asset:{suffix}"
+        submodel_id = (
+            submodel_id
+            or f"urn:mia:submodel:{template.release.key}:{suffix}"
+        )
 
         raw_submodel = self._repository.raw_submodel(template.release.key)
         raw_elements = raw_submodel.get("submodelElements")
