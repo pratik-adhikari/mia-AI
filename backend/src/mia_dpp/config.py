@@ -53,6 +53,54 @@ class Settings(BaseSettings):
         le=64,
         validation_alias="MIA_JEV_MAX_CONCURRENCY",
     )
+    jev_auto_min_selected_probability: float = Field(
+        default=0.80,
+        ge=0.0,
+        le=1.0,
+        validation_alias="MIA_JEV_AUTO_MIN_SELECTED_PROBABILITY",
+    )
+    jev_auto_min_margin: float = Field(
+        default=0.75,
+        ge=0.0,
+        le=1.0,
+        validation_alias="MIA_JEV_AUTO_MIN_MARGIN",
+    )
+    jev_auto_max_runner_up_ratio: float = Field(
+        default=0.12,
+        ge=0.0,
+        le=1.0,
+        validation_alias="MIA_JEV_AUTO_MAX_RUNNER_UP_RATIO",
+    )
+    jev_auto_max_entropy: float = Field(
+        default=0.45,
+        ge=0.0,
+        le=1.0,
+        validation_alias="MIA_JEV_AUTO_MAX_ENTROPY",
+    )
+    jev_optional_min_selected_probability: float = Field(
+        default=0.70,
+        ge=0.0,
+        le=1.0,
+        validation_alias="MIA_JEV_OPTIONAL_MIN_SELECTED_PROBABILITY",
+    )
+    jev_optional_min_margin: float = Field(
+        default=0.45,
+        ge=0.0,
+        le=1.0,
+        validation_alias="MIA_JEV_OPTIONAL_MIN_MARGIN",
+    )
+    jev_optional_max_runner_up_ratio: float = Field(
+        default=0.15,
+        ge=0.0,
+        le=1.0,
+        validation_alias="MIA_JEV_OPTIONAL_MAX_RUNNER_UP_RATIO",
+    )
+    jev_optional_max_entropy: float = Field(
+        default=0.65,
+        ge=0.0,
+        le=1.0,
+        validation_alias="MIA_JEV_OPTIONAL_MAX_ENTROPY",
+    )
     mia_database_url: str | None = Field(
         default=None,
         validation_alias="MIA_DATABASE_URL",
