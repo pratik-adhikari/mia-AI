@@ -499,12 +499,17 @@ export default function Workspace() {
       const decision = reviewDecisions[item.id];
       return decision ? [decision] : [];
     });
+    const reviewById = new Map(semanticReview.map((item) => [item.id, item]));
     const invalid =
       decisions.length !== semanticReview.length ||
-      decisions.some(
-        (decision) =>
-          decision.decision === "change_target" && !decision.correctedRequirementId
-      );
+      decisions.some((decision) => {
+        if (decision.decision !== "change_target") return false;
+        const review = reviewById.get(decision.reviewId);
+        if (!review) return true;
+        return review.targetKind === "direct"
+          ? !decision.correctedSemanticId
+          : !decision.correctedRequirementId;
+      });
     if (invalid) return;
 
     setBusy(true);
@@ -613,7 +618,9 @@ export default function Workspace() {
     setReviewDecisions((previous) => {
       const next = { ...previous };
       for (const item of semanticReview) {
-        next[item.id] = { reviewId: item.id, decision: "keep" };
+        if (item.mapping) {
+          next[item.id] = { reviewId: item.id, decision: "keep" };
+        }
       }
       return next;
     });
