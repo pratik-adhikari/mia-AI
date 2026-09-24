@@ -66,6 +66,12 @@ export function MappingRow({
             : "Deterministic mapping"}
         {m.humanReviewed ? " · reviewed" : ""}
       </p>
+      {m.humanReviewed && (
+        <p className="mt-1 inline-block rounded-full bg-violet-100 px-2 py-0.5 font-mono text-[10px] font-medium text-violet-700">
+          Human · {m.humanActorName || "authenticated reviewer"}
+          {m.humanValueKind === "dummy" ? " · DUMMY VALUE" : ""}
+        </p>
+      )}
 
       {m.llmReview && (
         <div className="mt-3 rounded-lg border border-signal/15 bg-signal/5 p-3 text-[11px] leading-relaxed">
@@ -177,7 +183,11 @@ export function MappingRow({
 
       {(m.status === "approved" || m.status === "auto") && (
         <p className="mt-2.5 font-mono text-[11px] text-ok">
-          {m.status === "auto" ? "Cleared automatically" : "Approved by you"}
+          {m.status === "auto"
+            ? "Cleared automatically"
+            : m.humanActorName
+              ? `Approved by ${m.humanActorName}`
+              : "Approved by human reviewer"}
         </p>
       )}
       {m.status === "rejected" && (

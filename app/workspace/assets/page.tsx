@@ -8,6 +8,15 @@ import { useAuthenticatedFetch } from "@/lib/use-authenticated-fetch";
 
 const API_URL = process.env.NEXT_PUBLIC_MIA_API_URL ?? "";
 
+function statusLabel(item: ProductLibraryItem) {
+  if (item.workflowStatus === "awaiting_human") return "Awaiting human approval";
+  if (item.workflowStatus === "running") return "Work in progress";
+  if (item.workflowStatus === "failed") return "Previous attempt failed · reusable history saved";
+  if (item.latestDpp?.deployable) return `DPP v${item.latestDpp.version} ready`;
+  if (item.latestRun) return `${item.workflowStatus.replaceAll("_", " ")} · reusable history saved`;
+  return "Saved product";
+}
+
 export default function AssetsPage() {
   const authenticatedFetch = useAuthenticatedFetch();
   const [items, setItems] = useState<ProductLibraryItem[]>([]);
@@ -37,95 +46,64 @@ export default function AssetsPage() {
       <div className="mx-auto max-w-shell">
         <div className="mb-8 flex items-center justify-between">
           <div>
-            <h1 className="text-[22px] font-semibold tracking-tight text-ink">
-              My Assets
-            </h1>
-            {!loading && (
-              <p className="mt-1 text-[13px] text-muted">
-                {items.length} product{items.length === 1 ? "" : "s"} in your account
-              </p>
-            )}
+            <h1 className="text-[22px] font-semibold tracking-tight text-ink">My Assets</h1>
+            {!loading && <p className="mt-1 text-[13px] text-muted">{items.length} durable product{items.length === 1 ? "" : "s"}</p>}
           </div>
-          <Link
-            href="/workspace"
-            className="rounded-full bg-ink px-4 py-2 text-[13px] font-medium text-white"
-          >
-            New passport
-          </Link>
+          <Link href="/workspace" className="rounded-full bg-ink px-4 py-2 text-[13px] font-medium text-white">New passport</Link>
         </div>
 
-        {error && (
-          <div className="mb-5 rounded-xl border border-red-200 bg-red-50 p-4 text-[13px] text-red-700">
-            Could not load durable assets: {error}
-          </div>
-        )}
+        {error && <div className="mb-5 rounded-xl border border-red-200 bg-red-50 p-4 text-[13px] text-red-700">Could not load durable assets: {error}</div>}
 
         {loading ? (
-          <div className="flex min-h-[320px] items-center justify-center text-[13px] text-muted">
-            Loading assets…
-          </div>
+          <div className="flex min-h-[320px] items-center justify-center text-[13px] text-muted">Loading assets…</div>
         ) : items.length === 0 ? (
           <div className="flex min-h-[360px] items-center justify-center rounded-2xl border border-hairline bg-paper">
             <div className="max-w-xs text-center">
               <p className="text-[16px] font-semibold text-ink">No products yet</p>
-              <p className="mt-2 text-[13px] leading-relaxed text-muted">
-                Import a product website or start a chat. Durable product history and
-                published DPP versions will appear here.
-              </p>
-              <Link
-                href="/workspace"
-                className="mt-5 inline-flex rounded-full bg-ink px-5 py-2.5 text-[13px] font-medium text-white"
-              >
-                Start now
-              </Link>
+              <p className="mt-2 text-[13px] leading-relaxed text-muted">Import a product website or start a chat. Product evidence and human review history will remain reusable here.</p>
+              <Link href="/workspace" className="mt-5 inline-flex rounded-full bg-ink px-5 py-2.5 text-[13px] font-medium text-white">Start now</Link>
             </div>
           </div>
         ) : (
           <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-            {items.map(({ product, latestDpp, runCount }) => (
-              <Link
-                key={product.id}
-                href={`/products/${product.id}`}
-                className="overflow-hidden rounded-2xl border border-hairline bg-paper transition-shadow hover:shadow-sm"
-              >
-                <div className="flex h-36 items-center justify-center border-b border-hairline bg-mist">
-                  {product.imageUrl ? (
-                    // External manufacturer images are intentionally left to the browser here.
-                    // eslint-disable-next-line @next/next/no-img-element
-                    <img
-                      src={product.imageUrl}
-                      alt=""
-                      className="h-full w-full object-contain p-4"
-                    />
-                  ) : (
-                    <span className="font-mono text-[11px] text-muted">DPP / AAS</span>
-                  )}
-                </div>
-                <div className="p-4">
-                  <p className="truncate text-[14px] font-semibold text-ink">
-                    {product.name ?? product.canonicalUrl}
-                  </p>
-                  <p className="mt-1 truncate text-[12px] text-muted">
-                    {product.manufacturer ?? new URL(product.canonicalUrl).hostname}
-                  </p>
-                  <div className="mt-4 flex items-center gap-2 text-[11px]">
-                    <span
-                      className={`h-1.5 w-1.5 rounded-full ${
-                        latestDpp?.deployable ? "bg-ok" : "bg-warn"
-                      }`}
-                    />
-                    <span className={latestDpp?.deployable ? "text-ok" : "text-warn"}>
-                      {latestDpp
-                        ? `DPP v${latestDpp.version}`
-                        : "Draft / research in progress"}
-                    </span>
-                    <span className="ml-auto text-muted">
-                      {runCount} run{runCount === 1 ? "" : "s"}
-                    </span>
+            {items.map((item) => {
+              const { product, latestDpp, runCount } = item;
+              return (
+                <article key={product.id} className="overflow-hidden rounded-2xl border border-hairline bg-paper">
+                  <Link href={`/products/${product.id}`} className="block transition-shadow hover:shadow-sm">
+                    <div className="flex h-36 items-center justify-center border-b border-hairline bg-mist">
+                      {product.imageUrl ? (
+                        // eslint-disable-next-line @next/next/no-img-element
+                        <img src={product.imageUrl} alt="" className="h-full w-full object-contain p-4" />
+                      ) : <span className="font-mono text-[11px] text-muted">DPP / AAS</span>}
+                    </div>
+                    <div className="p-4 pb-3">
+                      <p className="truncate text-[14px] font-semibold text-ink">{product.name ?? product.canonicalUrl}</p>
+                      <p className="mt-1 truncate text-[12px] text-muted">{product.manufacturer ?? new URL(product.canonicalUrl).hostname}</p>
+                      <div className="mt-4 flex items-center gap-2 text-[11px]">
+                        <span className={`h-1.5 w-1.5 rounded-full ${latestDpp?.deployable ? "bg-ok" : "bg-warn"}`} />
+                        <span className={latestDpp?.deployable ? "text-ok" : "text-warn"}>{statusLabel(item)}</span>
+                        <span className="ml-auto text-muted">{runCount} run{runCount === 1 ? "" : "s"}</span>
+                      </div>
+                      {(item.humanReviewedMappings > 0 || item.humanDummyMappings > 0) && (
+                        <p className="mt-2 text-[11px] text-violet-700">
+                          Human reviewed {item.humanReviewedMappings}
+                          {item.humanDummyMappings > 0 ? ` · DUMMY ${item.humanDummyMappings}` : ""}
+                        </p>
+                      )}
+                    </div>
+                  </Link>
+                  <div className="flex gap-2 border-t border-hairline px-4 py-3">
+                    {item.resumable && item.resumeThreadId ? (
+                      <Link href={`/workspace?thread=${encodeURIComponent(item.resumeThreadId)}`} className="rounded-full bg-ink px-3 py-1.5 text-[12px] font-medium text-white">Resume</Link>
+                    ) : (
+                      <Link href={`/workspace?product=${encodeURIComponent(product.id)}`} className="rounded-full border border-hairline px-3 py-1.5 text-[12px] font-medium text-ink">Continue with saved work</Link>
+                    )}
+                    <Link href={`/products/${product.id}`} className="rounded-full border border-hairline px-3 py-1.5 text-[12px] text-muted">Details</Link>
                   </div>
-                </div>
-              </Link>
-            ))}
+                </article>
+              );
+            })}
           </div>
         )}
       </div>

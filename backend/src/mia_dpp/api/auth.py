@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Annotated
 
+import httpx
+
 from clerk_backend_api import Clerk
 from clerk_backend_api.security.types import AuthenticateRequestOptions
 from fastapi import Depends, HTTPException, Request
@@ -45,4 +47,37 @@ async def authenticated_user(request: Request) -> str:
     return user_id
 
 
+async def authenticated_user_name(request: Request) -> str:
+    """Return a stable human-readable reviewer label from the authenticated identity."""
+
+    application: Mia = request.app.state.mia
+    settings = application.settings
+    if not settings.authentication_enabled:
+        return "Local user"
+
+    user_id = await authenticated_user(request)
+    secret = settings.clerk_secret_key
+    if secret is None:
+        return user_id
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            response = await client.get(
+                f"https://api.clerk.com/v1/users/{user_id}",
+                headers={"Authorization": f"Bearer {secret.get_secret_value()}"},
+            )
+            response.raise_for_status()
+            profile = response.json()
+    except (httpx.HTTPError, ValueError):
+        return user_id
+
+    first = profile.get("first_name")
+    last = profile.get("last_name")
+    full = " ".join(part for part in (first, last) if isinstance(part, str) and part.strip()).strip()
+    if full:
+        return full
+    username = profile.get("username")
+    return username if isinstance(username, str) and username.strip() else user_id
+
+
 AuthenticatedUser = Annotated[str, Depends(authenticated_user)]
+AuthenticatedUserName = Annotated[str, Depends(authenticated_user_name)]

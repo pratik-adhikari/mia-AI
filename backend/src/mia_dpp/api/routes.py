@@ -616,7 +616,10 @@ async def read_durable_artifact(
     if artifact is None or artifact.run_id is None:
         raise HTTPException(status_code=404, detail="unknown artifact")
     run = mia.context.catalogue.get_run(artifact.run_id)
-    if run is None or mia.context.catalogue.get_thread(run.thread_id, user_id=user_id) is None:
+    if (
+        run is None
+        or mia.context.catalogue.get_product(run.product_id, user_id=user_id) is None
+    ):
         raise HTTPException(status_code=404, detail="unknown artifact")
     return Response(
         content=mia.context.artifacts.get(artifact),

@@ -95,6 +95,8 @@ export interface FieldMapping {
   status: MappingStatus;
   mappingOrigin: MappingOrigin;
   humanReviewed: boolean;
+  humanActorName?: string | null;
+  humanValueKind?: "verified" | "dummy" | null;
   llmReview?: {
     conclusion: string;
     rationale: string;
@@ -276,6 +278,7 @@ export interface ThreadRecord {
   title: string | null;
   updatedAt: string;
   lastMessageAt: string | null;
+  deletedAt?: string | null;
 }
 
 export interface SemanticReviewItem {
@@ -453,6 +456,7 @@ export interface ProductRun {
   status: ProductRunStatus;
   refreshRequested: boolean;
   reusedFromRunId: string | null;
+  seededFromRunId: string | null;
   startedAt: string;
   finishedAt: string | null;
   error: string | null;
@@ -488,7 +492,13 @@ export interface StoredArtifact {
 export interface ProductLibraryItem {
   product: ProductRecord;
   latestDpp: DppVersionRecord | null;
+  latestRun: ProductRun | null;
   runCount: number;
+  resumable: boolean;
+  resumeThreadId: string | null;
+  workflowStatus: string;
+  humanReviewedMappings: number;
+  humanDummyMappings: number;
 }
 
 export interface ProductDetail {

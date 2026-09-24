@@ -51,6 +51,7 @@ export default function ProductDetailPage() {
 
   const { product, runs, dppVersions, artifacts } = detail;
   const title = product.name ?? product.manufacturerProductId ?? "Unnamed product";
+  const resumableRun = runs.find((run) => run.status === "running" || run.status === "awaiting_human");
 
   return (
     <main className="min-h-screen bg-mist">
@@ -59,8 +60,11 @@ export default function ProductDetailPage() {
           <Link href="/products" className="text-[13px] text-muted hover:text-ink">
             ← Product library
           </Link>
-          <Link href="/workspace" className="rounded-full bg-ink px-3 py-1.5 text-[12px] text-white">
-            Open workspace
+          <Link
+            href={resumableRun ? `/workspace?thread=${encodeURIComponent(resumableRun.threadId)}` : "/workspace"}
+            className="rounded-full bg-ink px-3 py-1.5 text-[12px] text-white"
+          >
+            {resumableRun ? "Resume workspace" : "Open workspace"}
           </Link>
         </div>
       </header>
@@ -136,6 +140,12 @@ export default function ProductDetailPage() {
                       <p className="font-mono text-xs text-muted">{run.id}</p>
                       <p className="mt-1 text-sm text-ink">{time(run.startedAt)}</p>
                       {run.error && <p className="mt-2 text-xs text-red-700">{run.error}</p>}
+                      {run.seededFromRunId && <p className="mt-2 text-xs text-violet-700">Reused historical work from {run.seededFromRunId}</p>}
+                      {(run.status === "running" || run.status === "awaiting_human") && (
+                        <Link href={`/workspace?thread=${encodeURIComponent(run.threadId)}`} className="mt-2 inline-flex text-xs font-medium text-signal hover:underline">
+                          Resume this run
+                        </Link>
+                      )}
                     </div>
                     <span className={`rounded-full px-2.5 py-1 text-xs ${statusClass(run.status)}`}>
                       {run.status.replace("_", " ")}

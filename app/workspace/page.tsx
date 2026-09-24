@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
+import { useSearchParams } from "next/navigation";
 import { UserButton } from "@clerk/nextjs";
 import type {
   AgentTraceEvent,
@@ -63,6 +64,7 @@ const SAMPLES = [
 export default function Workspace() {
   const authenticationEnabled = useAuthenticationEnabled();
   const authenticatedFetch = useAuthenticatedFetch();
+  const searchParams = useSearchParams();
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [threads, setThreads] = useState<ThreadRecord[]>([]);
   const [input, setInput] = useState("");
@@ -95,6 +97,7 @@ export default function Workspace() {
   const [tab, setTab] = useState<WorkspaceTab>("mappings");
   const [debugPanelOpen, setDebugPanelOpen] = useState(false);
   const endRef = useRef<HTMLDivElement>(null);
+  const restoredThreadRef = useRef<string | null>(null);
 
   const mergeActivity = useCallback((events: AgentTraceEvent[]) => {
     setAgentActivity((previous) => {
@@ -170,6 +173,13 @@ export default function Workspace() {
   }, [authenticatedFetch]);
 
   useEffect(() => {
+    const requestedThread = searchParams.get("thread");
+    if (!requestedThread || restoredThreadRef.current === requestedThread) return;
+    restoredThreadRef.current = requestedThread;
+    void openThread(requestedThread);
+  }, [searchParams]);
+
+  useEffect(() => {
     const researchActive = backgroundJob?.status === "queued" || backgroundJob?.status === "running";
     if ((!busy && !researchActive) || !threadId) return;
     let cancelled = false;
@@ -219,6 +229,22 @@ export default function Workspace() {
     if (stateResponse.ok) applyAgentResponse((await stateResponse.json()) as AgentResponse);
     void refreshArtifacts(selectedThreadId);
     void refreshBackgroundJobs(selectedThreadId);
+  }
+
+  async function deleteThread(selectedThreadId: string) {
+    if (!window.confirm("Delete this chat from Chat History? Product evidence and mapping audit data will remain reusable.")) return;
+    const response = await authenticatedFetch(
+      `${API_URL}/api/threads/${encodeURIComponent(selectedThreadId)}`,
+      { method: "DELETE" }
+    );
+    if (!response.ok) return;
+    setThreads((previous) => previous.filter((item) => item.id !== selectedThreadId));
+    if (threadId === selectedThreadId) {
+      setThreadId(null);
+      setMessages([]);
+      setSemanticReview([]);
+      setHumanRequest(null);
+    }
   }
 
   async function send(text: string) {
@@ -343,8 +369,8 @@ export default function Workspace() {
     }
   }
 
-  async function submitHumanValue() {
-    if (!threadId || !humanRequest?.requirementId || !humanValue.trim() || busy) return;
+  async function submitHumanValue(useDummy = false) {
+    if (!threadId || !humanRequest?.requirementId || (!useDummy && !humanValue.trim()) || busy) return;
     setBusy(true);
     try {
       const response = await authenticatedFetch(`${API_URL}/api/agent/value`, {
@@ -354,7 +380,8 @@ export default function Workspace() {
           threadId,
           productId: humanRequest.productId,
           requirementId: humanRequest.requirementId,
-          value: humanValue.trim(),
+          value: useDummy ? "" : humanValue.trim(),
+          useDummy,
         }),
       });
       const body = (await response.json()) as AgentResponse | { detail?: string };
@@ -366,7 +393,7 @@ export default function Workspace() {
       setHumanValue("");
       setMessages((previous) => [
         ...previous,
-        { role: "user", content: humanValue.trim() },
+        { role: "user", content: useDummy ? "Use a human-approved DUMMY placeholder." : humanValue.trim() },
         { role: "assistant", content: data.reply },
       ]);
     } catch (error) {
@@ -509,6 +536,8 @@ export default function Workspace() {
       status: "approved",
       mappingOrigin: "human",
       humanReviewed: true,
+      humanActorName: "You",
+      humanValueKind: "verified",
       humanComment: comment?.trim() || null,
       reasoning: "Corrected by you and awaiting trusted backend persistence.",
     };
@@ -637,19 +666,28 @@ export default function Workspace() {
             </button>
           )}
           {threads.length > 0 && (
-            <select
-              aria-label="Conversation history"
-              value={threadId ?? ""}
-              onChange={(event) => void openThread(event.target.value)}
-              className="hidden max-w-44 rounded-lg border border-hairline bg-white px-2 py-1.5 text-[12px] text-ink sm:block"
-            >
-              <option value="" disabled>Conversation history</option>
-              {threads.map((thread) => (
-                <option key={thread.id} value={thread.id}>
-                  {thread.title || thread.id}
-                </option>
-              ))}
-            </select>
+            <div className="hidden items-center gap-1 sm:flex">
+              <select
+                aria-label="Conversation history"
+                value={threadId ?? ""}
+                onChange={(event) => void openThread(event.target.value)}
+                className="max-w-44 rounded-lg border border-hairline bg-white px-2 py-1.5 text-[12px] text-ink"
+              >
+                <option value="" disabled>Chat History</option>
+                {threads.map((thread) => (
+                  <option key={thread.id} value={thread.id}>{thread.title || thread.id}</option>
+                ))}
+              </select>
+              {threadId && (
+                <button
+                  type="button"
+                  onClick={() => void deleteThread(threadId)}
+                  className="rounded-lg border border-hairline px-2 py-1.5 text-[11px] text-red-700 hover:bg-red-50"
+                >
+                  Delete
+                </button>
+              )}
+            </div>
           )}
           <Link href="/products" className="hidden text-[13px] text-muted hover:text-ink sm:inline">
             Products
@@ -793,12 +831,15 @@ export default function Workspace() {
                       className="min-w-0 flex-1 rounded-lg border border-hairline px-3 py-2 text-sm"
                       placeholder="Enter the verified value"
                     />
-                    <button
-                      type="submit"
-                      disabled={!humanValue.trim()}
-                      className="rounded-lg bg-ink px-4 py-2 text-xs font-medium text-white disabled:opacity-30"
-                    >
+                    <button type="submit" disabled={!humanValue.trim()} className="rounded-lg bg-ink px-4 py-2 text-xs font-medium text-white disabled:opacity-30">
                       Save value
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => void submitHumanValue(true)}
+                      className="rounded-lg border border-violet-200 bg-violet-50 px-3 py-2 text-xs font-medium text-violet-700"
+                    >
+                      Use DUMMY
                     </button>
                   </div>
                 </form>
