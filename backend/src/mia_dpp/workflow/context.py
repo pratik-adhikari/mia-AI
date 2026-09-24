@@ -37,3 +37,8 @@ class MiaContext:
     )
     jev_routing_max_concurrency: int = 8
     jev_decision_policy: DecisionPolicySettings = field(default_factory=DecisionPolicySettings)
+    jev_grouping_scopes: tuple[ContextScope, ...] = (
+        ContextScope.SIBLINGS,
+        ContextScope.FULL_PRODUCT,
+    )
+    jev_grouping_max_groups: int = 200
