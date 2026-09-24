@@ -10,13 +10,18 @@ from typing import Any
 import pytest
 
 from mia_dpp.agent.models import AgentRequest, AgentResponse, AgentStatus
+from mia_dpp.agents.conversation import ConversationAction, ConversationTurn
 from mia_dpp.domain.product import RunStatus
 from mia_dpp.mia import Mia
 from mia_dpp.persistence.catalogue import ProductCatalogue
+from mia_dpp.services.product_query import WorkStatusView
 
 
 class _Store:
     def list_events(self, thread_id: str, *, user_id: str):
+        return ()
+
+    def list_artifacts(self, thread_id: str, *, user_id: str):
         return ()
 
 
@@ -448,3 +453,56 @@ def test_initial_message_unknown_failure_never_fails_replacement_run(tmp_path) -
     assert replacement.status is RunStatus.RUNNING
     messages = catalogue.list_messages("thread-initial-fence")
     assert messages[0].run_id is None
+
+
+
+def test_general_chat_reply_does_not_advance_langgraph(tmp_path) -> None:
+    catalogue = ProductCatalogue(tmp_path / "catalogue.sqlite3")
+    catalogue.get_or_create_thread("thread-general-chat", "local-development")
+
+    class Graph:
+        invoked = False
+
+        async def aget_state(self, config):
+            return _Snapshot({})
+
+        async def ainvoke(self, update, **kwargs):
+            self.invoked = True
+            raise AssertionError("general chat must not execute the workflow")
+
+    class Conversation:
+        async def run(self, message, *, thread_id, user_id, recent_messages=()):
+            assert message == "What are you doing right now?"
+            assert thread_id == "thread-general-chat"
+            assert recent_messages[-1]["content"] == message
+            return ConversationTurn(
+                action=ConversationAction.REPLY,
+                reply="There is no active product workflow yet.",
+                decision_summary="Answered from durable work status.",
+            )
+
+    class Query:
+        def work_status(self, thread_id, *, user_id):
+            return WorkStatusView(thread_id=thread_id)
+
+    graph = Graph()
+    mia = _mia(catalogue, graph)
+    mia.conversation = Conversation()
+    mia.query = Query()
+
+    response = asyncio.run(
+        mia.message(
+            AgentRequest(
+                thread_id="thread-general-chat",
+                message="What are you doing right now?",
+            )
+        )
+    )
+
+    assert response.reply == "There is no active product workflow yet."
+    assert response.status is AgentStatus.AWAITING_INPUT
+    assert graph.invoked is False
+    assert [message.role.value for message in catalogue.list_messages("thread-general-chat")] == [
+        "user",
+        "assistant",
+    ]
