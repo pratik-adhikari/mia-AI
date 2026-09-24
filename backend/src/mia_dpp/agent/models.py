@@ -157,6 +157,7 @@ class AgentReviewDecision(WireModel):
         "correct",
     ] = "keep"
     corrected_requirement_id: str | None = None
+    corrected_semantic_id: str | None = Field(default=None, max_length=512)
     corrected_value: str | None = Field(default=None, max_length=4096)
     comment: str | None = Field(default=None, max_length=1000)
 
