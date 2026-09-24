@@ -4,6 +4,12 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from mia_dpp.domain.product import BackgroundJobStatus, MessageRole, RunStatus
+from mia_dpp.domain.product_work import (
+    HumanReviewAction,
+    HumanReviewRecord,
+    ProductWorkSnapshot,
+    ProductWorkStage,
+)
 from mia_dpp.persistence.catalogue import ProductCatalogue
 from mia_dpp.workflow.identity import canonical_product_url
 
@@ -154,3 +160,63 @@ def test_deleted_chat_is_hidden_but_product_history_remains_reusable(tmp_path: P
     assert catalogue.list_threads("user-a") == ()
     assert catalogue.get_product(product.id, user_id="user-a") == product
     assert catalogue.list_runs(product.id, user_id="user-a")[0].id == run.id
+
+
+def test_product_work_snapshot_is_user_scoped_and_versioned(tmp_path: Path) -> None:
+    catalogue = ProductCatalogue(tmp_path / "catalogue.sqlite3")
+    catalogue.get_or_create_thread("thread-snapshot", "user-a")
+    product, _ = catalogue.get_or_create_product(
+        "https://example.com/snapshot",
+        user_id="user-a",
+    )
+    run = catalogue.start_run(product.id, "thread-snapshot", user_id="user-a")
+    first = catalogue.save_product_work_snapshot(
+        ProductWorkSnapshot(
+            id="snapshot-one",
+            user_id="user-a",
+            product_id=product.id,
+            run_id=run.id,
+            thread_id=run.thread_id,
+            workflow_stage=ProductWorkStage.EVIDENCE,
+            evidence_artifact_id="artifact-evidence",
+        )
+    )
+    second = catalogue.save_product_work_snapshot(
+        first.model_copy(
+            update={
+                "workflow_stage": ProductWorkStage.MAPPING,
+                "semantic_mapping_artifact_id": "artifact-mapping",
+            }
+        )
+    )
+
+    assert first.version == 1
+    assert second.version == 2
+    assert catalogue.get_product_work_snapshot(product.id, user_id="user-a") == second
+    assert catalogue.get_product_work_snapshot(product.id, user_id="user-b") is None
+
+
+def test_human_review_history_is_append_only_and_user_scoped(tmp_path: Path) -> None:
+    catalogue = ProductCatalogue(tmp_path / "catalogue.sqlite3")
+    catalogue.get_or_create_thread("thread-review-audit", "user-a")
+    product, _ = catalogue.get_or_create_product(
+        "https://example.com/review-audit",
+        user_id="user-a",
+    )
+    run = catalogue.start_run(product.id, "thread-review-audit", user_id="user-a")
+    review = HumanReviewRecord(
+        id="human-review-1",
+        user_id="user-a",
+        product_id=product.id,
+        run_id=run.id,
+        thread_id=run.thread_id,
+        action=HumanReviewAction.SUPPLIED_DUMMY,
+        actor_name="Pratik",
+        final_requirement_id="req-example",
+        value_kind="dummy",
+    )
+
+    catalogue.add_human_review(review)
+
+    assert catalogue.list_human_reviews(product.id, user_id="user-a") == (review,)
+    assert catalogue.list_human_reviews(product.id, user_id="user-b") == ()

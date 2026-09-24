@@ -15,6 +15,7 @@ from typing import Any, Protocol, TypeVar, cast
 from pydantic import BaseModel
 
 from mia_dpp.domain.mappings import FieldMapping
+from mia_dpp.domain.product_work import HumanReviewRecord, ProductWorkSnapshot
 from mia_dpp.domain.product import (
     BackgroundJob,
     BackgroundJobStatus,
@@ -563,6 +564,89 @@ class ProductCatalogue:
             "JOIN threads ON threads.id=runs.thread_id "
             "WHERE threads.user_id=? ORDER BY artifacts.created_at",
             (user_id,),
+        )
+
+    def get_product_work_snapshot(
+        self,
+        product_id: str,
+        *,
+        user_id: str = LOCAL_USER_ID,
+    ) -> ProductWorkSnapshot | None:
+        if not self.user_owns_product(user_id, product_id):
+            return None
+        return self._one(
+            ProductWorkSnapshot,
+            "SELECT payload FROM product_work_snapshots WHERE user_id=? AND product_id=?",
+            (user_id, product_id),
+        )
+
+    def save_product_work_snapshot(
+        self,
+        snapshot: ProductWorkSnapshot,
+    ) -> ProductWorkSnapshot:
+        """Version and replace the authoritative product-level workflow pointer set."""
+
+        if not self.user_owns_product(snapshot.user_id, snapshot.product_id):
+            raise PermissionError("unknown product")
+        existing = self.get_product_work_snapshot(
+            snapshot.product_id,
+            user_id=snapshot.user_id,
+        )
+        now = _now()
+        stored = snapshot.model_copy(
+            update={
+                "version": (existing.version + 1) if existing else 1,
+                "created_at": existing.created_at if existing else snapshot.created_at,
+                "updated_at": now,
+            }
+        )
+        self._execute(
+            "INSERT INTO product_work_snapshots(user_id,product_id,version,payload,updated_at) "
+            "VALUES(?,?,?,?,?) ON CONFLICT(user_id,product_id) DO UPDATE SET "
+            "version=excluded.version,payload=excluded.payload,updated_at=excluded.updated_at",
+            (
+                stored.user_id,
+                stored.product_id,
+                stored.version,
+                stored.model_dump_json(),
+                stored.updated_at.isoformat(),
+            ),
+        )
+        return stored
+
+    def add_human_review(self, review: HumanReviewRecord) -> HumanReviewRecord:
+        """Append an immutable human decision; existing records are never updated."""
+
+        if not self.user_owns_product(review.user_id, review.product_id):
+            raise PermissionError("unknown product")
+        self._execute(
+            "INSERT INTO human_reviews(id,user_id,product_id,run_id,thread_id,created_at,payload) "
+            "VALUES(?,?,?,?,?,?,?)",
+            (
+                review.id,
+                review.user_id,
+                review.product_id,
+                review.run_id,
+                review.thread_id,
+                review.created_at.isoformat(),
+                review.model_dump_json(),
+            ),
+        )
+        return review
+
+    def list_human_reviews(
+        self,
+        product_id: str,
+        *,
+        user_id: str = LOCAL_USER_ID,
+    ) -> tuple[HumanReviewRecord, ...]:
+        if not self.user_owns_product(user_id, product_id):
+            return ()
+        return self._many(
+            HumanReviewRecord,
+            "SELECT payload FROM human_reviews WHERE user_id=? AND product_id=? "
+            "ORDER BY created_at,id",
+            (user_id, product_id),
         )
 
     def latest_reusable_artifacts(
