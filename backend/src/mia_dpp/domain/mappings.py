@@ -59,7 +59,11 @@ class EvidenceOutcome(WireModel):
             EvidenceOutcomeStatus.UNMAPPED,
             EvidenceOutcomeStatus.IRRELEVANT,
             EvidenceOutcomeStatus.REJECTED,
-        } and (self.requirement_id is not None or self.alternative_requirement_ids):
+        } and (
+            self.requirement_id is not None
+            or self.direct_target
+            or self.alternative_requirement_ids
+        ):
             raise ValueError("unmapped, irrelevant, or rejected evidence cannot have targets")
         return self
 
