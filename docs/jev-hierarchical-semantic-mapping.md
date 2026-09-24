@@ -241,3 +241,92 @@ The starting values are hypotheses for inspection, not claims of statistical cal
 
 They include the explicit 85/15 versus 85/7/... behavior, threshold retuning without model calls,
 and high-confidence disagreement between context scopes.
+
+
+## Milestone 3 implemented: lossless semantic grouping
+
+The shadow flow now also produces:
+
+```text
+semantic/jev-semantic-grouping-shadow.json
+```
+
+The grouping stage runs after routing diagnostics and before the existing authoritative mapper:
+
+```text
+normalize
+  -> context views
+  -> Jev IDTA routing
+  -> routing diagnostics / policy
+  -> lossless grouping strategies
+  -> existing trusted mapping pipeline
+```
+
+Grouping is metadata only. It never merges, rewrites, deletes, or replaces an `EvidenceRecord`.
+
+### Strategies
+
+The current grouping report contains:
+
+1. `hierarchy_baseline`
+   - groups evidence that already shares the exact visible source hierarchy;
+   - makes no semantic model call;
+   - provides a deterministic comparison baseline.
+
+2. `jev_incremental:siblings`
+   - processes evidence in source order;
+   - asks Jev whether the focus fact belongs to one of the existing groups,
+     `__new_group__`, or `__unresolved__`;
+   - supplies sibling context.
+
+3. `jev_incremental:full_product`
+   - uses the same bounded classification mechanism;
+   - supplies full-product context.
+
+The first evidence item creates the first group deterministically. Every later Jev call receives only
+existing group IDs plus the two explicit abstention/creation options. Group IDs are MIA-generated
+stable identifiers; Jev never creates identifiers.
+
+### Group comparison
+
+Group IDs from different strategies are intentionally not compared directly. The report instead
+compares the pairwise relation:
+
+```text
+Does strategy X place evidence A and evidence B in the same group?
+```
+
+For every evidence pair the artifact records:
+
+- strategies grouping them together;
+- strategies separating them;
+- strategies where either item is unresolved;
+- agreement across strategies that produced a usable pairwise decision.
+
+This makes the grouping experiment comparable even though each strategy builds a different
+partition.
+
+### Safety and boundedness
+
+- `__new_group__` creates only a MIA-owned metadata group.
+- `__unresolved__` leaves the evidence ungrouped.
+- evidence values and hierarchy remain unchanged.
+- the configured group limit is capped at 253 because Jev Choice supports 255 options and
+  `NEW_GROUP` plus `UNRESOLVED` consume two options.
+- reaching the configured group limit turns another `NEW_GROUP` result into unresolved metadata
+  rather than exceeding the bounded Jev option space.
+
+### Tests added for milestone 3
+
+`test_semantic_grouping.py` verifies:
+
+- source evidence remains unchanged after grouping;
+- exact-hierarchy baseline behavior;
+- existing-group assignment;
+- explicit new-group creation;
+- explicit unresolved classification;
+- group-limit fallback to unresolved;
+- comparison by pairwise co-grouping instead of group-ID equality.
+
+This stage is still diagnostic-only and has no effect on `MappingResult`, human-review state,
+coverage, or AAS generation.
