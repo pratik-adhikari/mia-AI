@@ -417,3 +417,13 @@ IDs:
 
 The audit therefore remains understandable even if an old evidence/mapping artifact is later removed.
 It intentionally does not duplicate whole mapping objects or evidence packages.
+
+
+### Artifact existence includes storage bytes
+
+The reuse decision checks both durable catalogue ownership and the configured artifact store.
+`LocalArtifactStore.exists()` checks the file path; the Vercel adapter checks the private blob.
+
+This closes the gap where metadata could survive after underlying bytes were deleted. The unit-level
+reuse service can still run without a store for pure policy tests, but production workflow nodes
+always provide the configured artifact store.

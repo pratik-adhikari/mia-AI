@@ -76,6 +76,13 @@ class VercelBlobArtifactStore:
             return bytes(value.content)
         return bytes(value)
 
+    def exists(self, artifact: StoredArtifact) -> bool:
+        try:
+            self.get(artifact)
+        except Exception:
+            return False
+        return True
+
     @staticmethod
     def _safe(value: str) -> str:
         return re.sub(r"[^A-Za-z0-9._-]+", "-", value).strip("-.") or "artifact"

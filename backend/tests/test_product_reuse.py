@@ -182,3 +182,49 @@ def test_missing_snapshot_artifact_falls_back_instead_of_crashing_reuse(tmp_path
 
     assert decision.mode is ReuseMode.FRESH
     assert decision.evidence_artifact_id is None
+
+
+
+def test_missing_underlying_artifact_bytes_fall_back_to_fresh_work(tmp_path: Path) -> None:
+    from mia_dpp.storage.local import LocalArtifactStore
+    from mia_dpp.storage.models import StoredArtifact
+
+    catalogue = ProductCatalogue(tmp_path / "catalogue.sqlite3")
+    store = LocalArtifactStore(tmp_path / "artifacts")
+    catalogue.get_or_create_thread("thread-missing-bytes", "user-a")
+    product, _ = catalogue.get_or_create_product(
+        "https://example.com/missing-bytes",
+        user_id="user-a",
+    )
+    run = catalogue.start_run(product.id, "thread-missing-bytes", user_id="user-a")
+    catalogue.finish_run(run.id, RunStatus.FAILED, error="fixture")
+    missing = StoredArtifact(
+        id="artifact-missing-bytes",
+        key="evidence/missing.json",
+        content_type="application/json",
+        sha256="0" * 64,
+        size=2,
+        storage_uri="run-does-not-exist/evidence/missing.json",
+        product_id=product.id,
+        run_id=run.id,
+    )
+    catalogue.register_artifact(missing)
+    catalogue.save_product_work_snapshot(
+        ProductWorkSnapshot(
+            id="snapshot-missing-bytes",
+            user_id="user-a",
+            product_id=product.id,
+            run_id=run.id,
+            thread_id=run.thread_id,
+            workflow_stage=ProductWorkStage.FAILED,
+            evidence_artifact_id=missing.id,
+        )
+    )
+
+    decision = ProductReuseService(catalogue, store).decide(
+        product.id,
+        user_id="user-a",
+        refresh_requested=False,
+    )
+
+    assert decision.mode is ReuseMode.FRESH

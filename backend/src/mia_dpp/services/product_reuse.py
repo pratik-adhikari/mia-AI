@@ -4,13 +4,25 @@ from __future__ import annotations
 
 from mia_dpp.domain.product_work import ProductWorkStage, ReuseDecision, ReuseMode
 from mia_dpp.persistence.catalogue import ProductCatalogue
+from mia_dpp.storage.base import ArtifactStore
 
 
 class ProductReuseService:
     """Keep reuse policy outside LangGraph nodes and semantic mapper implementations."""
 
-    def __init__(self, catalogue: ProductCatalogue) -> None:
+    def __init__(
+        self,
+        catalogue: ProductCatalogue,
+        artifacts: ArtifactStore | None = None,
+    ) -> None:
         self._catalogue = catalogue
+        self._artifacts = artifacts
+
+    def _artifact_available(self, artifact_id: str, *, user_id: str) -> bool:
+        artifact = self._catalogue.get_artifact(artifact_id, user_id=user_id)
+        if artifact is None:
+            return False
+        return self._artifacts is None or self._artifacts.exists(artifact)
 
     def decide(
         self,
@@ -30,22 +42,14 @@ class ProductReuseService:
             snapshot.evidence_artifact_id
             if snapshot is not None
             and snapshot.evidence_artifact_id
-            and self._catalogue.get_artifact(
-                snapshot.evidence_artifact_id,
-                user_id=user_id,
-            )
-            is not None
+            and self._artifact_available(snapshot.evidence_artifact_id, user_id=user_id)
             else None
         )
         snapshot_reviewed_mapping_id = (
             snapshot.reviewed_mapping_artifact_id
             if snapshot is not None
             and snapshot.reviewed_mapping_artifact_id
-            and self._catalogue.get_artifact(
-                snapshot.reviewed_mapping_artifact_id,
-                user_id=user_id,
-            )
-            is not None
+            and self._artifact_available(snapshot.reviewed_mapping_artifact_id, user_id=user_id)
             else None
         )
         pending_research = self._catalogue.latest_completed_background_job(
@@ -65,7 +69,7 @@ snapshot_evidence_id or pending_research.metadata.get("seedEvidenceArtifactId")
             )
             if (
                 isinstance(evidence_id, str)
-                and self._catalogue.get_artifact(evidence_id, user_id=user_id) is not None
+                and self._artifact_available(evidence_id, user_id=user_id)
             ):
                 return ReuseDecision(
                     mode=ReuseMode.CONTINUE_SAVED_WORK,
@@ -83,11 +87,7 @@ snapshot_reviewed_mapping_id
         completed = self._catalogue.latest_successful_dpp(product_id, user_id=user_id)
         if (
             completed is not None
-            and self._catalogue.get_artifact(
-                completed.dpp_artifact_id,
-                user_id=user_id,
-            )
-            is None
+            and not self._artifact_available(completed.dpp_artifact_id, user_id=user_id)
         ):
             completed = None
         if snapshot is not None and snapshot_evidence_id:

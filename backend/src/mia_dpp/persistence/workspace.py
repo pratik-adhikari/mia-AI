@@ -39,7 +39,7 @@ class WorkspaceView:
         allowed = {item.id for item in self._stored(thread_id, user_id=user_id)}
         if artifact_id not in allowed:
             raise KeyError("unknown artifact")
-        artifact = self._catalogue.get_artifact(artifact_id)
+        artifact = self._catalogue.get_artifact(artifact_id, user_id=user_id)
         if artifact is None:
             raise KeyError("unknown artifact")
         return self._view(artifact), self._artifacts.get(artifact)

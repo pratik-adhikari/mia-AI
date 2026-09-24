@@ -56,6 +56,10 @@ class LocalArtifactStore:
             raise ValueError("artifact path escapes storage root")
         return path.read_bytes()
 
+    def exists(self, artifact: StoredArtifact) -> bool:
+        path = (self._root / artifact.storage_uri).resolve()
+        return self._root in path.parents and path.is_file()
+
     @staticmethod
     def _safe_key(key: str) -> Path:
         """Keep useful subdirectories while removing path-traversal components."""
