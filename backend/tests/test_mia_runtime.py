@@ -633,3 +633,33 @@ def test_conversational_url_question_does_not_create_product(tmp_path) -> None:
 
     assert response.status is AgentStatus.AWAITING_INPUT
     assert catalogue.list_products() == ()
+
+
+
+def test_explicit_retry_can_supersede_stuck_running_generation(tmp_path) -> None:
+    catalogue = ProductCatalogue(tmp_path / "catalogue.sqlite3")
+    product, _ = catalogue.get_or_create_product("https://example.com/stuck-running")
+    running = catalogue.start_run(product.id, "thread-stuck-running")
+
+    class Graph:
+        async def ainvoke(self, update, **kwargs):
+            return {
+                **update,
+                "thread_id": "thread-stuck-running",
+                "product_id": product.id,
+                "run_id": update["run_id"],
+                "product_url": product.canonical_url,
+                "status": "running",
+                "reply": "Replaced the stuck execution.",
+                "decision_summary": "Started a new fenced workflow generation.",
+            }
+
+    mia = _mia(catalogue, Graph())
+    response = asyncio.run(mia.retry_work("thread-stuck-running"))
+
+    replacement = catalogue.latest_active_run(product.id)
+    assert replacement is not None
+    assert replacement.id != running.id
+    assert replacement.workflow_generation == 1
+    assert catalogue.get_run(running.id).status is RunStatus.INCOMPLETE
+    assert response.thread_id == "thread-stuck-running"
