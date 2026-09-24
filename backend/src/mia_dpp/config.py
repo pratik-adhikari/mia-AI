@@ -101,6 +101,12 @@ class Settings(BaseSettings):
         le=1.0,
         validation_alias="MIA_JEV_OPTIONAL_MAX_ENTROPY",
     )
+    jev_grouping_max_groups: int = Field(
+        default=200,
+        ge=1,
+        le=1000,
+        validation_alias="MIA_JEV_GROUPING_MAX_GROUPS",
+    )
     mia_database_url: str | None = Field(
         default=None,
         validation_alias="MIA_DATABASE_URL",
