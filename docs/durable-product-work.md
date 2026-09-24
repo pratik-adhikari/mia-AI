@@ -390,3 +390,16 @@ returned only to the account that contributed them.
 This prevents two accounts associated with the same canonical product record from seeing each
 other's physical-unit serial numbers. Identity unique-index races are also translated into
 `ProductIdentifierConflict` instead of leaking a raw database exception.
+
+
+## Reuse verifies durable artifact pointers
+
+Snapshot and DPP metadata are not sufficient by themselves to prove that reusable bytes still exist.
+
+Before selecting saved evidence, reviewed mappings, pending-research seed evidence, or a cached DPP,
+the reuse service verifies that the artifact is still registered for the requesting account.
+
+If a snapshot pointer is stale, MIA falls through to older reusable artifacts or fresh extraction
+instead of selecting continuation and failing later in `RunWorkspace.load()`. Missing storage is
+still observable as a data-quality problem, but it no longer converts a recoverable reuse decision
+into an avoidable workflow crash.

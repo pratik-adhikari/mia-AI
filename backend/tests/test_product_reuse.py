@@ -146,3 +146,39 @@ def test_completed_research_after_dpp_prevents_stale_cache_reuse(tmp_path: Path)
     assert decision.mode is ReuseMode.CONTINUE_SAVED_WORK
     assert decision.pending_research_job_id == job.id
     assert decision.evidence_artifact_id == "evidence-seed"
+
+
+
+def test_missing_snapshot_artifact_falls_back_instead_of_crashing_reuse(tmp_path: Path) -> None:
+    catalogue = ProductCatalogue(tmp_path / "catalogue.sqlite3")
+    catalogue.get_or_create_thread("thread-missing-artifact", "user-a")
+    product, _ = catalogue.get_or_create_product(
+        "https://example.com/missing-artifact",
+        user_id="user-a",
+    )
+    run = catalogue.start_run(
+        product.id,
+        "thread-missing-artifact",
+        user_id="user-a",
+    )
+    catalogue.finish_run(run.id, RunStatus.FAILED, error="fixture")
+    catalogue.save_product_work_snapshot(
+        ProductWorkSnapshot(
+            id="snapshot-missing-artifact",
+            user_id="user-a",
+            product_id=product.id,
+            run_id=run.id,
+            thread_id=run.thread_id,
+            workflow_stage=ProductWorkStage.FAILED,
+            evidence_artifact_id="artifact-that-does-not-exist",
+        )
+    )
+
+    decision = ProductReuseService(catalogue).decide(
+        product.id,
+        user_id="user-a",
+        refresh_requested=False,
+    )
+
+    assert decision.mode is ReuseMode.FRESH
+    assert decision.evidence_artifact_id is None
