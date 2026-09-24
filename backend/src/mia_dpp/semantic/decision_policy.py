@@ -31,7 +31,7 @@ class DecisionPolicySettings(WireModel):
 
     optional_min_selected_probability: float = Field(default=0.70, ge=0.0, le=1.0)
     optional_min_margin: float = Field(default=0.45, ge=0.0, le=1.0)
-    optional_max_runner_up_ratio: float = Field(default=0.25, ge=0.0, le=1.0)
+    optional_max_runner_up_ratio: float = Field(default=0.15, ge=0.0, le=1.0)
     optional_max_normalized_entropy: float = Field(default=0.65, ge=0.0, le=1.0)
     optional_min_scope_agreement: float = Field(default=2 / 3, ge=0.0, le=1.0)
 
