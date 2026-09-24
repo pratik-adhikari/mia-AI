@@ -98,3 +98,7 @@ class DppPackage(WireModel):
     validation_report: ValidationReport
     deployable: bool
     evidence: tuple[EvidenceRecord, ...] = ()
+    submodels: tuple[dict[str, Any], ...] = ()
+    templates: tuple[TemplateRelease, ...] = ()
+    gap_reports: tuple[GapReport, ...] = ()
+    validation_reports: tuple[ValidationReport, ...] = ()
