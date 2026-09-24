@@ -581,6 +581,7 @@ export default function Workspace() {
         instancePath: selected.templatePath,
         idShort: selected.idShort ?? selected.templatePath.at(-1) ?? "Target",
         semanticId: selected.semanticId!,
+        listInstanceBindings: [],
       },
       sourceValue: correctedValue?.trim() || mapping.sourceValue,
       status: "approved",
