@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
-from aas_core3 import jsonization, verification
 import pytest
+from aas_core3 import jsonization, verification
 
 from mia_dpp.aas import AasCompiler
 from mia_dpp.aas.templates import OfficialTemplateRepository
@@ -244,7 +244,7 @@ def test_mapping_target_rejects_binding_outside_target_template_path() -> None:
         label="Motor A",
     )
 
-    with pytest.raises(ValueError, match="must identify a \[\] in template_path"):
+    with pytest.raises(ValueError, match=r"must identify a \[\] in template_path"):
         mapping_target(
             template,
             TECHNICAL_DATA_ARBITRARY_PROPERTY_PATH,
