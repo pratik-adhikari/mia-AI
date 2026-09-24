@@ -133,3 +133,24 @@ def test_background_job_claim_and_retry_are_idempotent(tmp_path: Path) -> None:
     )
     assert failed.status is BackgroundJobStatus.FAILED
     assert catalogue.claim_background_job(first.id, user_id="user-a") is not None
+
+
+def test_deleted_chat_is_hidden_but_product_history_remains_reusable(tmp_path: Path) -> None:
+    catalogue = ProductCatalogue(tmp_path / "catalogue.sqlite3")
+    catalogue.get_or_create_thread("thread-delete", "user-a")
+    product, _ = catalogue.get_or_create_product("https://example.com/reusable", user_id="user-a")
+    run = catalogue.start_run(product.id, "thread-delete", user_id="user-a")
+    catalogue.add_message(
+        "thread-delete",
+        MessageRole.USER,
+        "private chat",
+        run_id=run.id,
+        user_id="user-a",
+    )
+
+    deleted = catalogue.delete_thread("thread-delete", user_id="user-a")
+
+    assert deleted.deleted_at is not None
+    assert catalogue.list_threads("user-a") == ()
+    assert catalogue.get_product(product.id, user_id="user-a") == product
+    assert catalogue.list_runs(product.id, user_id="user-a")[0].id == run.id
