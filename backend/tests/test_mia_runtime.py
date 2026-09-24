@@ -7,6 +7,7 @@ from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from typing import Any
 
+import httpx
 import pytest
 
 from mia_dpp.agent.models import AgentRequest, AgentResponse, AgentStatus
@@ -506,3 +507,87 @@ def test_general_chat_reply_does_not_advance_langgraph(tmp_path) -> None:
         "user",
         "assistant",
     ]
+
+
+
+def test_transient_network_failure_is_recoverable_incomplete_run(tmp_path) -> None:
+    catalogue = ProductCatalogue(tmp_path / "catalogue.sqlite3")
+    product, _ = catalogue.get_or_create_product("https://example.com/transient")
+    run = catalogue.start_run(product.id, "thread-transient")
+
+    class Graph:
+        async def aget_state(self, config):
+            return _Snapshot(
+                {
+                    "thread_id": "thread-transient",
+                    "product_id": product.id,
+                    "run_id": run.id,
+                    "product_url": product.canonical_url,
+                    "status": "running",
+                }
+            )
+
+        async def ainvoke(self, update, **kwargs):
+            request = httpx.Request("GET", product.canonical_url)
+            raise httpx.ConnectError("temporary upstream outage", request=request)
+
+    mia = _mia(catalogue, Graph())
+    with pytest.raises(httpx.ConnectError):
+        asyncio.run(
+            mia.message(
+                AgentRequest(
+                    thread_id="thread-transient",
+                    message="Continue the product workflow",
+                )
+            )
+        )
+
+    persisted = catalogue.get_run(run.id)
+    assert persisted is not None
+    assert persisted.status is RunStatus.INCOMPLETE
+    event = catalogue.list_events(run.id)[-1]
+    assert event.event_type == "workflow.retryable_failure"
+    assert event.metadata["retryable"] is True
+
+
+def test_retry_work_creates_new_fenced_generation_from_failed_attempt(tmp_path) -> None:
+    catalogue = ProductCatalogue(tmp_path / "catalogue.sqlite3")
+    product, _ = catalogue.get_or_create_product("https://example.com/retry")
+    failed = catalogue.start_run(product.id, "thread-retry")
+    catalogue.finish_run(
+        failed.id,
+        RunStatus.INCOMPLETE,
+        error="temporary upstream outage",
+    )
+
+    class Graph:
+        invocations: list[dict[str, Any]] = []
+
+        async def ainvoke(self, update, **kwargs):
+            self.invocations.append(update)
+            return {
+                **update,
+                "thread_id": "thread-retry",
+                "product_id": product.id,
+                "run_id": update["run_id"],
+                "product_url": product.canonical_url,
+                "status": "running",
+                "reply": "Recovered product work.",
+                "decision_summary": "Recovered product work.",
+            }
+
+    graph = Graph()
+    mia = _mia(catalogue, graph)
+    response = asyncio.run(mia.retry_work("thread-retry"))
+
+    replacement = catalogue.latest_active_run(product.id)
+    assert replacement is not None
+    assert replacement.id != failed.id
+    assert replacement.workflow_generation == 1
+    assert catalogue.get_run(failed.id).status is RunStatus.INCOMPLETE
+    assert catalogue.get_thread(
+        "thread-retry",
+        user_id="local-development",
+    ).workflow_generation == 1
+    assert graph.invocations[-1]["reuse_mode"] == "continue_saved_work"
+    assert response.thread_id == "thread-retry"
