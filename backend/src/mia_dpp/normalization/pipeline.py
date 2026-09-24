@@ -87,7 +87,10 @@ def _parse_number(token: str) -> _NumberParse:
         return _NumberParse(None, f"{token!r} is not a supported numeric representation")
 
 
-def _resolved_unit(parsed_unit: str | None, explicit_unit: str | None) -> tuple[str | None, str | None]:
+def _resolved_unit(
+    parsed_unit: str | None,
+    explicit_unit: str | None,
+) -> tuple[str | None, str | None]:
     embedded = _clean_unit(parsed_unit)
     explicit = _clean_unit(explicit_unit)
     if embedded and explicit and embedded.casefold() != explicit.casefold():
@@ -104,7 +107,11 @@ def _ambiguous(
         evidence_id=record.id,
         label=record.source_label or record.predicate,
         context_path=record.context_path,
-        value=NormalizedValue(raw=raw, kind=NormalizedValueKind.TEXT, unit=_clean_unit(record.unit)),
+        value=NormalizedValue(
+            raw=raw,
+            kind=NormalizedValueKind.TEXT,
+            unit=_clean_unit(record.unit),
+        ),
         status=NormalizationStatus.AMBIGUOUS,
         origin=NormalizationOrigin.DETERMINISTIC,
         ambiguity_reason=reason,
@@ -191,8 +198,11 @@ def normalize_evidence(record: EvidenceRecord) -> NormalizedEvidence:
         if unit_error:
             return _ambiguous(record, raw, unit_error)
         qualifier = quantity.group("qualifier")
+        approximate_tokens = {"~", "≈", "approx.", "approx", "approximately"}
         normalized_qualifier = (
-            "approximate" if qualifier and qualifier.casefold() in {"~", "≈", "approx.", "approx", "approximately"} else None
+            "approximate"
+            if qualifier and qualifier.casefold() in approximate_tokens
+            else None
         )
         return NormalizedEvidence(
             evidence_id=record.id,
