@@ -199,6 +199,7 @@ def _replace_with(
         EvidenceOutcome(
             evidence_id=record.id,
             status=status,
+            direct_target=field_mapping is not None,
             reason=reason,
             mapping_origin=MappingOrigin.SEMANTIC_ENGINE,
         )
