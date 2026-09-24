@@ -29,6 +29,7 @@ from mia_dpp.workflow.nodes_semantic import (
     shadow_eclass_resolution,
     shadow_open_property_proposals,
 )
+from mia_dpp.workflow.nodes_promotion import promote_semantic_mapping
 from mia_dpp.workflow.nodes_product import (
     advance_product,
     extract_evidence,
@@ -93,6 +94,7 @@ def _build_evidence_stage(context: MiaContext | None) -> Any:
             build_targets,
             deterministic_mapping,
             semantic_mapping,
+            promote_semantic_mapping,
             human_review,
             integrate_background_research,
             coverage,
@@ -113,7 +115,12 @@ def _build_evidence_stage(context: MiaContext | None) -> Any:
     stage.add_edge("shadow_open_property_proposals", "build_targets")
     stage.add_edge("build_targets", "deterministic_mapping")
     stage.add_edge("deterministic_mapping", "semantic_mapping")
-    stage.add_conditional_edges("semantic_mapping", after_semantic_mapping, SEMANTIC_ROUTES)
+    stage.add_edge("semantic_mapping", "promote_semantic_mapping")
+    stage.add_conditional_edges(
+        "promote_semantic_mapping",
+        after_semantic_mapping,
+        SEMANTIC_ROUTES,
+    )
     stage.add_edge("human_review", "integrate_background_research")
     stage.add_conditional_edges(
         "integrate_background_research",
