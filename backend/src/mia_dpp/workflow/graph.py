@@ -27,6 +27,7 @@ from mia_dpp.workflow.nodes_semantic import (
     shadow_jev_idta_routing,
     shadow_jev_semantic_grouping,
     shadow_eclass_resolution,
+    shadow_open_property_proposals,
 )
 from mia_dpp.workflow.nodes_product import (
     advance_product,
@@ -88,6 +89,7 @@ def _build_evidence_stage(context: MiaContext | None) -> Any:
             shadow_jev_semantic_grouping,
             shadow_eclass_resolution,
             analyze_eclass_shadow,
+            shadow_open_property_proposals,
             build_targets,
             deterministic_mapping,
             semantic_mapping,
@@ -107,7 +109,8 @@ def _build_evidence_stage(context: MiaContext | None) -> Any:
     stage.add_edge("analyze_jev_shadow", "shadow_jev_semantic_grouping")
     stage.add_edge("shadow_jev_semantic_grouping", "shadow_eclass_resolution")
     stage.add_edge("shadow_eclass_resolution", "analyze_eclass_shadow")
-    stage.add_edge("analyze_eclass_shadow", "build_targets")
+    stage.add_edge("analyze_eclass_shadow", "shadow_open_property_proposals")
+    stage.add_edge("shadow_open_property_proposals", "build_targets")
     stage.add_edge("build_targets", "deterministic_mapping")
     stage.add_edge("deterministic_mapping", "semantic_mapping")
     stage.add_conditional_edges("semantic_mapping", after_semantic_mapping, SEMANTIC_ROUTES)
