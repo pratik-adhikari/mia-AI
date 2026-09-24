@@ -9,7 +9,7 @@ from pydantic import Field, model_validator
 
 from mia_dpp.aas.templates import OfficialTemplateRepository
 from mia_dpp.domain.base import WireModel
-from mia_dpp.domain.evidence import EvidenceRecord, ProductKnowledgePackage
+from mia_dpp.domain.evidence import ProductKnowledgePackage
 from mia_dpp.domain.targets import SubmodelTemplate, TemplateElement
 from mia_dpp.normalization.models import NormalizationReport, NormalizedEvidence
 from mia_dpp.semantic.jev import ChoiceDecision, JevDecisionClient
@@ -150,7 +150,9 @@ async def route_context_view(
     state = _evidence_payload(package, normalization, view)
     steps: list[IdtaRoutingStep] = []
     root_criteria = {template.release.key: _template_criterion(template) for template in templates}
-    root_criteria[NO_IDTA_LOCATION] = "Valid product data, but no selected IDTA submodel should contain it."
+    root_criteria[NO_IDTA_LOCATION] = (
+        "Valid product data, but no selected IDTA submodel should contain it."
+    )
     root_criteria[UNRESOLVED] = "The available source context is insufficient to select a submodel."
     root_decision = await _choose(
         decider,
@@ -203,7 +205,9 @@ async def route_context_view(
             criteria[NO_IDTA_LOCATION] = (
                 "The fact belongs to the selected submodel, but none of these child structures fit."
             )
-            criteria[UNRESOLVED] = "The source context is insufficient to choose among these children."
+            criteria[UNRESOLVED] = (
+                "The source context is insufficient to choose among these children."
+            )
             decision = await _choose(
                 decider,
                 question_id=f"level_{depth}",
