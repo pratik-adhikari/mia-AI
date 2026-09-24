@@ -107,8 +107,12 @@ class WorkspaceView:
             "jsonArtifacts": contents,
         }
 
-    def list_mapping_knowledge(self) -> tuple[MappingKnowledgeEntry, ...]:
-        return self._catalogue.list_mapping_knowledge()
+    def list_mapping_knowledge(
+        self,
+        *,
+        user_id: str = LOCAL_USER_ID,
+    ) -> tuple[MappingKnowledgeEntry, ...]:
+        return self._catalogue.list_mapping_knowledge(user_id=user_id)
 
     def _stored(self, thread_id: str, *, user_id: str) -> tuple[StoredArtifact, ...]:
         run_ids = tuple(

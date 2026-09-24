@@ -293,11 +293,11 @@ async def workspace_trace(
 )
 async def mapping_knowledge(
     http_request: Request,
-    _user_id: AuthenticatedUser,
+    user_id: AuthenticatedUser,
 ) -> tuple[MappingKnowledgeEntry, ...]:
     """List backend-owned mapping knowledge for the Integration Graph."""
 
-    return _application(http_request).store.list_mapping_knowledge()
+    return _application(http_request).store.list_mapping_knowledge(user_id=user_id)
 
 
 @router.post("/api/dpp", response_model=DppPackage)

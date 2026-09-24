@@ -182,6 +182,7 @@ async def semantic_mapping(
             manufacturer=product.manufacturer if product else None,
             domain=domain,
             template_keys=state.get("target_submodels", ("digital_nameplate", "technical_data")),
+            user_id=work.user_id,
         )
     )
     semantic_started = perf_counter()
@@ -314,6 +315,7 @@ async def human_review(
                 product_family=None,
                 comment=decision.comment,
                 actor_name=request.actor_name,
+                user_id=work.user_id,
             )
 
     evidence_id = work.put_model(

@@ -204,6 +204,8 @@ export interface EvidenceOutcome {
 
 export interface MappingKnowledgeEntry {
   id: string;
+  scope: "user" | "organization" | "global";
+  ownerId: string | null;
   sourceField: string;
   exampleValues: string[];
   targetTemplate: string;

@@ -29,7 +29,11 @@ from mia_dpp.domain.product import (
     ThreadRecord,
 )
 from mia_dpp.storage.models import StoredArtifact
-from mia_dpp.tools.mapping.models import MappingKnowledgeEntry, MappingKnowledgeStatus
+from mia_dpp.tools.mapping.models import (
+    MappingKnowledgeEntry,
+    MappingKnowledgeScope,
+    MappingKnowledgeStatus,
+)
 from mia_dpp.workflow.identity import canonical_product_url
 
 ModelT = TypeVar("ModelT", bound=BaseModel)
@@ -715,6 +719,7 @@ class ProductCatalogue:
         manufacturer: str | None,
         domain: str | None,
         product_family: str | None,
+        user_id: str = LOCAL_USER_ID,
     ) -> MappingKnowledgeEntry:
         return self._upsert_mapping_knowledge(
             mapping,
@@ -722,6 +727,7 @@ class ProductCatalogue:
             domain=domain,
             product_family=product_family,
             status=MappingKnowledgeStatus.CANDIDATE,
+            user_id=user_id,
         )
 
     def remember_mapping_review(
@@ -734,6 +740,7 @@ class ProductCatalogue:
         product_family: str | None,
         comment: str | None,
         actor_name: str | None = None,
+        user_id: str = LOCAL_USER_ID,
     ) -> MappingKnowledgeEntry | None:
         # A DUMMY is a workflow placeholder, never reusable semantic knowledge.
         if mapping.human_value_kind == "dummy":
@@ -751,12 +758,22 @@ class ProductCatalogue:
             status=status,
             decision=decision,
             comment=comment,
+            user_id=user_id,
         )
 
-    def list_mapping_knowledge(self) -> tuple[MappingKnowledgeEntry, ...]:
-        return self._many(
-            MappingKnowledgeEntry,
-            "SELECT payload FROM mapping_knowledge ORDER BY id DESC",
+    def list_mapping_knowledge(
+        self,
+        *,
+        user_id: str = LOCAL_USER_ID,
+    ) -> tuple[MappingKnowledgeEntry, ...]:
+        return tuple(
+            item
+            for item in self._many(
+                MappingKnowledgeEntry,
+                "SELECT payload FROM mapping_knowledge ORDER BY id DESC",
+            )
+            if item.scope is MappingKnowledgeScope.GLOBAL
+            or (item.scope is MappingKnowledgeScope.USER and item.owner_id == user_id)
         )
 
     def relevant_mapping_knowledge(
@@ -766,11 +783,12 @@ class ProductCatalogue:
         manufacturer: str | None,
         domain: str | None,
         template_keys: tuple[str, ...],
+        user_id: str = LOCAL_USER_ID,
     ) -> tuple[MappingKnowledgeEntry, ...]:
         label = self._normalize(source_field)
         return tuple(
             item
-            for item in self.list_mapping_knowledge()
+            for item in self.list_mapping_knowledge(user_id=user_id)
             if item.status is MappingKnowledgeStatus.TRUSTED
             and item.target_template in template_keys
             and self._normalize(item.source_field) == label
@@ -788,9 +806,11 @@ class ProductCatalogue:
         status: MappingKnowledgeStatus,
         decision: str | None = None,
         comment: str | None = None,
+        user_id: str = LOCAL_USER_ID,
     ) -> MappingKnowledgeEntry:
         identity = "\0".join(
             (
+                user_id,
                 self._normalize(mapping.source_field),
                 domain or "",
                 mapping.target.template_key,
@@ -814,6 +834,8 @@ class ProductCatalogue:
         )
         entry = MappingKnowledgeEntry(
             id=entry_id,
+            scope=MappingKnowledgeScope.USER,
+            owner_id=user_id,
             source_field=mapping.source_field,
             example_values=values,
             target_template=mapping.target.template_key,

@@ -220,3 +220,58 @@ def test_human_review_history_is_append_only_and_user_scoped(tmp_path: Path) -> 
 
     assert catalogue.list_human_reviews(product.id, user_id="user-a") == (review,)
     assert catalogue.list_human_reviews(product.id, user_id="user-b") == ()
+
+
+def test_mapping_knowledge_is_private_to_the_reviewing_user(tmp_path: Path) -> None:
+    from mia_dpp.domain.mappings import (
+        FieldMapping,
+        MappingAssessment,
+        MappingBasis,
+        MappingOrigin,
+        MappingStatus,
+        MappingTarget,
+    )
+    from mia_dpp.domain.targets import ReferenceKey, SemanticReference
+
+    catalogue = ProductCatalogue(tmp_path / "catalogue.sqlite3")
+    target = MappingTarget(
+        template_key="digital_nameplate",
+        template_release="3.0.1",
+        template_path=("Nameplate", "ManufacturerName"),
+        instance_path=("Nameplate", "ManufacturerName"),
+        id_short="ManufacturerName",
+        semantic_id=SemanticReference(
+            type="ExternalReference",
+            keys=(ReferenceKey(type="GlobalReference", value="0173-1#02-AAO677#002"),),
+        ),
+    )
+    mapping = FieldMapping(
+        id="mapping-private",
+        evidence_id="evidence-private",
+        source_field="Manufacturer",
+        source_value="Example AG",
+        target=target,
+        assessment=MappingAssessment(
+            basis=MappingBasis.HUMAN,
+            review_required=False,
+            reason="Human confirmed.",
+        ),
+        reasoning="fixture",
+        status=MappingStatus.APPROVED,
+        mapping_origin=MappingOrigin.HUMAN,
+        human_reviewed=True,
+        human_value_kind="verified",
+    )
+
+    catalogue.remember_mapping_review(
+        mapping,
+        decision="keep",
+        manufacturer="Example AG",
+        domain="example.com",
+        product_family=None,
+        comment=None,
+        user_id="user-a",
+    )
+
+    assert len(catalogue.list_mapping_knowledge(user_id="user-a")) == 1
+    assert catalogue.list_mapping_knowledge(user_id="user-b") == ()
