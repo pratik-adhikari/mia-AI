@@ -35,28 +35,46 @@ async def resolve_product(
         state["product_url"],
         user_id=state["user_id"],
     )
+    refresh_requested = state.get("refresh_requested", False)
     cached = (
         None
-        if state.get("refresh_requested", False)
+        if refresh_requested
         else catalogue.latest_successful_dpp(product.id, user_id=state["user_id"])
+    )
+    seeded_run, reusable = (
+        (None, {})
+        if cached is not None or refresh_requested
+        else catalogue.latest_reusable_artifacts(product.id, user_id=state["user_id"])
     )
     run = catalogue.start_run(
         product.id,
         state["thread_id"],
         user_id=state["user_id"],
-        refresh_requested=state.get("refresh_requested", False),
+        refresh_requested=refresh_requested,
         reused_from_run_id=cached.run_id if cached else None,
+        seeded_from_run_id=seeded_run.id if seeded_run else None,
     )
     catalogue.add_event(
         run.id,
         "product.resolved",
         "Resolved product identity and checked the durable DPP cache.",
-        metadata={"cacheHit": cached is not None, "canonicalUrl": product.canonical_url},
+        metadata={
+            "cacheHit": cached is not None,
+            "reusedPriorWork": seeded_run is not None,
+            "seededFromRunId": seeded_run.id if seeded_run else None,
+            "canonicalUrl": product.canonical_url,
+        },
     )
     return {
         "product_id": product.id,
         "run_id": run.id,
         "cache_hit": cached is not None,
+        "reuse_prior_work": seeded_run is not None,
+        "seeded_from_run_id": seeded_run.id if seeded_run else "",
+        "evidence_artifact_id": reusable["evidence"].id if "evidence" in reusable else "",
+        "reviewed_mapping_artifact_id": (
+            reusable["reviewed_mapping"].id if "reviewed_mapping" in reusable else ""
+        ),
         "reused_dpp_version_id": cached.id if cached else "",
         "product_name": product.name or "",
         "manufacturer": product.manufacturer or "",
@@ -101,6 +119,41 @@ async def extract_evidence(
     runtime: Runtime[MiaContext],
 ) -> dict[str, Any]:
     work = RunWorkspace(state, runtime.context)
+    if (
+        state.get("reuse_prior_work")
+        and state.get("evidence_artifact_id")
+        and not state.get("refresh_requested", False)
+    ):
+        prior_id = work.state_id("evidence_artifact_id")
+        package = work.load(prior_id, ProductKnowledgePackage)
+        evidence_id = work.put_model(
+            "evidence/product-knowledge.json",
+            package,
+            derived_from=(prior_id,),
+        )
+        source_urls = tuple(dict.fromkeys(item.final_url for item in package.acquired_sources))
+        fingerprint = sha256_json(
+            {
+                "sources": [item.content_sha256 for item in package.acquired_sources],
+                "evidence": [item.id for item in package.evidence],
+            }
+        )
+        work.event(
+            "product.work_reused",
+            f"Reused {len(package.evidence)} persisted evidence records without crawling again.",
+            metadata={
+                "seededFromRunId": state.get("seeded_from_run_id"),
+                "priorEvidenceArtifactId": prior_id,
+                "evidenceArtifactId": evidence_id,
+            },
+        )
+        return {
+            "evidence_artifact_id": evidence_id,
+            "known_source_urls": source_urls,
+            "product_name": package.product_name,
+            "source_fingerprint": fingerprint,
+        }
+
     total_started = perf_counter()
     crawl_started = perf_counter()
     incoming = await work.ctx.web_tool.extract(state["product_url"])

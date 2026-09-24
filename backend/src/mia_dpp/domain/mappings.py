@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from enum import StrEnum
+from typing import Literal
 
 from pydantic import Field, computed_field, model_validator
 
@@ -227,6 +228,8 @@ class FieldMapping(WireModel):
     status: MappingStatus
     mapping_origin: MappingOrigin = MappingOrigin.DETERMINISTIC
     human_reviewed: bool = False
+    human_actor_name: str | None = Field(default=None, max_length=200)
+    human_value_kind: Literal["verified", "dummy"] | None = None
     llm_review: LlmReview | None = None
     human_comment: str | None = Field(default=None, max_length=1000)
 

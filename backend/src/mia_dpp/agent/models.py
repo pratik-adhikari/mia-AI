@@ -166,16 +166,19 @@ class AgentReviewRequest(WireModel):
     thread_id: str = Field(min_length=8, max_length=128)
     product_id: str
     mapping_cycle_id: str | None = None
+    actor_name: str | None = Field(default=None, max_length=200)
     decisions: tuple[AgentReviewDecision, ...] = Field(min_length=1)
 
 
 class AgentValueRequest(WireModel):
-    """Trusted human value submitted for a deferred requirement request."""
+    """Trusted human value or explicit placeholder submitted for a deferred requirement."""
 
     thread_id: str = Field(min_length=8, max_length=128)
     product_id: str
     requirement_id: str
-    value: str = Field(min_length=1, max_length=4096)
+    value: str = Field(default="", max_length=4096)
+    use_dummy: bool = False
+    actor_name: str | None = Field(default=None, max_length=200)
 
 
 class AgentResponse(WireModel):

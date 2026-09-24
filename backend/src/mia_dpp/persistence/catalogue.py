@@ -260,11 +260,27 @@ class ProductCatalogue:
         )
 
     def list_threads(self, user_id: str) -> tuple[ThreadRecord, ...]:
-        return self._many(
-            ThreadRecord,
-            "SELECT payload FROM threads WHERE user_id=? ORDER BY updated_at DESC",
-            (user_id,),
+        return tuple(
+            thread
+            for thread in self._many(
+                ThreadRecord,
+                "SELECT payload FROM threads WHERE user_id=? ORDER BY updated_at DESC",
+                (user_id,),
+            )
+            if thread.deleted_at is None
         )
+
+    def delete_thread(self, thread_id: str, *, user_id: str) -> ThreadRecord:
+        """Hide chat history without deleting product/run artifacts needed for reuse and audit."""
+
+        thread = self._require(self.get_thread(thread_id, user_id=user_id), thread_id)
+        now = _now()
+        deleted = thread.model_copy(update={"deleted_at": now, "updated_at": now})
+        self._execute(
+            "UPDATE threads SET payload=?,updated_at=? WHERE id=? AND user_id=?",
+            (deleted.model_dump_json(), now.isoformat(), thread_id, user_id),
+        )
+        return deleted
 
     def user_owns_product(self, user_id: str, product_id: str) -> bool:
         return (
@@ -290,6 +306,7 @@ class ProductCatalogue:
         user_id: str = LOCAL_USER_ID,
         refresh_requested: bool = False,
         reused_from_run_id: str | None = None,
+        seeded_from_run_id: str | None = None,
     ) -> ProductRun:
         if self.get_thread(thread_id, user_id=user_id) is None:
             if user_id == LOCAL_USER_ID:
@@ -304,6 +321,7 @@ class ProductCatalogue:
             thread_id=thread_id,
             refresh_requested=refresh_requested,
             reused_from_run_id=reused_from_run_id,
+            seeded_from_run_id=seeded_from_run_id,
             status=RunStatus.REUSED if reused_from_run_id else RunStatus.RUNNING,
         )
         self._execute(
@@ -546,6 +564,44 @@ class ProductCatalogue:
             "WHERE threads.user_id=? ORDER BY artifacts.created_at",
             (user_id,),
         )
+
+    def latest_reusable_artifacts(
+        self,
+        product_id: str,
+        *,
+        user_id: str = LOCAL_USER_ID,
+    ) -> tuple[ProductRun | None, dict[str, StoredArtifact]]:
+        """Return the newest prior run with durable evidence and its reusable stage artifacts."""
+
+        evidence_keys = (
+            "evidence/product-knowledge-human.json",
+            "evidence/product-knowledge-reviewed.json",
+            "evidence/product-knowledge-integrated.json",
+            "evidence/product-knowledge.json",
+        )
+        mapping_keys = (
+            "mapping/human-value.json",
+            "mapping/reviewed.json",
+            "mapping/research-integrated.json",
+            "mapping/reused-reviewed.json",
+            "mapping/mapping.json",
+        )
+        for run in self.list_runs(product_id, user_id=user_id):
+            artifacts = self.list_artifacts(run_id=run.id, user_id=user_id)
+            by_key = {item.key: item for item in artifacts}
+            evidence = next((by_key[key] for key in evidence_keys if key in by_key), None)
+            if evidence is None:
+                continue
+            reusable: dict[str, StoredArtifact] = {"evidence": evidence}
+            mapping = next((by_key[key] for key in mapping_keys if key in by_key), None)
+            if mapping is not None:
+                reusable["reviewed_mapping"] = mapping
+            if "mapping/targets.json" in by_key:
+                reusable["targets"] = by_key["mapping/targets.json"]
+            if "mapping/coverage.json" in by_key:
+                reusable["coverage"] = by_key["mapping/coverage.json"]
+            return run, reusable
+        return None, {}
 
     def list_artifacts_for_runs(
         self,

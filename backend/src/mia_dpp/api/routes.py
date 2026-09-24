@@ -33,6 +33,7 @@ from mia_dpp.api.schemas import (
     ProductLibraryItem,
     StorageStatus,
 )
+from mia_dpp.domain.mappings import MappingResult
 from mia_dpp.domain.product import (
     BackgroundJob,
     BackgroundJobStatus,
@@ -442,6 +443,21 @@ async def thread_messages(
     )
 
 
+@router.delete("/api/threads/{thread_id}", status_code=204)
+async def delete_thread(
+    thread_id: str,
+    http_request: Request,
+    user_id: AuthenticatedUser,
+) -> Response:
+    """Remove a chat from history while retaining product/run artifacts for audit and reuse."""
+
+    catalogue = _application(http_request).context.catalogue
+    if catalogue.get_thread(thread_id, user_id=user_id) is None:
+        raise HTTPException(status_code=404, detail="unknown thread")
+    catalogue.delete_thread(thread_id, user_id=user_id)
+    return Response(status_code=204)
+
+
 @router.get("/api/threads", response_model=tuple[ThreadRecord, ...])
 async def threads(
     http_request: Request,
@@ -535,15 +551,36 @@ async def product_library(
 ) -> tuple[ProductLibraryItem, ...]:
     """List every durable product with its latest successful passport."""
 
-    catalogue = _application(http_request).context.catalogue
-    return tuple(
-        ProductLibraryItem(
-            product=product,
-            latest_dpp=catalogue.latest_successful_dpp(product.id, user_id=user_id),
-            run_count=len(catalogue.list_runs(product.id, user_id=user_id)),
+    application = _application(http_request)
+    catalogue = application.context.catalogue
+    items: list[ProductLibraryItem] = []
+    for product in catalogue.list_products(user_id=user_id):
+        runs = catalogue.list_runs(product.id, user_id=user_id)
+        latest_run = runs[0] if runs else None
+        latest_dpp = catalogue.latest_successful_dpp(product.id, user_id=user_id)
+        reviewed, dummy = _mapping_provenance_counts(application, product.id, user_id)
+        resumable = latest_run is not None and latest_run.status in {
+            RunStatus.RUNNING,
+            RunStatus.AWAITING_HUMAN,
+        }
+        items.append(
+            ProductLibraryItem(
+                product=product,
+                latest_dpp=latest_dpp,
+                latest_run=latest_run,
+                run_count=len(runs),
+                resumable=resumable,
+                resume_thread_id=latest_run.thread_id if resumable and latest_run else None,
+                workflow_status=(
+                    latest_run.status.value
+                    if latest_run is not None
+                    else ("completed" if latest_dpp is not None else "idle")
+                ),
+                human_reviewed_mappings=reviewed,
+                human_dummy_mappings=dummy,
+            )
         )
-        for product in catalogue.list_products(user_id=user_id)
-    )
+    return tuple(items)
 
 
 @router.get("/api/products/{product_id}", response_model=ProductDetail)
@@ -585,3 +622,28 @@ async def read_durable_artifact(
         content=mia.context.artifacts.get(artifact),
         media_type=artifact.content_type,
     )
+
+
+def _mapping_provenance_counts(application: Mia, product_id: str, user_id: str) -> tuple[int, int]:
+    preferred = {
+        "mapping/human-value.json",
+        "mapping/reviewed.json",
+        "mapping/research-integrated.json",
+        "mapping/reused-reviewed.json",
+        "mapping/mapping.json",
+    }
+    for artifact in reversed(
+        application.context.catalogue.list_artifacts(product_id=product_id, user_id=user_id)
+    ):
+        if artifact.key not in preferred:
+            continue
+        try:
+            mapping = MappingResult.model_validate_json(application.context.artifacts.get(artifact))
+        except ValueError:
+            continue
+        rows = (*mapping.mapped, *mapping.ambiguous, *mapping.rejected)
+        return (
+            sum(item.human_reviewed for item in rows),
+            sum(item.human_value_kind == "dummy" for item in rows),
+        )
+    return 0, 0

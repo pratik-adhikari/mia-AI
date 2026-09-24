@@ -76,12 +76,49 @@ async def semantic_mapping(
     runtime: Runtime[MiaContext],
 ) -> dict[str, Any]:
     work = RunWorkspace(state, runtime.context)
-    mapper = work.ctx.semantic_mapper
-    if mapper is None:
-        raise RuntimeError("semantic mapping requires a configured model")
     package = work.load_state("evidence_artifact_id", ProductKnowledgePackage)
     index = work.load_state("targets_artifact_id", TemplateIndex)
     deterministic = work.load_state("deterministic_mapping_artifact_id", MappingResult)
+
+    reusable_mapping_id = state.get("reviewed_mapping_artifact_id")
+    if state.get("reuse_prior_work") and reusable_mapping_id:
+        try:
+            reused = work.load(str(reusable_mapping_id), MappingResult)
+            work.ctx.mapping_review.validate_complete_accounting(package, reused)
+        except (KeyError, ValueError):
+            reused = None
+        if reused is not None and _mapping_targets_are_current(reused, index):
+            cycle_id = work.ctx.mapping_review.cycle_id(package, index, reused)
+            reviews = work.ctx.mapping_review.complete_review(package, reused, index)
+            mapping_id = work.put_model(
+                "mapping/reused-reviewed.json",
+                reused,
+                derived_from=(str(reusable_mapping_id), work.state_id("evidence_artifact_id")),
+            )
+            review_id = work.put_json(
+                "mapping/review-items.json",
+                [item.model_dump(mode="json", by_alias=True) for item in reviews],
+                derived_from=(mapping_id,),
+            )
+            work.event(
+                "mapping.history_reused",
+                f"Reused {len(reused.mapped)} prior mapped facts and reopened them for confirmation.",
+                metadata={
+                    "seededFromRunId": state.get("seeded_from_run_id"),
+                    "priorMappingArtifactId": str(reusable_mapping_id),
+                },
+            )
+            return {
+                "semantic_mapping_artifact_id": mapping_id,
+                "review_items_artifact_id": review_id,
+                "mapping_cycle_id": cycle_id,
+                "review_required": bool(reviews),
+                "reviewed_mapping_artifact_id": "",
+            }
+
+    mapper = work.ctx.semantic_mapper
+    if mapper is None:
+        raise RuntimeError("semantic mapping requires a configured model")
     product = work.ctx.catalogue.get_product(work.product_id, user_id=work.user_id)
     domain = (urlsplit(product.canonical_url).hostname or "") if product else None
     knowledge = tuple(
@@ -206,6 +243,7 @@ async def human_review(
                 domain=domain,
                 product_family=None,
                 comment=decision.comment,
+                actor_name=request.actor_name,
             )
 
     evidence_id = work.put_model(
@@ -222,6 +260,7 @@ async def human_review(
         "mapping/review-decisions.json",
         {
             "mappingCycleId": state["mapping_cycle_id"],
+            "actorName": request.actor_name,
             "decisions": [
                 item.model_dump(mode="json", by_alias=True) for item in request.decisions
             ],
@@ -411,6 +450,8 @@ async def human_value(
         requirement_id=requirement_id,
         value=request.value,
         thread_id=state["thread_id"],
+        actor_name=request.actor_name,
+        use_dummy=request.use_dummy,
     )
     evidence_id = work.put_model(
         "evidence/product-knowledge-human.json",
@@ -428,3 +469,15 @@ async def human_value(
         "evidence_artifact_id": evidence_id,
         "reviewed_mapping_artifact_id": reviewed_id,
     }
+
+
+def _mapping_targets_are_current(mapping: MappingResult, index: TemplateIndex) -> bool:
+    valid_targets = {
+        (item.template_key, item.template_release, item.template_path)
+        for item in index.requirements
+    }
+    return all(
+        (item.target.template_key, item.target.template_release, item.target.template_path)
+        in valid_targets
+        for item in (*mapping.mapped, *mapping.ambiguous, *mapping.rejected)
+    )

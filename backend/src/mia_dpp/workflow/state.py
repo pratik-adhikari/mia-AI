@@ -26,6 +26,8 @@ class MiaWorkflowState(TypedDict, total=False):
 
     # Cache and presentation
     cache_hit: bool
+    reuse_prior_work: bool
+    seeded_from_run_id: str
     reused_dpp_version_id: str
     product_name: str
     manufacturer: str
@@ -73,6 +75,8 @@ def reset_product_state(
         "product_id": "",
         "run_id": "",
         "cache_hit": False,
+        "reuse_prior_work": False,
+        "seeded_from_run_id": "",
         "reused_dpp_version_id": "",
         "product_name": "",
         "manufacturer": "",

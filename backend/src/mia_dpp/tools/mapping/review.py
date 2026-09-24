@@ -224,6 +224,7 @@ class MappingReviewService:
         corrected_requirement_id: str | None = None,
         corrected_value: str | None = None,
         comment: str | None = None,
+        actor_name: str | None = None,
     ) -> tuple[ProductKnowledgePackage, MappingResult, SemanticReviewItem]:
         """Apply one row decision while preserving a single outcome per evidence ID."""
 
@@ -242,6 +243,8 @@ class MappingReviewService:
                             else MappingStatus.APPROVED
                         ),
                         "human_reviewed": True,
+                        "human_actor_name": actor_name,
+                        "human_value_kind": mapping.human_value_kind,
                         "human_comment": comment,
                     }
                 )
@@ -297,7 +300,13 @@ class MappingReviewService:
                     )
                 }
             )
-        mapping = self._human_mapping(record, requirement, comment)
+        mapping = self._human_mapping(
+            record,
+            requirement,
+            comment,
+            actor_name=actor_name,
+            human_value_kind="verified",
+        )
         reviewed = item.model_copy(
             update={
                 "evidence_id": record.id,
@@ -329,23 +338,40 @@ class MappingReviewService:
         requirement_id: str,
         value: str,
         thread_id: str,
+        actor_name: str | None = None,
+        use_dummy: bool = False,
     ) -> tuple[ProductKnowledgePackage, MappingResult]:
-        cleaned = value.strip()
+        requirement = self._fixed_requirement(template_index, requirement_id)
+        cleaned = self._dummy_value(requirement) if use_dummy else value.strip()
         if not cleaned:
             raise ValueError("human evidence value must not be empty")
-        requirement = self._fixed_requirement(template_index, requirement_id)
         report = coverage(package, template_index, mapping_result=mapping_result)
         current = next(item for item in report.coverage if item.requirement_id == requirement_id)
         if current.status.value == "satisfied":
             raise ValueError("the requirement is already satisfied")
-        evidence = self._human_requirement_evidence(requirement, cleaned, thread_id)
+        evidence = self._human_requirement_evidence(
+            requirement,
+            cleaned,
+            thread_id,
+            is_dummy=use_dummy,
+        )
         package = package.model_copy(update={"evidence": (*package.evidence, evidence)})
-        mapping = self._human_mapping(evidence, requirement, None)
+        mapping = self._human_mapping(
+            evidence,
+            requirement,
+            None,
+            actor_name=actor_name,
+            human_value_kind="dummy" if use_dummy else "verified",
+        )
         outcome = EvidenceOutcome(
             evidence_id=evidence.id,
             status=EvidenceOutcomeStatus.MAPPED,
             requirement_id=requirement.id,
-            reason="A trusted human supplied this missing official value.",
+            reason=(
+                "A trusted human supplied an explicit type-compatible DUMMY placeholder."
+                if use_dummy
+                else "A trusted human supplied this missing official value."
+            ),
             mapping_origin=MappingOrigin.HUMAN,
         )
         result = mapping_result.model_copy(
@@ -464,6 +490,9 @@ class MappingReviewService:
         evidence: EvidenceRecord,
         requirement: Requirement,
         comment: str | None,
+        *,
+        actor_name: str | None,
+        human_value_kind: Literal["verified", "dummy"],
     ) -> FieldMapping:
         target = mapping_target(
             self._repository.load(requirement.template_key), requirement.template_path
@@ -484,6 +513,8 @@ class MappingReviewService:
             status=MappingStatus.APPROVED,
             mapping_origin=MappingOrigin.HUMAN,
             human_reviewed=True,
+            human_actor_name=actor_name,
+            human_value_kind=human_value_kind,
             human_comment=comment,
         )
 
@@ -551,24 +582,47 @@ class MappingReviewService:
         requirement: Requirement,
         value: str,
         thread_id: str,
+        *,
+        is_dummy: bool,
     ) -> EvidenceRecord:
         acquired_at = datetime.now(UTC)
         identity = f"{thread_id}\0{requirement.id}\0{value}\0{acquired_at.isoformat()}"
         return EvidenceRecord(
             id="ev-human-" + hashlib.sha256(identity.encode()).hexdigest()[:24],
-            predicate="human.answer",
+            predicate="human.dummy" if is_dummy else "human.answer",
             source_label=requirement.id_short or requirement.template_path[-1],
             value=value,
             source_type=SourceType.HUMAN,
             source_uri=f"mia://conversation/{thread_id}/requirement/{requirement.id}",
             source_content_sha256=hashlib.sha256(value.encode()).hexdigest(),
             source_location=SourceLocation(excerpt=value),
-            extraction_method="human_requirement_answer",
+            extraction_method=(
+                "human_dummy_requirement_answer" if is_dummy else "human_requirement_answer"
+            ),
             extractor_name="mia-agent",
             extractor_version="3",
             status=EvidenceStatus.VERIFIED,
             acquired_at=acquired_at,
         )
+
+    @staticmethod
+    def _dummy_value(requirement: Requirement) -> str:
+        if requirement.allowed_values:
+            return requirement.allowed_values[0]
+        value_type = (requirement.value_type or "xs:string").casefold()
+        if "bool" in value_type:
+            return "false"
+        if any(token in value_type for token in ("int", "integer", "long", "short", "byte")):
+            return "0"
+        if any(token in value_type for token in ("decimal", "double", "float")):
+            return "0"
+        if "datetime" in value_type:
+            return "1970-01-01T00:00:00Z"
+        if value_type.endswith("date") or ":date" in value_type:
+            return "1970-01-01"
+        if value_type.endswith("time") or ":time" in value_type:
+            return "00:00:00Z"
+        return "DUMMY"
 
     @staticmethod
     def _display_value(evidence: EvidenceRecord) -> str:

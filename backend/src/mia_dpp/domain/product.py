@@ -41,6 +41,7 @@ class ThreadRecord(WireModel):
     created_at: AwareDatetime = Field(default_factory=utc_now)
     updated_at: AwareDatetime = Field(default_factory=utc_now)
     last_message_at: AwareDatetime | None = None
+    deleted_at: AwareDatetime | None = None
 
 
 class ProductRecord(WireModel):
@@ -64,6 +65,7 @@ class ProductRun(WireModel):
     status: RunStatus = RunStatus.RUNNING
     refresh_requested: bool = False
     reused_from_run_id: str | None = None
+    seeded_from_run_id: str | None = None
     started_at: AwareDatetime = Field(default_factory=utc_now)
     finished_at: AwareDatetime | None = None
     error: str | None = None

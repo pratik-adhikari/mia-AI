@@ -29,7 +29,13 @@ class HealthResponse(WireModel):
 class ProductLibraryItem(WireModel):
     product: ProductRecord
     latest_dpp: DppVersion | None = None
+    latest_run: ProductRun | None = None
     run_count: int = 0
+    resumable: bool = False
+    resume_thread_id: str | None = None
+    workflow_status: str = "idle"
+    human_reviewed_mappings: int = 0
+    human_dummy_mappings: int = 0
 
 
 class ProductDetail(WireModel):
