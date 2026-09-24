@@ -209,6 +209,7 @@ export interface EvidenceOutcome {
   evidenceId: string;
   status: EvidenceOutcomeStatus;
   requirementId: string | null;
+  directTarget: boolean;
   alternativeRequirementIds: string[];
   reason: string;
   mappingOrigin: MappingOrigin;
