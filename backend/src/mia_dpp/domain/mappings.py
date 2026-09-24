@@ -206,6 +206,21 @@ class CoverageReport(WireModel):
         return self
 
 
+class ListInstanceBinding(WireModel):
+    """Bind one [] template segment to a stable instance identity."""
+
+    template_path: tuple[str, ...] = Field(min_length=1)
+    instance_key: str = Field(pattern=r"^list-instance-[0-9a-f]{24}$")
+    source_context_path: tuple[str, ...] = ()
+    label: str | None = Field(default=None, max_length=200)
+
+    @model_validator(mode="after")
+    def path_is_a_list_prototype(self) -> ListInstanceBinding:
+        if self.template_path[-1] != "[]":
+            raise ValueError("list-instance binding path must end with []")
+        return self
+
+
 class MappingTarget(WireModel):
     template_key: str
     template_release: str
@@ -213,6 +228,28 @@ class MappingTarget(WireModel):
     instance_path: tuple[str, ...] = Field(min_length=1)
     id_short: str = Field(min_length=1)
     semantic_id: SemanticReference
+    list_instance_bindings: tuple[ListInstanceBinding, ...] = ()
+
+    @model_validator(mode="after")
+    def list_bindings_match_target_path(self) -> MappingTarget:
+        paths = [item.template_path for item in self.list_instance_bindings]
+        if len(paths) != len(set(paths)):
+            raise ValueError("mapping target cannot bind the same list path twice")
+        for binding in self.list_instance_bindings:
+            prefix = self.template_path[: len(binding.template_path)]
+            if prefix != binding.template_path:
+                raise ValueError("list-instance binding must identify a [] in template_path")
+        return self
+
+    @property
+    def projection_identity(self) -> tuple[object, ...]:
+        """Identity used to distinguish repeated list instances during projection."""
+
+        bindings = tuple(
+            (item.template_path, item.instance_key)
+            for item in self.list_instance_bindings
+        )
+        return self.instance_path, bindings
 
 
 class FieldMapping(WireModel):
