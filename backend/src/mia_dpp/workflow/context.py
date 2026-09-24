@@ -50,3 +50,4 @@ class MiaContext:
         ContextScope.FULL_PRODUCT,
     )
     eclass_candidate_limit: int = 12
+    semantic_promotion_enabled: bool = False
