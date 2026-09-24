@@ -22,6 +22,10 @@ from mia_dpp.agent.models import (
     AgentStatus,
     AgentValueRequest,
 )
+from mia_dpp.agents.conversation import (
+    ConversationAction,
+    PydanticConversationSupervisor,
+)
 from mia_dpp.agents.discovery import PydanticDiscoveryAgent
 from mia_dpp.agents.research import DeterministicResearchAgent, PydanticResearchAgent
 from mia_dpp.agents.semantic_mapping import PydanticBatchSemanticMapper
@@ -39,6 +43,7 @@ from mia_dpp.semantic.decision_policy import DecisionPolicySettings
 from mia_dpp.semantic.eclass import EclassJsonV2Provider, EclassPropertyProvider
 from mia_dpp.semantic.jev import OpenRouterJevClient
 from mia_dpp.services.deep_research import DeepResearchService
+from mia_dpp.services.product_query import ProductQueryService
 from mia_dpp.tools.mapping.models import SemanticMapper
 from mia_dpp.tools.mapping.review import MappingReviewService
 from mia_dpp.tools.search import SearchProvider
@@ -175,6 +180,12 @@ class Mia:
             semantic_promotion_enabled=self.settings.semantic_promotion_enabled,
         )
         self.store = WorkspaceView(catalogue, artifacts)
+        self.query = ProductQueryService(catalogue, artifacts)
+        self.conversation = (
+            PydanticConversationSupervisor(agent_model, self.query)
+            if agent_model is not None
+            else None
+        )
         self.deep_research = DeepResearchService(self.context)
         self._response_view = AgentResponseView(self.context, self.store)
         self._graph: Any | None = None
@@ -244,6 +255,49 @@ class Mia:
             user_id=user_id,
         )
         values = self._snapshot_values(snapshot)
+
+        if self.conversation is not None and not request.refresh_requested:
+            recent_messages = tuple(
+                {
+                    "role": item.role.value,
+                    "content": item.content,
+                }
+                for item in self.context.catalogue.list_messages(
+                    thread_id,
+                    user_id=user_id,
+                )[-12:]
+            )
+            turn = await self.conversation.run(
+                request.message,
+                thread_id=thread_id,
+                user_id=user_id,
+                recent_messages=recent_messages,
+            )
+            if turn.action is ConversationAction.REPLY:
+                self._assign_message_to_latest_run(
+                    message.id,
+                    thread_id,
+                    user_id=user_id,
+                )
+                status_view = self.query.work_status(thread_id, user_id=user_id)
+                response = AgentResponse(
+                    thread_id=thread_id,
+                    reply=turn.reply,
+                    status=self._conversation_status(status_view.run_status),
+                    decision_summary=turn.decision_summary,
+                    trace_events=self.store.list_events(
+                        thread_id,
+                        user_id=user_id,
+                    )[-12:],
+                    artifact_count=len(
+                        self.store.list_artifacts(
+                            thread_id,
+                            user_id=user_id,
+                        )
+                    ),
+                )
+                self._record_assistant(response, user_id=user_id)
+                return response
 
         if active_product_run is not None:
             lease_live = self.context.catalogue.run_lease_is_live(active_product_run)
@@ -1142,6 +1196,18 @@ class Mia:
             "Rejected invalid human input without advancing the workflow.",
             metadata={"error": str(error)},
         )
+
+    @staticmethod
+    def _conversation_status(run_status: RunStatus | None) -> AgentStatus:
+        if run_status is RunStatus.AWAITING_HUMAN:
+            return AgentStatus.AWAITING_REVIEW
+        if run_status is RunStatus.RUNNING:
+            return AgentStatus.RUNNING
+        if run_status in {RunStatus.COMPLETED, RunStatus.REUSED}:
+            return AgentStatus.COMPLETED
+        if run_status is RunStatus.FAILED:
+            return AgentStatus.FAILED
+        return AgentStatus.AWAITING_INPUT
 
     def _latest_active_run(self, thread_id: str, *, user_id: str) -> ProductRun | None:
         active = {RunStatus.RUNNING, RunStatus.AWAITING_HUMAN}
