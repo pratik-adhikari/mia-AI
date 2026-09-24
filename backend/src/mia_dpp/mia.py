@@ -46,7 +46,8 @@ from mia_dpp.services.deep_research import DeepResearchService
 from mia_dpp.services.product_query import ProductQueryService
 from mia_dpp.tools.mapping.models import SemanticMapper
 from mia_dpp.tools.mapping.review import MappingReviewService
-from mia_dpp.tools.search import SearchProvider
+from mia_dpp.tools.search import SearchProvider, SearchUnavailableError
+from mia_dpp.tools.web.models import PageLoadError
 from mia_dpp.tools.web.tool import WebExtractionTool
 from mia_dpp.workflow.context import MiaContext
 from mia_dpp.workflow.graph import create_graph
@@ -592,6 +593,47 @@ class Mia:
         """Run one durable worker invocation against catalogue-owned job state."""
 
         return await self.deep_research.run(job_id, user_id=user_id)
+
+    async def retry_work(
+        self,
+        thread_id: str,
+        *,
+        user_id: str = LOCAL_USER_ID,
+    ) -> AgentResponse:
+        """Start a new fenced generation from durable work after a recoverable failure."""
+
+        thread = self.context.catalogue.get_thread(thread_id, user_id=user_id)
+        if thread is None:
+            raise KeyError(thread_id)
+        run = self._latest_run(thread_id, user_id=user_id)
+        if run is None:
+            raise ValueError("this conversation has no product work to retry")
+        if run.status not in {RunStatus.INCOMPLETE, RunStatus.FAILED}:
+            raise ValueError(f"run {run.id} is not retryable from status {run.status.value}")
+        product = self.context.catalogue.get_product(run.product_id, user_id=user_id)
+        if product is None:
+            raise KeyError(run.product_id)
+
+        user_message = self.context.catalogue.add_message(
+            thread_id,
+            MessageRole.USER,
+            "Retry the interrupted product workflow.",
+            run_id=run.id,
+            user_id=user_id,
+        )
+        return await self._restart_product_work_in_same_thread(
+            thread_id=thread_id,
+            user_id=user_id,
+            active_run=run,
+            product_url=product.canonical_url,
+            user_message=user_message.content,
+            refresh_requested=False,
+            previous_values={},
+            trace_offset=len(self.store.list_events(thread_id, user_id=user_id)),
+            message_id=user_message.id,
+            reason="Recovered product work from the latest durable snapshot after failure.",
+            allow_terminal=True,
+        )
 
     async def _resume(
         self,
@@ -1165,13 +1207,26 @@ class Mia:
         if self.context.catalogue.get_thread(run.thread_id, user_id=user_id) is None:
             return
         detail = str(error) or type(error).__name__
+        retryable = self._retryable_failure(error)
         self.context.catalogue.add_event(
             run.id,
-            "workflow.failed",
-            "Workflow execution failed.",
-            metadata={"error": detail, "errorType": type(error).__name__},
+            "workflow.retryable_failure" if retryable else "workflow.failed",
+            (
+                "Workflow execution stopped on a retryable external dependency failure."
+                if retryable
+                else "Workflow execution failed."
+            ),
+            metadata={
+                "error": detail,
+                "errorType": type(error).__name__,
+                "retryable": retryable,
+            },
         )
-        self.context.catalogue.finish_run(run.id, RunStatus.FAILED, error=detail)
+        self.context.catalogue.finish_run(
+            run.id,
+            RunStatus.INCOMPLETE if retryable else RunStatus.FAILED,
+            error=detail,
+        )
 
     def _record_rejected_input(
         self,
@@ -1197,6 +1252,19 @@ class Mia:
             "workflow.input_rejected",
             "Rejected invalid human input without advancing the workflow.",
             metadata={"error": str(error)},
+        )
+
+    @staticmethod
+    def _retryable_failure(error: Exception) -> bool:
+        return isinstance(
+            error,
+            (
+                httpx.HTTPError,
+                SearchUnavailableError,
+                PageLoadError,
+                TimeoutError,
+                ConnectionError,
+            ),
         )
 
     @staticmethod
