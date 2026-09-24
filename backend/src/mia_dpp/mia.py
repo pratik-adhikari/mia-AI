@@ -107,21 +107,22 @@ class Mia:
                 max_concurrency=self.settings.jev_max_concurrency,
             )
         resolved_eclass_provider = eclass_provider
-        if self.settings.eclass_shadow_enabled and resolved_eclass_provider is None:
+        if self.settings.eclass_shadow_enabled:
             if jev_decider is None:
                 raise ValueError(
                     "MIA_ECLASS_SHADOW_ENABLED requires MIA_JEV_SHADOW_ENABLED"
                 )
-            if self.settings.eclass_certificate_file is None:
-                raise ValueError(
-                    "MIA_ECLASS_SHADOW_ENABLED requires MIA_ECLASS_CERTIFICATE_FILE"
+            if resolved_eclass_provider is None:
+                if self.settings.eclass_certificate_file is None:
+                    raise ValueError(
+                        "MIA_ECLASS_SHADOW_ENABLED requires MIA_ECLASS_CERTIFICATE_FILE"
+                    )
+                resolved_eclass_provider = EclassJsonV2Provider(
+                    certificate_file=self.settings.eclass_certificate_file,
+                    key_file=self.settings.eclass_key_file,
+                    base_url=self.settings.eclass_json_base_url,
+                    search_parameter=self.settings.eclass_search_parameter,
                 )
-            resolved_eclass_provider = EclassJsonV2Provider(
-                certificate_file=self.settings.eclass_certificate_file,
-                key_file=self.settings.eclass_key_file,
-                base_url=self.settings.eclass_json_base_url,
-                search_parameter=self.settings.eclass_search_parameter,
-            )
 
         discovery = PydanticDiscoveryAgent(agent_model, search) if agent_model is not None else None
         research = (
@@ -160,6 +161,7 @@ class Mia:
                 ),
             ),
             jev_grouping_max_groups=self.settings.jev_grouping_max_groups,
+            eclass_shadow_enabled=self.settings.eclass_shadow_enabled,
             eclass_provider=resolved_eclass_provider,
             eclass_candidate_limit=self.settings.eclass_candidate_limit,
         )
