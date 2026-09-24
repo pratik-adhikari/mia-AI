@@ -280,6 +280,13 @@ class Mia:
                 self._record_assistant(response, user_id=user_id)
                 return response
 
+            if turn.action is ConversationAction.RETRY_WORK:
+                return await self.retry_work(
+                    thread_id,
+                    user_id=user_id,
+                    message_id=message.id,
+                )
+
         remote = self._use_agent_server
         snapshot: Any | None = None
         if remote:
@@ -599,6 +606,7 @@ class Mia:
         thread_id: str,
         *,
         user_id: str = LOCAL_USER_ID,
+        message_id: str | None = None,
     ) -> AgentResponse:
         """Start a new fenced generation from durable work after a recoverable failure."""
 
@@ -614,23 +622,26 @@ class Mia:
         if product is None:
             raise KeyError(run.product_id)
 
-        user_message = self.context.catalogue.add_message(
-            thread_id,
-            MessageRole.USER,
-            "Retry the interrupted product workflow.",
-            run_id=run.id,
-            user_id=user_id,
-        )
+        retry_message = "Retry the interrupted product workflow."
+        if message_id is None:
+            user_message = self.context.catalogue.add_message(
+                thread_id,
+                MessageRole.USER,
+                retry_message,
+                run_id=run.id,
+                user_id=user_id,
+            )
+            message_id = user_message.id
         return await self._restart_product_work_in_same_thread(
             thread_id=thread_id,
             user_id=user_id,
             active_run=run,
             product_url=product.canonical_url,
-            user_message=user_message.content,
+            user_message=retry_message,
             refresh_requested=False,
             previous_values={},
             trace_offset=len(self.store.list_events(thread_id, user_id=user_id)),
-            message_id=user_message.id,
+            message_id=message_id,
             reason="Recovered product work from the latest durable snapshot after failure.",
             allow_terminal=True,
         )
