@@ -284,6 +284,10 @@ export interface DppPackage {
   validationReport: ValidationReport;
   deployable: boolean;
   evidence: EvidenceRecord[];
+  submodels?: Record<string, unknown>[];
+  templates?: TemplateRelease[];
+  gapReports?: GapReport[];
+  validationReports?: ValidationReport[];
 }
 
 export interface ChatMessage {
