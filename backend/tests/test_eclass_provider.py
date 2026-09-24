@@ -16,7 +16,7 @@ def test_eclass_provider_searches_then_fetches_property_by_irdi() -> None:
 
     def handler(request: httpx.Request) -> httpx.Response:
         requested_paths.append(str(request.url))
-        if request.url.path.endswith("/properties"):
+        if request.url.path.endswith("/jsonapi/v2/properties"):
             assert request.url.params["preferredName"] == "Repeat accuracy"
             return httpx.Response(
                 200,
@@ -30,7 +30,9 @@ def test_eclass_provider_searches_then_fetches_property_by_irdi() -> None:
                     ]
                 },
             )
-        assert request.url.path.endswith("/properties/0173-1-02-AAO677-001")
+        assert request.url.path.endswith(
+            "/jsonapi/v2/properties/0173-1-02-AAO677-001"
+        )
         return httpx.Response(
             200,
             json={
