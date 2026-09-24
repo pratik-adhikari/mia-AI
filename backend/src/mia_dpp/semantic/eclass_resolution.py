@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import asyncio
 from collections import Counter
-from enum import StrEnum
 from collections.abc import Iterable
+from enum import StrEnum
 
 from pydantic import Field, model_validator
 
