@@ -157,6 +157,29 @@ class MappingReviewService:
             raise ValueError("mapping result must account for every evidence record exactly once")
 
     @staticmethod
+    def validate_projection_uniqueness(mapping_result: MappingResult) -> None:
+        """Reject authoritative mappings that still collide at AAS projection time."""
+
+        by_identity: dict[tuple[object, ...], list[FieldMapping]] = {}
+        for mapping in mapping_result.mapped:
+            by_identity.setdefault(mapping.target.projection_identity, []).append(mapping)
+        collisions = tuple(
+            items
+            for items in by_identity.values()
+            if len(items) > 1
+        )
+        if not collisions:
+            return
+        details = "; ".join(
+            ", ".join(item.evidence_id for item in items)
+            for items in collisions
+        )
+        raise ValueError(
+            "mapping review must resolve duplicate projection targets before approval: "
+            + details
+        )
+
+    @staticmethod
     def cycle_id(
         package: ProductKnowledgePackage,
         template_index: TemplateIndex,
