@@ -646,7 +646,7 @@ class Mia:
         user_id: str = LOCAL_USER_ID,
         message_id: str | None = None,
     ) -> AgentResponse:
-        """Start a new fenced generation from durable work after a recoverable failure."""
+        """Explicitly supersede a running/failed attempt with a new fenced generation."""
 
         thread = self.context.catalogue.get_thread(thread_id, user_id=user_id)
         if thread is None:
@@ -654,7 +654,11 @@ class Mia:
         run = self._latest_run(thread_id, user_id=user_id)
         if run is None:
             raise ValueError("this conversation has no product work to retry")
-        if run.status not in {RunStatus.INCOMPLETE, RunStatus.FAILED}:
+        if run.status not in {
+            RunStatus.RUNNING,
+            RunStatus.INCOMPLETE,
+            RunStatus.FAILED,
+        }:
             raise ValueError(f"run {run.id} is not retryable from status {run.status.value}")
         product = self.context.catalogue.get_product(run.product_id, user_id=user_id)
         if product is None:
