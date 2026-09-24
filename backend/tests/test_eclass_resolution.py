@@ -270,3 +270,52 @@ def test_no_eclass_match_only_occurs_after_verified_candidates_exist() -> None:
     assert result.verified_candidates
     assert len(result.decisions) == 1
     assert result.decisions[0].decision.choice == NO_ECLASS_MATCH
+
+
+def test_eclass_is_not_triggered_by_tied_idta_routes() -> None:
+    package = _package()
+    normalization = normalize_package(package)
+    contexts = build_context_views(package, normalization)
+    traces = (
+        IdtaRoutingTrace(
+            focus_evidence_id="ev-1",
+            context_view_id="ctx-a",
+            scope=ContextScope.SIBLINGS,
+            selected_template_key="technical_data",
+            selected_path=(
+                "TechnicalData",
+                "TechnicalPropertyAreas",
+                "[]",
+                "ArbitraryProperty",
+            ),
+            terminal_reason="wildcard",
+            steps=(),
+        ),
+        IdtaRoutingTrace(
+            focus_evidence_id="ev-1",
+            context_view_id="ctx-b",
+            scope=ContextScope.FULL_PRODUCT,
+            selected_template_key="digital_nameplate",
+            selected_path=("Nameplate", "ManufacturerName"),
+            terminal_reason="leaf",
+            steps=(),
+        ),
+    )
+    provider = _Provider()
+
+    report = asyncio.run(
+        resolve_eclass_for_technical_properties(
+            provider=provider,
+            decider=_Decider(),
+            package=package,
+            normalization=normalization,
+            context_views=contexts,
+            routing=IdtaRoutingReport(traces=traces),
+            scopes=(ContextScope.SIBLINGS, ContextScope.FULL_PRODUCT),
+        )
+    )
+
+    result = next(item for item in report.results if item.evidence_id == "ev-1")
+    assert result.applicable is False
+    assert result.retrieval_status == EclassRetrievalStatus.NOT_APPLICABLE
+    assert provider.search_queries == []
