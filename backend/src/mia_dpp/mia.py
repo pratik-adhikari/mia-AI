@@ -92,7 +92,7 @@ class Mia:
         semantic = semantic_mapper or (
             PydanticBatchSemanticMapper(agent_model) if agent_model is not None else None
         )
-        jev_decider = None
+        jev_decider: OpenRouterJevClient | None = None
         if self.settings.jev_shadow_enabled:
             if self.settings.openrouter_api_key is None:
                 raise ValueError(
