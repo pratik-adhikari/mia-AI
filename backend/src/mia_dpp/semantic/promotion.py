@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+
 from mia_dpp.aas.identifiers import sanitize_id_short
 from mia_dpp.aas.templates import OfficialTemplateRepository
 from mia_dpp.domain.base import WireModel
@@ -210,6 +211,7 @@ def _replace_with(
         rejected_evidence_ids=rejected_ids,
         outcomes=tuple(outcomes),
     )
+
 
 def _conflict_ids(
     conflicts: tuple[OpenPropertyConflict, ...],
