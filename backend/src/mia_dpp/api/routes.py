@@ -25,7 +25,7 @@ from mia_dpp.agent.models import (
     AgentTraceEvent,
     AgentValueRequest,
 )
-from mia_dpp.api.auth import AuthenticatedUser
+from mia_dpp.api.auth import AuthenticatedUser, AuthenticatedUserName
 from mia_dpp.api.schemas import (
     DppBuildRequest,
     HealthResponse,
@@ -170,11 +170,13 @@ async def agent_review(
     payload: AgentReviewRequest,
     http_request: Request,
     user_id: AuthenticatedUser,
+    actor_name: AuthenticatedUserName,
 ) -> AgentResponse:
     """Resume an interrupt with trusted mapping-review decisions."""
 
     try:
-        return await _application(http_request).review(payload, user_id=user_id)
+        trusted = payload.model_copy(update={"actor_name": actor_name})
+        return await _application(http_request).review(trusted, user_id=user_id)
     except (KeyError, TypeError, ValueError) as error:
         raise HTTPException(
             status_code=422,
@@ -187,10 +189,12 @@ async def agent_value(
     payload: AgentValueRequest,
     http_request: Request,
     user_id: AuthenticatedUser,
+    actor_name: AuthenticatedUserName,
 ) -> AgentResponse:
     """Resume an interrupt with a trusted human-supplied requirement value."""
     try:
-        return await _application(http_request).provide_value(payload, user_id=user_id)
+        trusted = payload.model_copy(update={"actor_name": actor_name})
+        return await _application(http_request).provide_value(trusted, user_id=user_id)
     except (KeyError, TypeError, ValueError) as error:
         raise HTTPException(
             status_code=422,

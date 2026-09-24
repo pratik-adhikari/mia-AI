@@ -194,3 +194,18 @@ labels the version as provisional. `lastVerifiedAt` advances only for verified r
 
 When a real value later replaces the placeholder, normal coverage/review/build creates a new DPP
 version. The old provisional version remains part of the audit history instead of being rewritten.
+
+
+## Human identity is server-bound
+
+The browser may submit review decisions and values, but it is not authoritative for reviewer
+identity. The review and value endpoints now overwrite any client-supplied `actorName` with the
+name resolved from the authenticated account.
+
+The immutable audit record therefore binds two related identities:
+
+- `user_id`: the authenticated account subject used for ownership/security;
+- `actor_name`: a server-resolved human-readable label used in the UI and audit exports.
+
+This prevents a client from forging another person's name while still allowing local development to
+use the explicit `Local user` identity.
