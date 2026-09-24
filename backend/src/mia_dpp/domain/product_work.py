@@ -56,6 +56,7 @@ class ProductWorkSnapshot(WireModel):
     targets_artifact_id: str | None = None
     deterministic_mapping_artifact_id: str | None = None
     semantic_mapping_artifact_id: str | None = None
+    semantic_promotion_artifact_id: str | None = None
     reviewed_mapping_artifact_id: str | None = None
     coverage_artifact_id: str | None = None
     conflict_artifact_id: str | None = None
