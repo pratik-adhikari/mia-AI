@@ -144,3 +144,53 @@ def test_recovered_generation_fences_old_snapshot_and_run_mutations(tmp_path) ->
 
     assert catalogue.get_run(replacement.id).status is RunStatus.RUNNING
     assert catalogue.get_product_work_snapshot(product.id, user_id="user-a") == first
+
+
+
+def test_stale_workspace_cannot_start_after_generation_advances(tmp_path) -> None:
+    from datetime import UTC, datetime, timedelta
+    from types import SimpleNamespace
+
+    import pytest
+
+    from mia_dpp.persistence.catalogue import ProductCatalogue
+    from mia_dpp.workflow.workspace import RunWorkspace
+
+    catalogue = ProductCatalogue(tmp_path / "catalogue.sqlite3")
+    catalogue.get_or_create_thread("thread-workspace-fence", "user-a")
+    product, _ = catalogue.get_or_create_product(
+        "https://example.com/workspace-fence",
+        user_id="user-a",
+    )
+    old = catalogue.start_run(
+        product.id,
+        "thread-workspace-fence",
+        user_id="user-a",
+    )
+    expired = old.model_copy(
+        update={"execution_lease_expires_at": datetime.now(UTC) - timedelta(seconds=1)}
+    )
+    catalogue._execute(
+        "UPDATE runs SET payload=? WHERE id=?",
+        (expired.model_dump_json(), old.id),
+    )
+    catalogue.claim_product_restart(
+        user_id="user-a",
+        product_id=product.id,
+        expected_run_id=old.id,
+        expected_generation=0,
+        reason="fixture recovery",
+        refresh_requested=False,
+        require_expired_lease=True,
+    )
+
+    with pytest.raises(RuntimeError, match="workflow generation"):
+        RunWorkspace(
+            {
+                "user_id": "user-a",
+                "thread_id": old.thread_id,
+                "product_id": product.id,
+                "run_id": old.id,
+            },
+            SimpleNamespace(catalogue=catalogue),
+        )

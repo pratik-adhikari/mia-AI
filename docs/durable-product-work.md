@@ -439,3 +439,20 @@ fingerprint ultimately needs.
 
 The current mapper fingerprint should therefore be treated as an implementation identity, not yet a
 complete reproducibility identity.
+
+
+## Workflow-generation fencing
+
+An execution lease decides when recovery may be attempted; it is not the authority to write after recovery. Every product run is therefore bound to the thread's workflow generation.
+
+When recovery advances generation N to N+1, the old run remains bound to N and the replacement run is created in N+1. RunWorkspace rejects an old generation when a node starts, and artifact/event writes re-check the generation. Snapshot updates, run status/finalization, lease renewal, and DPP publication are also fenced in the catalogue.
+
+A slow executor from generation N may finish an external call, but it cannot publish workflow state, complete its old run, or fail the replacement run after generation N+1 exists.
+
+The lease is still event-renewed rather than a separate heartbeat. With fencing in place, a long silent call may cause unnecessary recovery, but it can no longer win a durable write after recovery.
+
+## Source generations
+
+Source freshness is tracked separately from workflow execution generation. A fresh acquisition or explicit Refresh starts a new source generation; continuation/recovery keeps the existing one.
+
+Every background research job records the source generation that seeded it. Reuse/integration only selects completed research from the snapshot's current source generation, so a slow pre-refresh job cannot become current merely because it completed later.

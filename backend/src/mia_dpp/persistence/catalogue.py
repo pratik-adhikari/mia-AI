@@ -923,8 +923,8 @@ class ProductCatalogue:
         *,
         metadata: dict[str, Any] | None = None,
     ) -> RunEvent:
-        run = self.get_run(run_id)
-        if run is not None and run.status is RunStatus.RUNNING:
+        run = self.assert_run_generation(run_id)
+        if run.status is RunStatus.RUNNING:
             self.renew_run_lease(run_id)
         event = RunEvent(
             id=_new_id("event"),
