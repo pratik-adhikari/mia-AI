@@ -25,6 +25,7 @@ from mia_dpp.domain.mappings import (
     MappingOrigin,
     MappingResult,
     MappingStatus,
+    MappingTarget,
     SemanticReviewItem,
 )
 from mia_dpp.domain.targets import Requirement, RequirementKind, TemplateIndex
@@ -222,6 +223,7 @@ class MappingReviewService:
         decision: ReviewDecision,
         thread_id: str,
         corrected_requirement_id: str | None = None,
+        corrected_semantic_id: str | None = None,
         corrected_value: str | None = None,
         comment: str | None = None,
         actor_name: str | None = None,
@@ -234,6 +236,8 @@ class MappingReviewService:
         if normalized == "keep":
             if item.status is EvidenceOutcomeStatus.UNCERTAIN:
                 raise ValueError("uncertain evidence requires an explicit target or disposition")
+            if mapping is None and item.target_kind == "direct":
+                raise ValueError("direct-target review has no proposed mapping to keep")
             if mapping is not None:
                 mapping = mapping.model_copy(
                     update={
@@ -278,6 +282,64 @@ class MappingReviewService:
                 }
             )
             return package, self._replace(package, mapping_result, reviewed), reviewed
+
+        if item.target_kind == "direct":
+            record = next(record for record in package.evidence if record.id == evidence_id)
+            corrected = False
+            if corrected_value is not None and corrected_value.strip() != str(record.value):
+                corrected = True
+                original = record
+                record = self._human_evidence(
+                    record,
+                    corrected_value.strip(),
+                    thread_id,
+                    actor_name=actor_name,
+                )
+                package = package.model_copy(
+                    update={
+                        "evidence": (
+                            *(
+                                existing.model_copy(update={"status": EvidenceStatus.REJECTED})
+                                if existing.id == original.id
+                                else existing
+                                for existing in package.evidence
+                            ),
+                            record,
+                        )
+                    }
+                )
+
+            selected_target = self._direct_target(
+                item,
+                corrected_semantic_id=corrected_semantic_id,
+            )
+            mapping = self._human_direct_mapping(
+                record,
+                selected_target,
+                comment,
+                actor_name=actor_name,
+            )
+            reviewed = item.model_copy(
+                update={
+                    "evidence_id": record.id,
+                    "status": EvidenceOutcomeStatus.MAPPED,
+                    "requirement_id": None,
+                    "alternative_requirement_ids": (),
+                    "reason": "Human selected and confirmed a verified semantic target.",
+                    "mapping": mapping,
+                }
+            )
+            return (
+                package,
+                self._replace(
+                    package,
+                    mapping_result,
+                    reviewed,
+                    replaced_id=evidence_id,
+                    retain_replaced_as_rejected=corrected,
+                ),
+                reviewed,
+            )
 
         requirement_id = corrected_requirement_id or item.requirement_id
         requirement = self._fixed_requirement(template_index, requirement_id)
@@ -521,6 +583,61 @@ class MappingReviewService:
             human_reviewed=True,
             human_actor_name=actor_name,
             human_value_kind=human_value_kind,
+            human_comment=comment,
+        )
+
+    @staticmethod
+    def _direct_target(
+        item: SemanticReviewItem,
+        *,
+        corrected_semantic_id: str | None,
+    ) -> MappingTarget:
+        if corrected_semantic_id is not None:
+            candidates = tuple(
+                target
+                for target in item.alternative_targets
+                if target.semantic_id.primary_value == corrected_semantic_id
+            )
+            if len(candidates) != 1:
+                raise ValueError(
+                    "corrected semantic ID must select exactly one verified review target"
+                )
+            return candidates[0]
+        if item.mapping is not None:
+            return item.mapping.target
+        raise ValueError(
+            "direct-target review requires corrected_semantic_id when no target is preselected"
+        )
+
+    def _human_direct_mapping(
+        self,
+        evidence: EvidenceRecord,
+        target: MappingTarget,
+        comment: str | None,
+        *,
+        actor_name: str | None,
+    ) -> FieldMapping:
+        identity = (
+            f"{target.template_key}\0{'/'.join(target.template_path)}\0"
+            f"{target.semantic_id.primary_value}\0{evidence.id}"
+        )
+        return FieldMapping(
+            id="mapping-" + hashlib.sha256(identity.encode()).hexdigest()[:24],
+            evidence_id=evidence.id,
+            source_field=evidence.source_label or evidence.predicate,
+            source_value=self._display_value(evidence),
+            target=target,
+            assessment=MappingAssessment(
+                basis=MappingBasis.HUMAN,
+                review_required=False,
+                reason="A trusted human confirmed this verified semantic target.",
+            ),
+            reasoning="Validated and accepted through direct semantic-target review.",
+            status=MappingStatus.APPROVED,
+            mapping_origin=MappingOrigin.HUMAN,
+            human_reviewed=True,
+            human_actor_name=actor_name,
+            human_value_kind="verified",
             human_comment=comment,
         )
 
