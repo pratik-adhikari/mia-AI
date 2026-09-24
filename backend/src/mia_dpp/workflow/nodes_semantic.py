@@ -11,6 +11,7 @@ from mia_dpp.normalization import NormalizationReport, normalize_package
 from mia_dpp.semantic import ContextViewSet, build_context_views
 from mia_dpp.semantic.decision_policy import apply_decision_policy
 from mia_dpp.semantic.diagnostics import build_routing_diagnostics
+from mia_dpp.semantic.grouping import build_grouping_report
 from mia_dpp.semantic.idta_routing import IdtaRoutingReport, route_views
 from mia_dpp.workflow.context import MiaContext
 from mia_dpp.workflow.state import MiaWorkflowState
@@ -192,3 +193,56 @@ async def analyze_jev_shadow(
         "jev_routing_diagnostics_artifact_id": diagnostics_id,
         "jev_decision_policy_artifact_id": policy_id,
     }
+
+
+async def shadow_jev_semantic_grouping(
+    state: MiaWorkflowState,
+    runtime: Runtime[MiaContext],
+) -> dict[str, Any]:
+    """Build lossless semantic grouping metadata without affecting trusted mappings."""
+
+    work = RunWorkspace(state, runtime.context)
+    package = work.load_state("evidence_artifact_id", ProductKnowledgePackage)
+    normalization = work.load_state("normalization_artifact_id", NormalizationReport)
+    context_views = work.load_state("semantic_context_artifact_id", ContextViewSet)
+    report = await build_grouping_report(
+        decider=work.ctx.jev_decider,
+        package=package,
+        normalization=normalization,
+        context_views=context_views,
+        scopes=work.ctx.jev_grouping_scopes,
+        max_groups=work.ctx.jev_grouping_max_groups,
+    )
+    artifact_id = work.put_model(
+        "semantic/jev-semantic-grouping-shadow.json",
+        report,
+        derived_from=(
+            work.state_id("evidence_artifact_id"),
+            work.state_id("normalization_artifact_id"),
+            work.state_id("semantic_context_artifact_id"),
+        ),
+    )
+    run_summaries = {
+        (
+            f"{run.strategy.value}:{run.scope.value}"
+            if run.scope is not None
+            else run.strategy.value
+        ): {
+            "groups": len(run.groups),
+            "unresolved": sum(
+                assignment.group_id is None for assignment in run.assignments
+            ),
+        }
+        for run in report.runs
+    }
+    work.event(
+        "semantic.grouping_shadow_completed",
+        "Recorded lossless semantic grouping strategies without changing evidence.",
+        metadata={
+            "artifactId": artifact_id,
+            "runs": run_summaries,
+            "pairwiseComparisons": len(report.pairwise_agreement),
+            "shadowMode": True,
+        },
+    )
+    return {"jev_semantic_grouping_artifact_id": artifact_id}
