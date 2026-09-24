@@ -105,15 +105,10 @@ async def store_result(
         if dummy_mapping_ids
         else DppReleaseStatus.VERIFIED
     )
-    work.ctx.catalogue.finish_run(
-        work.run_id,
-        RunStatus.COMPLETED if deployable else RunStatus.FAILED,
-        metrics={
-            "requiredUnresolved": state.get("required_unresolved", 0),
-            "researchAttempts": state.get("research_attempts", 0),
-        },
-        error=None if deployable else "AAS validation did not produce a deployable artifact",
-    )
+    metrics = {
+        "requiredUnresolved": state.get("required_unresolved", 0),
+        "researchAttempts": state.get("research_attempts", 0),
+    }
     if not deployable:
         update_product_snapshot(
             work,
@@ -123,6 +118,12 @@ async def store_result(
         work.event(
             "dpp.validation_failed",
             "Stored failed build/validation artifacts without publishing a DPP version.",
+        )
+        work.ctx.catalogue.finish_run(
+            work.run_id,
+            RunStatus.FAILED,
+            metrics=metrics,
+            error="AAS validation did not produce a deployable artifact",
         )
         return {
             "status": "failed",
@@ -161,6 +162,11 @@ async def store_result(
         "dpp.version_created",
         f"Stored DPP version {version.version}.",
         metadata={"dppVersionId": version.id},
+    )
+    work.ctx.catalogue.finish_run(
+        work.run_id,
+        RunStatus.COMPLETED,
+        metrics=metrics,
     )
     provisional = release_status is DppReleaseStatus.PROVISIONAL
     return {

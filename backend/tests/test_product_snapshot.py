@@ -124,21 +124,15 @@ def test_recovered_generation_fences_old_snapshot_and_run_mutations(tmp_path) ->
         refresh_requested=False,
         require_expired_lease=True,
     )
-    work = RunWorkspace(
-        {
-            "user_id": "user-a",
-            "thread_id": old.thread_id,
-            "product_id": product.id,
-            "run_id": old.id,
-            "workflow_generation": 0,
-            "source_generation": 0,
-            "product_snapshot_version": first.version,
-        },
-        SimpleNamespace(catalogue=catalogue),
+    stale_snapshot = first.model_copy(
+        update={"workflow_stage": ProductWorkStage.MAPPING}
     )
 
     with pytest.raises(RuntimeError, match="workflow generation"):
-        update_product_snapshot(work, ProductWorkStage.MAPPING)
+        catalogue.save_product_work_snapshot(
+            stale_snapshot,
+            expected_version=first.version,
+        )
     with pytest.raises(RuntimeError, match="workflow generation"):
         catalogue.finish_run(old.id, RunStatus.COMPLETED)
 

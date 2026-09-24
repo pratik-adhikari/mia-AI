@@ -472,6 +472,7 @@ class Mia:
             user_id=user_id,
         )
         self._assign_message_to_latest_run(user_message.id, thread_id, user_id=user_id)
+        failing_run_id: str | None = None
         try:
             snapshot = (
                 await self._agent_server_snapshot(thread_id, user_id)
@@ -479,6 +480,12 @@ class Mia:
                 else None
             )
             if snapshot is not None:
+                snapshot_values = self._snapshot_values(snapshot)
+                failing_run_id = (
+                    str(snapshot_values["run_id"])
+                    if snapshot_values.get("run_id")
+                    else None
+                )
                 result = await self._run_agent_server(
                     thread_id, user_id, command={"resume": payload}
                 )
@@ -486,6 +493,13 @@ class Mia:
                 from langgraph.types import Command
 
                 graph = await self._ensure_graph()
+                local_snapshot = await graph.aget_state(self._config(thread_id, user_id))
+                snapshot_values = self._snapshot_values(local_snapshot)
+                failing_run_id = (
+                    str(snapshot_values["run_id"])
+                    if snapshot_values.get("run_id")
+                    else None
+                )
                 result = await graph.ainvoke(
                     Command(resume=payload),
                     config=self._config(thread_id, user_id),
@@ -495,7 +509,12 @@ class Mia:
             self._record_rejected_input(thread_id, error, user_id=user_id)
             raise
         except Exception as error:
-            self._record_failure(thread_id, error, user_id=user_id)
+            self._record_failure(
+                thread_id,
+                error,
+                user_id=user_id,
+                run_id=failing_run_id,
+            )
             raise
         response = self._response_view.build(dict(result), trace_offset=trace_offset)
         self._record_assistant(response, user_id=user_id)
