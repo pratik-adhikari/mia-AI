@@ -24,7 +24,6 @@ from mia_dpp.semantic.eclass_diagnostics import EclassDiagnosticsReport
 from mia_dpp.semantic.eclass_resolution import (
     EclassEvidenceResolution,
     EclassResolutionReport,
-    EclassRetrievalStatus,
 )
 from mia_dpp.semantic.open_property import (
     OpenPropertyConflict,
@@ -256,7 +255,6 @@ def promote_open_properties(
 ) -> SemanticPromotionResult:
     """Promote only verified open-property semantics under conservative policy."""
 
-    records = {item.id: item for item in package.evidence}
     proposal_by_id = {item.evidence_id: item for item in proposals.proposals}
     resolution_by_id = {
         item.evidence_id: item for item in eclass_resolution.results
