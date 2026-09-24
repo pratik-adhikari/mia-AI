@@ -35,6 +35,7 @@ from mia_dpp.api.schemas import (
 )
 from mia_dpp.domain.mappings import MappingResult
 from mia_dpp.domain.product import (
+    DppReleaseStatus,
     BackgroundJob,
     BackgroundJobStatus,
     ChatMessage,
@@ -362,6 +363,9 @@ async def create_dpp(
                 error=None if package.deployable else "Manual DPP validation blocked deployment",
             )
             if package.deployable:
+                dummy_mapping_ids = tuple(
+                    item.id for item in payload.mappings if item.human_value_kind == "dummy"
+                )
                 catalogue.create_dpp_version(
                     product.id,
                     run.id,
@@ -372,6 +376,12 @@ async def create_dpp(
                         package.model_dump_json(by_alias=True).encode()
                     ).hexdigest(),
                     deployable=True,
+                    release_status=(
+                        DppReleaseStatus.PROVISIONAL
+                        if dummy_mapping_ids
+                        else DppReleaseStatus.VERIFIED
+                    ),
+                    dummy_mapping_ids=dummy_mapping_ids,
                 )
         return package
     except TemplateRepositoryError as error:

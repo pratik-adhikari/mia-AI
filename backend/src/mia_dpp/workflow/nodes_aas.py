@@ -10,7 +10,7 @@ if TYPE_CHECKING:
 from mia_dpp.aas.build import build_dpp
 from mia_dpp.domain.evidence import ProductKnowledgePackage
 from mia_dpp.domain.mappings import MappingResult, MappingStatus
-from mia_dpp.domain.product import RunStatus
+from mia_dpp.domain.product import DppReleaseStatus, RunStatus
 from mia_dpp.domain.product_work import ProductWorkStage
 from mia_dpp.workflow.context import MiaContext
 from mia_dpp.workflow.product_snapshot import model_fingerprint, update_product_snapshot
@@ -90,6 +90,21 @@ async def store_result(
 ) -> dict[str, Any]:
     work = RunWorkspace(state, runtime.context)
     deployable = state.get("build_deployable", False)
+    mapping_id = state.get("reviewed_mapping_artifact_id") or work.state_id(
+        "semantic_mapping_artifact_id"
+    )
+    mapping = work.load(mapping_id, MappingResult)
+    dummy_mapping_ids = tuple(
+        item.id
+        for item in mapping.mapped
+        if item.status in {MappingStatus.AUTO, MappingStatus.APPROVED}
+        and item.human_value_kind == "dummy"
+    )
+    release_status = (
+        DppReleaseStatus.PROVISIONAL
+        if dummy_mapping_ids
+        else DppReleaseStatus.VERIFIED
+    )
     work.ctx.catalogue.finish_run(
         work.run_id,
         RunStatus.COMPLETED if deployable else RunStatus.FAILED,
@@ -123,9 +138,11 @@ async def store_result(
         validation_artifact_id=state.get("validation_artifact_id") or None,
         source_fingerprint=state.get("source_fingerprint") or None,
         deployable=True,
+        release_status=release_status,
+        dummy_mapping_ids=dummy_mapping_ids,
     )
     product = work.ctx.catalogue.get_product(work.product_id, user_id=work.user_id)
-    if product is not None:
+    if product is not None and release_status is DppReleaseStatus.VERIFIED:
         from mia_dpp.domain.base import utc_now
 
         work.ctx.catalogue.update_product(
@@ -137,15 +154,27 @@ async def store_result(
         unresolved_required_ids=(),
         human_review_pending=False,
         last_error=None,
+        release_status=release_status,
+        dummy_mapping_ids=dummy_mapping_ids,
     )
     work.event(
         "dpp.version_created",
         f"Stored DPP version {version.version}.",
         metadata={"dppVersionId": version.id},
     )
+    provisional = release_status is DppReleaseStatus.PROVISIONAL
     return {
         "status": "completed",
         "reused_dpp_version_id": version.id,
-        "reply": "DPP creation completed and a durable version was stored.",
-        "decision_summary": "Coverage and validation passed.",
+        "reply": (
+            "DPP creation completed as a provisional version because human-approved DUMMY "
+            "placeholders remain."
+            if provisional
+            else "DPP creation completed and a verified durable version was stored."
+        ),
+        "decision_summary": (
+            f"Coverage and validation passed, with {len(dummy_mapping_ids)} DUMMY mapping(s)."
+            if provisional
+            else "Coverage and validation passed with verified values."
+        ),
     }

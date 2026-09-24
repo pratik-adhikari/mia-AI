@@ -19,6 +19,11 @@ class RunStatus(StrEnum):
     REUSED = "reused"
 
 
+class DppReleaseStatus(StrEnum):
+    VERIFIED = "verified"
+    PROVISIONAL = "provisional"
+
+
 class MessageRole(StrEnum):
     USER = "user"
     ASSISTANT = "assistant"
@@ -100,6 +105,8 @@ class DppVersion(WireModel):
     validation_artifact_id: str | None = None
     source_fingerprint: str | None = None
     deployable: bool = False
+    release_status: DppReleaseStatus = DppReleaseStatus.VERIFIED
+    dummy_mapping_ids: tuple[str, ...] = ()
     created_at: AwareDatetime = Field(default_factory=utc_now)
 
 

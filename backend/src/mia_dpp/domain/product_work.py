@@ -8,6 +8,7 @@ from typing import Literal
 from pydantic import AwareDatetime, Field
 
 from mia_dpp.domain.base import WireModel, utc_now
+from mia_dpp.domain.product import DppReleaseStatus
 
 
 class ReuseMode(StrEnum):
@@ -60,6 +61,8 @@ class ProductWorkSnapshot(WireModel):
     dpp_artifact_id: str | None = None
     aas_artifact_id: str | None = None
     validation_artifact_id: str | None = None
+    release_status: DppReleaseStatus | None = None
+    dummy_mapping_ids: tuple[str, ...] = ()
 
     source_fingerprint: str | None = None
     evidence_fingerprint: str | None = None

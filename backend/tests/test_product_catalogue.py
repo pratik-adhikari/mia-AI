@@ -4,7 +4,12 @@ import pytest
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
-from mia_dpp.domain.product import BackgroundJobStatus, MessageRole, RunStatus
+from mia_dpp.domain.product import (
+    BackgroundJobStatus,
+    DppReleaseStatus,
+    MessageRole,
+    RunStatus,
+)
 from mia_dpp.domain.product_work import (
     HumanReviewAction,
     HumanReviewRecord,
@@ -306,3 +311,28 @@ def test_stale_snapshot_write_cannot_overwrite_newer_product_state(tmp_path: Pat
         )
 
     assert catalogue.get_product_work_snapshot(product.id, user_id="user-a") == newer
+
+
+
+def test_dpp_with_dummy_values_is_saved_as_provisional(tmp_path: Path) -> None:
+    catalogue = ProductCatalogue(tmp_path / "catalogue.sqlite3")
+    catalogue.get_or_create_thread("thread-provisional", "user-a")
+    product, _ = catalogue.get_or_create_product(
+        "https://example.com/provisional",
+        user_id="user-a",
+    )
+    run = catalogue.start_run(product.id, "thread-provisional", user_id="user-a")
+
+    version = catalogue.create_dpp_version(
+        product.id,
+        run.id,
+        dpp_artifact_id="dpp-artifact",
+        deployable=True,
+        release_status=DppReleaseStatus.PROVISIONAL,
+        dummy_mapping_ids=("mapping-dummy",),
+    )
+
+    assert version.deployable is True
+    assert version.release_status is DppReleaseStatus.PROVISIONAL
+    assert version.dummy_mapping_ids == ("mapping-dummy",)
+    assert catalogue.latest_successful_dpp(product.id, user_id="user-a") == version

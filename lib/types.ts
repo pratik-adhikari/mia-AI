@@ -475,6 +475,8 @@ export interface DppVersionRecord {
   validationArtifactId: string | null;
   sourceFingerprint: string | null;
   deployable: boolean;
+  releaseStatus: "verified" | "provisional";
+  dummyMappingIds: string[];
   createdAt: string;
 }
 
@@ -509,6 +511,8 @@ export interface ProductWorkSnapshot {
   dppArtifactId: string | null;
   aasArtifactId: string | null;
   validationArtifactId: string | null;
+  releaseStatus: "verified" | "provisional" | null;
+  dummyMappingIds: string[];
   unresolvedRequiredIds: string[];
   humanReviewPending: boolean;
   lastError: string | null;

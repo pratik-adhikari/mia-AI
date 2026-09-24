@@ -175,3 +175,22 @@ The dedicated `after_background_integration` route therefore means:
 - conflict found -> human review;
 - no conflict -> coverage;
 - never route integration back into itself.
+
+
+## DUMMY values and release status
+
+Structural AAS validity and product-data trust are different concepts. A human-approved DUMMY can be
+type-compatible and allow the AAS validator to pass, but it is not verified manufacturer data.
+
+Every durable DPP version therefore has a release status:
+
+- `verified`: deployable and contains no accepted DUMMY mappings;
+- `provisional`: deployable/structurally valid, but one or more accepted mappings are explicit
+  human-approved DUMMY placeholders.
+
+A provisional DPP is still stored and reusable so the workflow can finish instead of repeatedly
+failing. Its DUMMY mapping IDs are retained on the DPP version and product snapshot, and the UI
+labels the version as provisional. `lastVerifiedAt` advances only for verified releases.
+
+When a real value later replaces the placeholder, normal coverage/review/build creates a new DPP
+version. The old provisional version remains part of the audit history instead of being rewritten.

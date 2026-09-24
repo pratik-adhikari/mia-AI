@@ -12,7 +12,10 @@ function statusLabel(item: ProductLibraryItem) {
   if (item.workflowStatus === "awaiting_human") return "Awaiting human approval";
   if (item.workflowStatus === "running") return "Work in progress";
   if (item.workflowStatus === "failed") return "Previous attempt failed · reusable history saved";
-  if (item.latestDpp?.deployable) return `DPP v${item.latestDpp.version} ready`;
+  if (item.latestDpp?.releaseStatus === "provisional") {
+    return `DPP v${item.latestDpp.version} provisional · ${item.latestDpp.dummyMappingIds.length} DUMMY`;
+  }
+  if (item.latestDpp?.deployable) return `DPP v${item.latestDpp.version} verified`;
   if (item.latestRun) return `${item.workflowStatus.replaceAll("_", " ")} · reusable history saved`;
   return "Saved product";
 }
@@ -81,8 +84,8 @@ export default function AssetsPage() {
                       <p className="truncate text-[14px] font-semibold text-ink">{product.name ?? product.canonicalUrl}</p>
                       <p className="mt-1 truncate text-[12px] text-muted">{product.manufacturer ?? new URL(product.canonicalUrl).hostname}</p>
                       <div className="mt-4 flex items-center gap-2 text-[11px]">
-                        <span className={`h-1.5 w-1.5 rounded-full ${latestDpp?.deployable ? "bg-ok" : "bg-warn"}`} />
-                        <span className={latestDpp?.deployable ? "text-ok" : "text-warn"}>{statusLabel(item)}</span>
+                        <span className={`h-1.5 w-1.5 rounded-full ${latestDpp?.releaseStatus === "verified" ? "bg-ok" : "bg-warn"}`} />
+                        <span className={latestDpp?.releaseStatus === "verified" ? "text-ok" : "text-warn"}>{statusLabel(item)}</span>
                         <span className="ml-auto text-muted">{runCount} run{runCount === 1 ? "" : "s"}</span>
                       </div>
                       <div className="mt-3 grid grid-cols-3 gap-2 text-[10px]">

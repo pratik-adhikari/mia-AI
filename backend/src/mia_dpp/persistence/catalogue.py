@@ -20,6 +20,7 @@ from mia_dpp.domain.product import (
     BackgroundJob,
     BackgroundJobStatus,
     ChatMessage,
+    DppReleaseStatus,
     DppVersion,
     MessageRole,
     ProductRecord,
@@ -926,6 +927,8 @@ class ProductCatalogue:
         validation_artifact_id: str | None = None,
         source_fingerprint: str | None = None,
         deployable: bool,
+        release_status: DppReleaseStatus = DppReleaseStatus.VERIFIED,
+        dummy_mapping_ids: tuple[str, ...] = (),
     ) -> DppVersion:
         for _ in range(3):
             try:
@@ -954,6 +957,8 @@ class ProductCatalogue:
                         validation_artifact_id=validation_artifact_id,
                         source_fingerprint=source_fingerprint,
                         deployable=deployable,
+                        release_status=release_status,
+                        dummy_mapping_ids=dummy_mapping_ids,
                     )
                     db.execute(
                         "INSERT INTO dpp_versions"

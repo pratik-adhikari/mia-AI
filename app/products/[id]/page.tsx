@@ -140,8 +140,22 @@ export default function ProductDetailPage() {
                 <div key={version.id} className="rounded-xl border border-hairline p-4">
                   <div className="flex items-center justify-between gap-4">
                     <div>
-                      <p className="font-medium text-ink">Version {version.version}</p>
+                      <div className="flex items-center gap-2">
+                        <p className="font-medium text-ink">Version {version.version}</p>
+                        <span className={`rounded-full px-2 py-0.5 text-[10px] font-medium ${
+                          version.releaseStatus === "verified"
+                            ? "bg-ok/10 text-ok"
+                            : "bg-warn/10 text-warn"
+                        }`}>
+                          {version.releaseStatus}
+                        </span>
+                      </div>
                       <p className="mt-1 text-xs text-muted">{time(version.createdAt)}</p>
+                      {version.dummyMappingIds.length > 0 && (
+                        <p className="mt-1 text-xs text-violet-700">
+                          {version.dummyMappingIds.length} human-approved DUMMY placeholder{version.dummyMappingIds.length === 1 ? "" : "s"}
+                        </p>
+                      )}
                     </div>
                     <a
                       href={`${API_URL}/api/artifacts/${encodeURIComponent(version.dppArtifactId)}`}
