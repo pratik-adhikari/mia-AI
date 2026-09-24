@@ -159,16 +159,6 @@ async def analyze_jev_shadow(
     """Derive multi-scope diagnostics and review priority without model calls."""
 
     work = RunWorkspace(state, runtime.context)
-    if not work.ctx.eclass_shadow_enabled:
-        work.event(
-            "semantic.eclass_shadow_skipped",
-            "ECLASS shadow resolution is disabled.",
-            metadata={"shadowMode": True},
-        )
-        return {}
-    if work.ctx.eclass_provider is None:
-        raise RuntimeError("ECLASS shadow resolution is enabled without a provider")
-
     routing_id = state.get("jev_idta_routing_artifact_id")
     if not routing_id:
         work.event(
@@ -273,6 +263,16 @@ async def shadow_eclass_resolution(
     """Retrieve verified ECLASS properties for open Technical Properties only."""
 
     work = RunWorkspace(state, runtime.context)
+    if not work.ctx.eclass_shadow_enabled:
+        work.event(
+            "semantic.eclass_shadow_skipped",
+            "ECLASS shadow resolution is disabled.",
+            metadata={"shadowMode": True},
+        )
+        return {}
+    if work.ctx.eclass_provider is None:
+        raise RuntimeError("ECLASS shadow resolution is enabled without a provider")
+
     routing_id = state.get("jev_idta_routing_artifact_id")
     if not routing_id:
         work.event(
