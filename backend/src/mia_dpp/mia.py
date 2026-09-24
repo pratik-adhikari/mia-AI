@@ -140,6 +140,7 @@ class Mia:
                     self.settings.jev_optional_max_entropy
                 ),
             ),
+            jev_grouping_max_groups=self.settings.jev_grouping_max_groups,
         )
         self.store = WorkspaceView(catalogue, artifacts)
         self.deep_research = DeepResearchService(self.context)
