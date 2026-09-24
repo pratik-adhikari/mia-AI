@@ -32,7 +32,10 @@ async def normalize_evidence(
     ambiguous = sum(item.status.value == "ambiguous" for item in report.evidence)
     work.event(
         "semantic.normalization_completed",
-        f"Normalized {len(report.evidence)} evidence records; {ambiguous} remain syntactically ambiguous.",
+        (
+            f"Normalized {len(report.evidence)} evidence records; "
+            f"{ambiguous} remain syntactically ambiguous."
+        ),
         metadata={
             "artifactId": artifact_id,
             "normalizerVersion": report.version,
