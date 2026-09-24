@@ -141,7 +141,9 @@ Chat UI
 ```
 
 The General LLM is not the workflow. It may read durable product/work state and explain it, but
-it cannot create technical facts, semantic identifiers, mappings, reviews, or AAS data.
+it cannot create technical facts, semantic identifiers, mappings, reviews, or AAS data. URL/product
+resolution also happens only after the supervisor selects a workflow action, so a conversational
+question that merely mentions a URL remains read-only.
 
 ### Checkpoint-independent chat
 
@@ -201,6 +203,11 @@ Unexpected deterministic failures remain `failed`.
 A retry never mutates or resurrects the old run. `retry_work()` creates a new workflow generation
 through the existing atomic restart/fencing mechanism and seeds it from the latest durable
 `ProductWorkSnapshot` when reusable evidence/reviewed mappings exist.
+
+An explicit user retry may also supersede a still-marked `RUNNING` attempt. This is intentional:
+if a process crashed before its lease expired, recovery does not need to wait for the lease timeout.
+The old generation is marked incomplete, and generation fencing prevents a stale executor from
+publishing durable state if it later returns.
 
 The General LLM can return the typed `retry_work` action when a user explicitly asks to recover
 failed work; the same capability is available through the retry API.
