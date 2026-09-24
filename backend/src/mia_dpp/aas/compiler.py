@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import re
 from collections.abc import Mapping, Sequence
 from importlib.metadata import version
 from typing import Any, cast
