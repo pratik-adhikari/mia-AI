@@ -106,6 +106,14 @@ class Mia:
                 model=self.settings.jev_model,
                 max_concurrency=self.settings.jev_max_concurrency,
             )
+        if (
+            self.settings.semantic_promotion_enabled
+            and not self.settings.eclass_shadow_enabled
+        ):
+            raise ValueError(
+                "MIA_SEMANTIC_PROMOTION_ENABLED requires MIA_ECLASS_SHADOW_ENABLED"
+            )
+
         resolved_eclass_provider = eclass_provider
         if self.settings.eclass_shadow_enabled:
             if jev_decider is None:
