@@ -40,14 +40,21 @@ class EvidenceOutcome(WireModel):
     evidence_id: str = Field(min_length=1)
     status: EvidenceOutcomeStatus
     requirement_id: str | None = None
+    direct_target: bool = False
     alternative_requirement_ids: tuple[str, ...] = ()
     reason: str = Field(min_length=1, max_length=600)
     mapping_origin: MappingOrigin
 
     @model_validator(mode="after")
     def target_matches_status(self) -> EvidenceOutcome:
-        if self.status is EvidenceOutcomeStatus.MAPPED and self.requirement_id is None:
-            raise ValueError("mapped evidence requires a requirement")
+        if (
+            self.status is EvidenceOutcomeStatus.MAPPED
+            and self.requirement_id is None
+            and not self.direct_target
+        ):
+            raise ValueError("mapped evidence requires a requirement or direct target")
+        if self.requirement_id is not None and self.direct_target:
+            raise ValueError("evidence outcome cannot be both requirement and direct target")
         if self.status in {
             EvidenceOutcomeStatus.UNMAPPED,
             EvidenceOutcomeStatus.IRRELEVANT,
