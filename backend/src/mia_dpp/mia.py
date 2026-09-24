@@ -256,7 +256,8 @@ class Mia:
         )
         values = self._snapshot_values(snapshot)
 
-        if self.conversation is not None and not request.refresh_requested:
+        conversation = getattr(self, "conversation", None)
+        if conversation is not None and not request.refresh_requested:
             recent_messages = tuple(
                 {
                     "role": item.role.value,
@@ -267,7 +268,7 @@ class Mia:
                     user_id=user_id,
                 )[-12:]
             )
-            turn = await self.conversation.run(
+            turn = await conversation.run(
                 request.message,
                 thread_id=thread_id,
                 user_id=user_id,
