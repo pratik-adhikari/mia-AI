@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from mia_dpp.aas.templates import OfficialTemplateRepository
 from mia_dpp.agents.discovery.models import DiscoveryAgent
@@ -36,4 +36,4 @@ class MiaContext:
         ContextScope.FULL_PRODUCT,
     )
     jev_routing_max_concurrency: int = 8
-    jev_decision_policy: DecisionPolicySettings = DecisionPolicySettings()
+    jev_decision_policy: DecisionPolicySettings = field(default_factory=DecisionPolicySettings)
