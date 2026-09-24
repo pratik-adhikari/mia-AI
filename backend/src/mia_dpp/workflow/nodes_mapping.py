@@ -1,3 +1,252 @@
+"""Template, deterministic mapping, semantic mapping, HITL review, and coverage nodes."""
+
+from __future__ import annotations
+
+from time import perf_counter
+from typing import TYPE_CHECKING, Any
+from urllib.parse import urlsplit
+
+if TYPE_CHECKING:
+    from langgraph.runtime import Runtime
+
+from mia_dpp.aas.requirements import build_template_index
+from mia_dpp.canonical import sha256_json
+from mia_dpp.agent.models import AgentReviewRequest, AgentValueRequest
+from mia_dpp.domain.evidence import ProductKnowledgePackage
+from mia_dpp.domain.mappings import CoverageStatus, MappingResult, SemanticReviewItem
+from mia_dpp.domain.product import BackgroundJobStatus, RunStatus
+from mia_dpp.domain.product_work import ProductWorkStage
+from mia_dpp.domain.targets import RequirementKind, TemplateIndex
+from mia_dpp.services.deep_research import merge_mapping_results
+from mia_dpp.services.evidence_conflicts import (
+    detect_review_conflicts,
+    mark_conflicting_evidence,
+    require_review_for_conflicts,
+)
+from mia_dpp.services.human_review_audit import mapping_review_records, supplied_value_record
+from mia_dpp.services.reconfirmation import ReviewReuseStatus, review_reuse_status
+from mia_dpp.tools.mapping.coverage import coverage as calculate_coverage
+from mia_dpp.tools.mapping.mapper import DeterministicWebsiteMapper
+from mia_dpp.workflow.context import MiaContext
+from mia_dpp.workflow.nodes_product import merge_packages
+from mia_dpp.workflow.product_snapshot import (
+    model_fingerprint,
+    semantic_mapper_fingerprint,
+    update_product_snapshot,
+)
+from mia_dpp.workflow.state import MiaWorkflowState
+from mia_dpp.workflow.workspace import RunWorkspace
+
+
+async def build_targets(
+    state: MiaWorkflowState,
+    runtime: Runtime[MiaContext],
+) -> dict[str, Any]:
+    work = RunWorkspace(state, runtime.context)
+    templates = tuple(
+        work.ctx.templates.load(key)
+        for key in state.get("target_submodels", ("digital_nameplate", "technical_data"))
+    )
+    index = build_template_index(templates)
+    artifact_id = work.put_model(
+        "mapping/targets.json",
+        index,
+        derived_from=(work.state_id("evidence_artifact_id"),),
+    )
+    target_fingerprint = model_fingerprint(index)
+    snapshot = update_product_snapshot(
+        work,
+        ProductWorkStage.TARGETS,
+        template_keys=tuple(item.key for item in index.selected_templates),
+        template_releases=tuple(item.release for item in index.selected_templates),
+        targets_artifact_id=artifact_id,
+        target_fingerprint=target_fingerprint,
+    )
+    return {
+        "targets_artifact_id": artifact_id,
+        "target_fingerprint": target_fingerprint,
+        "product_snapshot_version": snapshot.version,
+    }
+
+
+async def deterministic_mapping(
+    state: MiaWorkflowState,
+    runtime: Runtime[MiaContext],
+) -> dict[str, Any]:
+    work = RunWorkspace(state, runtime.context)
+    package = work.load_state("evidence_artifact_id", ProductKnowledgePackage)
+    index = work.load_state("targets_artifact_id", TemplateIndex)
+    started = perf_counter()
+    result = await DeterministicWebsiteMapper(work.ctx.templates, index).propose(package.evidence)
+    duration_ms = round((perf_counter() - started) * 1000, 2)
+    artifact_id = work.put_model(
+        "mapping/deterministic.json",
+        result,
+        derived_from=(work.state_id("evidence_artifact_id"), work.state_id("targets_artifact_id")),
+    )
+    work.event(
+        "mapping.deterministic.completed",
+        "Completed deterministic mapping for the currently available evidence.",
+        metadata={
+            "durationMs": duration_ms,
+            "evidenceCount": len(package.evidence),
+            "mapped": len(result.mapped),
+            "ambiguous": len(result.ambiguous),
+            "unmatched": len(result.unmatched_evidence_ids),
+        },
+    )
+    mapping_input_fingerprint = model_fingerprint(
+        {
+            "evidenceFingerprint": state.get("evidence_fingerprint") or state.get("source_fingerprint"),
+            "targetFingerprint": state.get("target_fingerprint"),
+            "deterministic": result.model_dump(mode="json", by_alias=True),
+        }
+    )
+    snapshot = update_product_snapshot(
+        work,
+        ProductWorkStage.MAPPING,
+        deterministic_mapping_artifact_id=artifact_id,
+        mapping_input_fingerprint=mapping_input_fingerprint,
+    )
+    return {
+        "deterministic_mapping_artifact_id": artifact_id,
+        "mapping_input_fingerprint": mapping_input_fingerprint,
+        "product_snapshot_version": snapshot.version,
+    }
+
+
+async def semantic_mapping(
+    state: MiaWorkflowState,
+    runtime: Runtime[MiaContext],
+) -> dict[str, Any]:
+    work = RunWorkspace(state, runtime.context)
+    package = work.load_state("evidence_artifact_id", ProductKnowledgePackage)
+    index = work.load_state("targets_artifact_id", TemplateIndex)
+    deterministic = work.load_state("deterministic_mapping_artifact_id", MappingResult)
+
+    reusable_mapping_id = state.get("reviewed_mapping_artifact_id")
+    durable_snapshot = work.ctx.catalogue.get_product_work_snapshot(
+        work.product_id,
+        user_id=work.user_id,
+    )
+    reuse_status = review_reuse_status(
+        durable_snapshot,
+        evidence_fingerprint=state.get("evidence_fingerprint") or state.get("source_fingerprint"),
+        target_fingerprint=state.get("target_fingerprint"),
+    )
+    if state.get("reuse_prior_work") and reusable_mapping_id and reuse_status is not ReviewReuseStatus.STALE:
+        try:
+            reused = work.load(str(reusable_mapping_id), MappingResult)
+            work.ctx.mapping_review.validate_complete_accounting(package, reused)
+        except (KeyError, ValueError):
+            reused = None
+        if reused is not None and _mapping_targets_are_current(reused, index):
+            cycle_id = work.ctx.mapping_review.cycle_id(package, index, reused)
+            reviews = (
+                ()
+                if reuse_status is ReviewReuseStatus.CURRENT
+                else work.ctx.mapping_review.complete_review(package, reused, index)
+            )
+            mapping_id = work.put_model(
+                "mapping/reused-reviewed.json",
+                reused,
+                derived_from=(str(reusable_mapping_id), work.state_id("evidence_artifact_id")),
+            )
+            review_id = work.put_json(
+                "mapping/review-items.json",
+                [item.model_dump(mode="json", by_alias=True) for item in reviews],
+                derived_from=(mapping_id,),
+            )
+            work.event(
+                "mapping.history_reused",
+                (
+                    f"Reused {len(reused.mapped)} human-reviewed mappings without semantic remapping."
+                    if not reviews
+                    else f"Reused {len(reused.mapped)} prior mappings and reopened them for confirmation."
+                ),
+                metadata={
+                    "seededFromRunId": state.get("seeded_from_run_id"),
+                    "priorMappingArtifactId": str(reusable_mapping_id),
+                    "reviewReuseStatus": reuse_status.value,
+                },
+            )
+            snapshot = update_product_snapshot(
+                work,
+                ProductWorkStage.HUMAN_REVIEW if reviews else ProductWorkStage.MAPPING,
+                semantic_mapping_artifact_id=mapping_id,
+                reviewed_mapping_artifact_id=(mapping_id if not reviews else None),
+                mapping_cycle_id=cycle_id,
+                human_review_pending=bool(reviews),
+            )
+            return {
+                "semantic_mapping_artifact_id": mapping_id,
+                "review_items_artifact_id": review_id,
+                "mapping_cycle_id": cycle_id,
+                "review_required": bool(reviews),
+                "reviewed_mapping_artifact_id": mapping_id if not reviews else "",
+                "product_snapshot_version": snapshot.version,
+            }
+
+    mapper = work.ctx.semantic_mapper
+    if mapper is None:
+        raise RuntimeError("semantic mapping requires a configured model")
+    product = work.ctx.catalogue.get_product(work.product_id, user_id=work.user_id)
+    domain = (urlsplit(product.canonical_url).hostname or "") if product else None
+    knowledge = tuple(
+        {
+            "sourceField": item.source_field,
+            "targetTemplate": item.target_template,
+            "targetPath": list(item.target_path),
+            "semanticId": item.semantic_id,
+            "confirmations": item.confirmations,
+            "humanComments": list(item.human_comments),
+        }
+        for record in package.evidence
+        for item in work.ctx.catalogue.relevant_mapping_knowledge(
+            record.source_label or record.predicate,
+            manufacturer=product.manufacturer if product else None,
+            domain=domain,
+            template_keys=state.get("target_submodels", ("digital_nameplate", "technical_data")),
+            user_id=work.user_id,
+        )
+    )
+    semantic_started = perf_counter()
+    semantic_run = await mapper.map(package, index, deterministic, reviewed_knowledge=knowledge)
+    semantic_duration_ms = round((perf_counter() - semantic_started) * 1000, 2)
+    result = work.ctx.mapping_review.apply_semantic_run(
+        package,
+        deterministic,
+        index,
+        semantic_run,
+    )
+    cycle_id = work.ctx.mapping_review.cycle_id(package, index, result)
+    reviews = work.ctx.mapping_review.complete_review(package, result, index)
+    semantic_id = work.put_model(
+        "mapping/semantic-run.json",
+        semantic_run,
+        derived_from=(work.state_id("deterministic_mapping_artifact_id"),),
+    )
+    mapping_id = work.put_model(
+        "mapping/mapping.json",
+        result,
+        derived_from=(semantic_id,),
+    )
+    review_id = work.put_json(
+        "mapping/review-items.json",
+        [item.model_dump(mode="json", by_alias=True) for item in reviews],
+        derived_from=(mapping_id,),
+    )
+    work.event(
+        "mapping.completed",
+        f"Prepared {len(reviews)} source-derived mapping decisions for review.",
+        metadata={
+            "mapped": len(result.mapped),
+            "ambiguous": len(result.ambiguous),
+            "unmatched": len(result.unmatched_evidence_ids),
+            "semanticModelRequests": semantic_run.metrics.model_requests,
+            "durationMs": semantic_duration_ms,
+            "evidenceCount": len(package.evidence),
+        },
     )
     mapper_fingerprint = semantic_mapper_fingerprint(mapper)
     snapshot = update_product_snapshot(
@@ -72,6 +321,7 @@ async def human_review(
             decision=decision.decision,
             thread_id=state["thread_id"],
             corrected_requirement_id=decision.corrected_requirement_id,
+            corrected_semantic_id=decision.corrected_semantic_id,
             corrected_value=decision.corrected_value,
             comment=decision.comment,
             actor_name=request.actor_name,
