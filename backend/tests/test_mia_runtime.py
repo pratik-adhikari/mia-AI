@@ -464,7 +464,7 @@ def test_general_chat_reply_does_not_advance_langgraph(tmp_path) -> None:
         invoked = False
 
         async def aget_state(self, config):
-            return _Snapshot({})
+            raise AssertionError("general chat must not depend on checkpoint state")
 
         async def ainvoke(self, update, **kwargs):
             self.invoked = True
