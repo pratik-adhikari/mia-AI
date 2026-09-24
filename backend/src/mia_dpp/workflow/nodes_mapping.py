@@ -17,6 +17,11 @@ from mia_dpp.domain.product import BackgroundJobStatus, RunStatus
 from mia_dpp.domain.product_work import ProductWorkStage
 from mia_dpp.domain.targets import RequirementKind, TemplateIndex
 from mia_dpp.services.deep_research import merge_mapping_results
+from mia_dpp.services.evidence_conflicts import (
+    detect_review_conflicts,
+    mark_conflicting_evidence,
+    require_review_for_conflicts,
+)
 from mia_dpp.services.human_review_audit import mapping_review_records, supplied_value_record
 from mia_dpp.services.reconfirmation import ReviewReuseStatus, review_reuse_status
 from mia_dpp.tools.mapping.coverage import coverage as calculate_coverage
@@ -360,6 +365,21 @@ async def human_review(
         },
         derived_from=(mapping_id,),
     )
+    conflict_requirement_ids = set(state.get("conflicting_requirement_ids", ()))
+    if conflict_requirement_ids:
+        resolved_report = calculate_coverage(package, index, mapping_result=result)
+        unresolved_conflicts = tuple(
+            item.requirement_id
+            for item in resolved_report.coverage
+            if item.requirement_id in conflict_requirement_ids
+            and item.status is not CoverageStatus.SATISFIED
+        )
+        if unresolved_conflicts:
+            raise ValueError(
+                "conflicting evidence requires one resolved value for: "
+                + ", ".join(unresolved_conflicts)
+            )
+
     work.ctx.catalogue.set_run_status(work.run_id, RunStatus.RUNNING)
     work.event(
         "mapping.review_completed",
@@ -382,6 +402,8 @@ async def human_review(
         reviewed_mapping_input_fingerprint=state.get("mapping_input_fingerprint"),
         mapping_cycle_id=state["mapping_cycle_id"],
         human_review_pending=False,
+        conflicting_requirement_ids=(),
+        conflict_artifact_id=None,
     )
     return {
         "evidence_artifact_id": evidence_id,
@@ -487,7 +509,17 @@ async def integrate_background_research(
             index,
             semantic,
         )
+    conflicts = detect_review_conflicts(
+        existing_package,
+        research_package,
+        current_mapping,
+        incremental_mapping,
+        index,
+    )
     merged_mapping = merge_mapping_results(current_mapping, incremental_mapping)
+    merged_mapping = require_review_for_conflicts(merged_mapping, index, conflicts)
+    merged_package = mark_conflicting_evidence(merged_package, conflicts)
+
     merged_evidence_id = work.put_model(
         "evidence/product-knowledge-integrated.json",
         merged_package,
@@ -498,11 +530,61 @@ async def integrate_background_research(
         merged_mapping,
         derived_from=(current_mapping_id,),
     )
+    conflict_artifact_id = ""
+    conflict_requirement_ids: tuple[str, ...] = ()
+    review_items_id = ""
+    mapping_cycle_id = state.get("mapping_cycle_id", "")
+    if conflicts:
+        conflict_requirement_ids = tuple(dict.fromkeys(item.requirement_id for item in conflicts))
+        conflict_artifact_id = work.put_json(
+            "mapping/evidence-conflicts.json",
+            [item.model_dump(mode="json", by_alias=True) for item in conflicts],
+            derived_from=(merged_evidence_id, merged_mapping_id),
+        )
+        mapping_cycle_id = work.ctx.mapping_review.cycle_id(
+            merged_package,
+            index,
+            merged_mapping,
+        )
+        all_reviews = work.ctx.mapping_review.complete_review(
+            merged_package,
+            merged_mapping,
+            index,
+        )
+        focused_reviews = tuple(
+            item for item in all_reviews if item.requirement_id in set(conflict_requirement_ids)
+        )
+        review_items_id = work.put_json(
+            "mapping/review-items-conflicts.json",
+            [item.model_dump(mode="json", by_alias=True) for item in focused_reviews],
+            derived_from=(merged_mapping_id, conflict_artifact_id),
+        )
+
     work.event(
         "research.integrated",
-        f"Integrated {len(new_ids)} new background evidence records "
-        "without replacing review state.",
-        metadata={"jobId": job.id, "evidenceAdded": len(new_ids)},
+        (
+            f"Integrated {len(new_ids)} new background evidence records; "
+            f"{len(conflicts)} reviewed-value conflicts require confirmation."
+            if conflicts
+            else f"Integrated {len(new_ids)} new background evidence records without replacing review state."
+        ),
+        metadata={
+            "jobId": job.id,
+            "evidenceAdded": len(new_ids),
+            "conflicts": len(conflicts),
+            "conflictingRequirementIds": list(conflict_requirement_ids),
+        },
+    )
+    snapshot = update_product_snapshot(
+        work,
+        ProductWorkStage.HUMAN_REVIEW if conflicts else ProductWorkStage.MAPPING,
+        evidence_artifact_id=merged_evidence_id,
+        reviewed_mapping_artifact_id=(None if conflicts else merged_mapping_id),
+        semantic_mapping_artifact_id=merged_mapping_id,
+        mapping_cycle_id=mapping_cycle_id or None,
+        human_review_pending=bool(conflicts),
+        conflicting_requirement_ids=conflict_requirement_ids,
+        conflict_artifact_id=conflict_artifact_id or None,
     )
     update: dict[str, Any] = {
         "evidence_artifact_id": merged_evidence_id,
@@ -515,10 +597,21 @@ async def integrate_background_research(
             )
         ),
     }
-    if state.get("reviewed_mapping_artifact_id"):
+    update["semantic_mapping_artifact_id"] = merged_mapping_id
+    update["product_snapshot_version"] = snapshot.version
+    if conflicts:
+        update.update(
+            {
+                "reviewed_mapping_artifact_id": "",
+                "review_items_artifact_id": review_items_id,
+                "mapping_cycle_id": mapping_cycle_id,
+                "review_required": True,
+                "conflict_artifact_id": conflict_artifact_id,
+                "conflicting_requirement_ids": conflict_requirement_ids,
+            }
+        )
+    elif state.get("reviewed_mapping_artifact_id"):
         update["reviewed_mapping_artifact_id"] = merged_mapping_id
-    else:
-        update["semantic_mapping_artifact_id"] = merged_mapping_id
     return update
 
 

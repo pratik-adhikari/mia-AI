@@ -42,6 +42,7 @@ class MiaWorkflowState(TypedDict, total=False):
     deterministic_mapping_artifact_id: str
     semantic_mapping_artifact_id: str
     review_items_artifact_id: str
+    conflict_artifact_id: str
     reviewed_mapping_artifact_id: str
     coverage_artifact_id: str
     dpp_artifact_id: str
@@ -54,6 +55,7 @@ class MiaWorkflowState(TypedDict, total=False):
     review_required: bool
     required_unresolved: int
     missing_requirement_ids: tuple[str, ...]
+    conflicting_requirement_ids: tuple[str, ...]
     research_attempts: int
     research_found_source: bool
     max_research_attempts: int
@@ -97,6 +99,7 @@ def reset_product_state(
         "deterministic_mapping_artifact_id": "",
         "semantic_mapping_artifact_id": "",
         "review_items_artifact_id": "",
+        "conflict_artifact_id": "",
         "reviewed_mapping_artifact_id": "",
         "coverage_artifact_id": "",
         "dpp_artifact_id": "",
@@ -107,6 +110,7 @@ def reset_product_state(
         "review_required": False,
         "required_unresolved": 0,
         "missing_requirement_ids": (),
+        "conflicting_requirement_ids": (),
         "research_attempts": 0,
         "research_found_source": False,
         "source_fingerprint": "",

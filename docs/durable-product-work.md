@@ -125,3 +125,24 @@ Assets now exposes all three product-work intentions explicitly:
   deliberately bypasses the completed-DPP and saved-work reuse paths and reacquires sources.
 
 The refresh intent is a structured request field rather than inferred from chat wording.
+
+
+## Requirement-level conflict handling
+
+New evidence must not invalidate every prior human decision. A conflict exists only when new evidence
+maps to the same official requirement as a previously human-reviewed mapping and provides a
+different normalized value.
+
+When this happens MIA now:
+
+1. keeps both evidence records for audit;
+2. marks the competing evidence as `conflicting`;
+3. demotes mappings for only the affected requirement back to review;
+4. persists a `mapping/evidence-conflicts.json` artifact;
+5. creates a focused review batch for those requirement rows;
+6. refuses to leave review while that requirement remains ambiguous;
+7. leaves unrelated human-reviewed requirements untouched.
+
+This is intentionally requirement-level rather than whole-product invalidation. A newly discovered
+IP rating must not force a user to reconfirm an unchanged manufacturer name, model designation, or
+other independent fact.

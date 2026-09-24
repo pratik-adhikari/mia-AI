@@ -87,7 +87,11 @@ def _build_evidence_stage(context: MiaContext | None) -> Any:
     stage.add_edge("deterministic_mapping", "semantic_mapping")
     stage.add_conditional_edges("semantic_mapping", after_semantic_mapping, SEMANTIC_ROUTES)
     stage.add_edge("human_review", "integrate_background_research")
-    stage.add_edge("integrate_background_research", "coverage")
+    stage.add_conditional_edges(
+        "integrate_background_research",
+        after_semantic_mapping,
+        SEMANTIC_ROUTES,
+    )
     stage.add_conditional_edges("coverage", after_coverage, PREPARATION_ROUTES)
     stage.add_conditional_edges("research", after_research, RESEARCH_ROUTES)
     stage.add_edge("human_value", "coverage")

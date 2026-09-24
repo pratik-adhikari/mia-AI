@@ -56,6 +56,7 @@ class ProductWorkSnapshot(WireModel):
     semantic_mapping_artifact_id: str | None = None
     reviewed_mapping_artifact_id: str | None = None
     coverage_artifact_id: str | None = None
+    conflict_artifact_id: str | None = None
     dpp_artifact_id: str | None = None
     aas_artifact_id: str | None = None
     validation_artifact_id: str | None = None
@@ -73,6 +74,7 @@ class ProductWorkSnapshot(WireModel):
 
     mapping_cycle_id: str | None = None
     unresolved_required_ids: tuple[str, ...] = ()
+    conflicting_requirement_ids: tuple[str, ...] = ()
     human_review_pending: bool = False
     last_error: str | None = None
 
