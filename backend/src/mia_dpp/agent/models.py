@@ -140,6 +140,7 @@ class AgentRequest(WireModel):
 
     thread_id: str | None = Field(default=None, min_length=8, max_length=128)
     message: str = Field(min_length=1, max_length=4096)
+    refresh_requested: bool = False
 
 
 class AgentReviewDecision(WireModel):

@@ -169,6 +169,7 @@ class Mia:
             "thread_id": thread_id,
             "user_id": user_id,
             "user_message": request.message,
+            "refresh_requested": request.refresh_requested,
         }
         if initial:
             update.update(

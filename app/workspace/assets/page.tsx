@@ -115,8 +115,9 @@ export default function AssetsPage() {
                     {item.resumable && item.resumeThreadId ? (
                       <Link href={`/workspace?thread=${encodeURIComponent(item.resumeThreadId)}`} className="rounded-full bg-ink px-3 py-1.5 text-[12px] font-medium text-white">Resume</Link>
                     ) : (
-                      <Link href={`/workspace?product=${encodeURIComponent(product.id)}`} className="rounded-full border border-hairline px-3 py-1.5 text-[12px] font-medium text-ink">Continue with saved work</Link>
+                      <Link href={`/workspace?product=${encodeURIComponent(product.id)}&action=continue`} className="rounded-full border border-hairline px-3 py-1.5 text-[12px] font-medium text-ink">Continue saved work</Link>
                     )}
+                    <Link href={`/workspace?product=${encodeURIComponent(product.id)}&action=refresh`} className="rounded-full border border-hairline px-3 py-1.5 text-[12px] text-muted">Refresh sources</Link>
                     <Link href={`/products/${product.id}`} className="rounded-full border border-hairline px-3 py-1.5 text-[12px] text-muted">Details</Link>
                   </div>
                 </article>

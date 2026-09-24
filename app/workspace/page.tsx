@@ -23,6 +23,7 @@ import type {
   MappingKnowledgeEntry,
   BackgroundJob,
   ThreadRecord,
+  ProductDetail,
 } from "@/lib/types";
 import { CoveragePanel } from "@/components/CoveragePanel";
 import { EvidencePanel } from "@/components/EvidencePanel";
@@ -98,6 +99,7 @@ export default function Workspace() {
   const [debugPanelOpen, setDebugPanelOpen] = useState(false);
   const endRef = useRef<HTMLDivElement>(null);
   const restoredThreadRef = useRef<string | null>(null);
+  const productActionRef = useRef<string | null>(null);
 
   const mergeActivity = useCallback((events: AgentTraceEvent[]) => {
     setAgentActivity((previous) => {
@@ -180,6 +182,31 @@ export default function Workspace() {
   }, [searchParams]);
 
   useEffect(() => {
+    const productId = searchParams.get("product");
+    if (!productId || searchParams.get("thread")) return;
+    const action = searchParams.get("action") === "refresh" ? "refresh" : "continue";
+    const key = `${productId}:${action}`;
+    if (productActionRef.current === key) return;
+    productActionRef.current = key;
+
+    const start = async () => {
+      const response = await authenticatedFetch(
+        `${API_URL}/api/products/${encodeURIComponent(productId)}`
+      );
+      if (!response.ok) {
+        setWorkspaceError("The saved product could not be loaded.");
+        return;
+      }
+      const detail = (await response.json()) as ProductDetail;
+      await send(
+        `Import product website: ${detail.product.canonicalUrl}`,
+        { refreshRequested: action === "refresh" }
+      );
+    };
+    void start();
+  }, [searchParams, authenticatedFetch]);
+
+  useEffect(() => {
     const researchActive = backgroundJob?.status === "queued" || backgroundJob?.status === "running";
     if ((!busy && !researchActive) || !threadId) return;
     let cancelled = false;
@@ -247,7 +274,10 @@ export default function Workspace() {
     }
   }
 
-  async function send(text: string) {
+  async function send(
+    text: string,
+    options: { refreshRequested?: boolean } = {}
+  ) {
     const t = text.trim();
     if (!t || busy) return;
 
@@ -261,7 +291,11 @@ export default function Workspace() {
       const res = await authenticatedFetch("/agent/messages", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ threadId: activeThreadId, message: t }),
+        body: JSON.stringify({
+          threadId: activeThreadId,
+          message: t,
+          refreshRequested: options.refreshRequested ?? false,
+        }),
       });
       const body = (await res.json()) as AgentResponse | { detail?: string };
       if (!res.ok) {
@@ -305,6 +339,7 @@ export default function Workspace() {
         body: JSON.stringify({
           threadId: activeThreadId,
           message: `Import product website: ${url}`,
+          refreshRequested: false,
         }),
       });
       const responseText = await response.text();

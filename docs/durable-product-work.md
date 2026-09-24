@@ -112,3 +112,16 @@ The branch now enforces the following behavior:
 Product identity beyond canonical URL (GTIN, manufacturer part number, ECLASS identifiers), richer
 evidence-conflict ranking, and multi-process optimistic locking are separate follow-up concerns.
 They build on this snapshot/audit foundation and do not belong inside the semantic mapper itself.
+
+
+## UI entry points
+
+Assets now exposes all three product-work intentions explicitly:
+
+- **Resume** opens the existing thread/checkpoint when a run is interrupted.
+- **Continue saved work** opens a new workflow turn for the stored canonical product URL with
+  `refreshRequested=false`; product resolution hydrates the durable snapshot instead of crawling.
+- **Refresh sources** sends the same product with `refreshRequested=true`; product resolution
+  deliberately bypasses the completed-DPP and saved-work reuse paths and reacquires sources.
+
+The refresh intent is a structured request field rather than inferred from chat wording.

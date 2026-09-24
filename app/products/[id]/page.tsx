@@ -60,12 +60,24 @@ export default function ProductDetailPage() {
           <Link href="/products" className="text-[13px] text-muted hover:text-ink">
             ← Product library
           </Link>
-          <Link
-            href={resumableRun ? `/workspace?thread=${encodeURIComponent(resumableRun.threadId)}` : "/workspace"}
-            className="rounded-full bg-ink px-3 py-1.5 text-[12px] text-white"
-          >
-            {resumableRun ? "Resume workspace" : "Open workspace"}
-          </Link>
+          <div className="flex items-center gap-2">
+            <Link
+              href={
+                resumableRun
+                  ? `/workspace?thread=${encodeURIComponent(resumableRun.threadId)}`
+                  : `/workspace?product=${encodeURIComponent(product.id)}&action=continue`
+              }
+              className="rounded-full bg-ink px-3 py-1.5 text-[12px] text-white"
+            >
+              {resumableRun ? "Resume workspace" : "Continue saved work"}
+            </Link>
+            <Link
+              href={`/workspace?product=${encodeURIComponent(product.id)}&action=refresh`}
+              className="rounded-full border border-hairline px-3 py-1.5 text-[12px] text-ink"
+            >
+              Refresh sources
+            </Link>
+          </div>
         </div>
       </header>
 
