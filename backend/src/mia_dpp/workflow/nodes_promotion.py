@@ -10,6 +10,7 @@ if TYPE_CHECKING:
 from mia_dpp.domain.evidence import ProductKnowledgePackage
 from mia_dpp.domain.mappings import MappingResult, SemanticReviewItem
 from mia_dpp.domain.product_work import ProductWorkStage
+from mia_dpp.domain.targets import TemplateIndex
 from mia_dpp.semantic.eclass_diagnostics import EclassDiagnosticsReport
 from mia_dpp.semantic.eclass_resolution import EclassResolutionReport
 from mia_dpp.semantic.open_property import OpenPropertyProposalReport
@@ -49,12 +50,10 @@ async def promote_semantic_mapping(
         EclassDiagnosticsReport,
     )
 
+    index = work.load_state("targets_artifact_id", TemplateIndex)
     cycle_seed = state.get("mapping_cycle_id") or work.ctx.mapping_review.cycle_id(
         package,
-        work.load_state("targets_artifact_id", __import__(
-            "mia_dpp.domain.targets",
-            fromlist=["TemplateIndex"],
-        ).TemplateIndex),
+        index,
         mapping,
     )
     promoted = promote_open_properties(
@@ -69,13 +68,6 @@ async def promote_semantic_mapping(
     )
     work.ctx.mapping_review.validate_complete_accounting(package, promoted.mapping)
 
-    index = work.load_state(
-        "targets_artifact_id",
-        __import__(
-            "mia_dpp.domain.targets",
-            fromlist=["TemplateIndex"],
-        ).TemplateIndex,
-    )
     cycle_id = work.ctx.mapping_review.cycle_id(
         package,
         index,
