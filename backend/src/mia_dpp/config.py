@@ -39,6 +39,20 @@ class Settings(BaseSettings):
         default="deepseek/deepseek-v3.2",
         validation_alias="MIA_AGENT_MODEL",
     )
+    jev_shadow_enabled: bool = Field(
+        default=False,
+        validation_alias="MIA_JEV_SHADOW_ENABLED",
+    )
+    jev_model: str = Field(
+        default="typesafe/jev-1.13",
+        validation_alias="MIA_JEV_MODEL",
+    )
+    jev_max_concurrency: int = Field(
+        default=8,
+        ge=1,
+        le=64,
+        validation_alias="MIA_JEV_MAX_CONCURRENCY",
+    )
     mia_database_url: str | None = Field(
         default=None,
         validation_alias="MIA_DATABASE_URL",
