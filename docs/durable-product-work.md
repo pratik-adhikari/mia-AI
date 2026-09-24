@@ -146,3 +146,16 @@ When this happens MIA now:
 This is intentionally requirement-level rather than whole-product invalidation. A newly discovered
 IP rating must not force a user to reconfirm an unchanged manufacturer name, model designation, or
 other independent fact.
+
+
+## Concurrent snapshot writes
+
+The product snapshot is a shared durable resource, so two workflows must not use last-write-wins.
+Every snapshot write now uses optimistic version checking.
+
+A workflow reads snapshot version N, performs its stage work, and may write only if N is still the
+current version. If another workflow has already written N+1, the stale write fails with
+`ProductSnapshotConflict` instead of erasing newer evidence, review, or build state.
+
+This matters especially for background research and multiple chats working on the same product:
+versioning is no longer only descriptive metadata; it now protects correctness.

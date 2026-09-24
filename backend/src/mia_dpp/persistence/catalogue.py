@@ -38,6 +38,11 @@ from mia_dpp.workflow.identity import canonical_product_url
 
 ModelT = TypeVar("ModelT", bound=BaseModel)
 
+
+class ProductSnapshotConflict(RuntimeError):
+    """Raised when another workflow updated the product snapshot first."""
+
+
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS schema_migrations(
     version TEXT PRIMARY KEY,
@@ -587,8 +592,15 @@ class ProductCatalogue:
     def save_product_work_snapshot(
         self,
         snapshot: ProductWorkSnapshot,
+        *,
+        expected_version: int | None = None,
     ) -> ProductWorkSnapshot:
-        """Version and replace the authoritative product-level workflow pointer set."""
+        """Optimistically replace the authoritative product snapshot.
+
+        The caller may have read a snapshot, performed expensive mapping/research work, and then
+        attempted to save after another workflow already advanced the same product. A conditional
+        version write prevents the older workflow from silently erasing the newer durable state.
+        """
 
         if not self.user_owns_product(snapshot.user_id, snapshot.product_id):
             raise PermissionError("unknown product")
@@ -597,25 +609,63 @@ class ProductCatalogue:
             user_id=snapshot.user_id,
         )
         now = _now()
+
+        if existing is None:
+            if expected_version not in {None, 0}:
+                raise ProductSnapshotConflict(
+                    f"expected snapshot version {expected_version}, but no snapshot exists"
+                )
+            stored = snapshot.model_copy(
+                update={
+                    "version": 1,
+                    "updated_at": now,
+                }
+            )
+            inserted = self._execute(
+                "INSERT INTO product_work_snapshots(user_id,product_id,version,payload,updated_at) "
+                "VALUES(?,?,?,?,?) ON CONFLICT(user_id,product_id) DO NOTHING",
+                (
+                    stored.user_id,
+                    stored.product_id,
+                    stored.version,
+                    stored.model_dump_json(),
+                    stored.updated_at.isoformat(),
+                ),
+            )
+            if inserted != 1:
+                raise ProductSnapshotConflict(
+                    "another workflow created the product snapshot first"
+                )
+            return stored
+
+        expected = existing.version if expected_version is None else expected_version
+        if expected != existing.version:
+            raise ProductSnapshotConflict(
+                f"snapshot changed from version {expected} to {existing.version}"
+            )
         stored = snapshot.model_copy(
             update={
-                "version": (existing.version + 1) if existing else 1,
-                "created_at": existing.created_at if existing else snapshot.created_at,
+                "version": existing.version + 1,
+                "created_at": existing.created_at,
                 "updated_at": now,
             }
         )
-        self._execute(
-            "INSERT INTO product_work_snapshots(user_id,product_id,version,payload,updated_at) "
-            "VALUES(?,?,?,?,?) ON CONFLICT(user_id,product_id) DO UPDATE SET "
-            "version=excluded.version,payload=excluded.payload,updated_at=excluded.updated_at",
+        updated = self._execute(
+            "UPDATE product_work_snapshots SET version=?,payload=?,updated_at=? "
+            "WHERE user_id=? AND product_id=? AND version=?",
             (
-                stored.user_id,
-                stored.product_id,
                 stored.version,
                 stored.model_dump_json(),
                 stored.updated_at.isoformat(),
+                stored.user_id,
+                stored.product_id,
+                expected,
             ),
         )
+        if updated != 1:
+            raise ProductSnapshotConflict(
+                "another workflow updated the product snapshot before this write completed"
+            )
         return stored
 
     def add_human_review(self, review: HumanReviewRecord) -> HumanReviewRecord:

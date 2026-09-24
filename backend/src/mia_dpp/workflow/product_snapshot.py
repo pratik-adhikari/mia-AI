@@ -52,4 +52,7 @@ def update_product_snapshot(
             **changes,
         }
     )
-    return work.ctx.catalogue.save_product_work_snapshot(snapshot)
+    return work.ctx.catalogue.save_product_work_snapshot(
+        snapshot,
+        expected_version=current.version if current is not None else 0,
+    )

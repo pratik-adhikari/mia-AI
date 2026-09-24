@@ -15,12 +15,14 @@ from mia_dpp.domain.mappings import (
     MappingResult,
     MappingStatus,
 )
+from mia_dpp.aas.requirements import build_template_index
+from mia_dpp.aas.templates import OfficialTemplateRepository
 from mia_dpp.services.evidence_conflicts import (
     detect_review_conflicts,
     mark_conflicting_evidence,
     require_review_for_conflicts,
 )
-from mia_dpp.tests.fixtures import template_inventory_fixture
+from mia_dpp.tools.mapping.targets import mapping_target
 
 
 def _evidence(identifier: str, value: str) -> EvidenceRecord:
@@ -42,7 +44,15 @@ def _evidence(identifier: str, value: str) -> EvidenceRecord:
 
 
 def test_new_value_reopens_only_the_reviewed_requirement() -> None:
-    index, target = template_inventory_fixture("ProtectionClass")
+    repository = OfficialTemplateRepository()
+    template = repository.load("digital_nameplate")
+    index = build_template_index((template,))
+    requirement = next(
+        item
+        for item in index.requirements
+        if item.semantic_id is not None and not item.wildcard and item.template_path
+    )
+    target = mapping_target(template, requirement.template_path)
     old = _evidence("ev-old", "IP65")
     new = _evidence("ev-new", "IP67")
     previous = FieldMapping(

@@ -1,3 +1,4 @@
+import pytest
 """Durable product identity/history behavior independent of the agent runtime."""
 
 from concurrent.futures import ThreadPoolExecutor
@@ -10,7 +11,7 @@ from mia_dpp.domain.product_work import (
     ProductWorkSnapshot,
     ProductWorkStage,
 )
-from mia_dpp.persistence.catalogue import ProductCatalogue
+from mia_dpp.persistence.catalogue import ProductCatalogue, ProductSnapshotConflict
 from mia_dpp.workflow.identity import canonical_product_url
 
 
@@ -275,3 +276,33 @@ def test_mapping_knowledge_is_private_to_the_reviewing_user(tmp_path: Path) -> N
 
     assert len(catalogue.list_mapping_knowledge(user_id="user-a")) == 1
     assert catalogue.list_mapping_knowledge(user_id="user-b") == ()
+
+
+
+def test_stale_snapshot_write_cannot_overwrite_newer_product_state(tmp_path: Path) -> None:
+    catalogue = ProductCatalogue(tmp_path / "catalogue.sqlite3")
+    catalogue.get_or_create_thread("thread-lock", "user-a")
+    product, _ = catalogue.get_or_create_product("https://example.com/lock", user_id="user-a")
+    run = catalogue.start_run(product.id, "thread-lock", user_id="user-a")
+    first = catalogue.save_product_work_snapshot(
+        ProductWorkSnapshot(
+            id="snapshot-lock",
+            user_id="user-a",
+            product_id=product.id,
+            run_id=run.id,
+            thread_id=run.thread_id,
+            workflow_stage=ProductWorkStage.EVIDENCE,
+        )
+    )
+    newer = catalogue.save_product_work_snapshot(
+        first.model_copy(update={"workflow_stage": ProductWorkStage.MAPPING}),
+        expected_version=first.version,
+    )
+
+    with pytest.raises(ProductSnapshotConflict):
+        catalogue.save_product_work_snapshot(
+            first.model_copy(update={"workflow_stage": ProductWorkStage.COVERAGE}),
+            expected_version=first.version,
+        )
+
+    assert catalogue.get_product_work_snapshot(product.id, user_id="user-a") == newer
