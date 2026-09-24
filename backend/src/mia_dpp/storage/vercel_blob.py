@@ -79,8 +79,16 @@ class VercelBlobArtifactStore:
     def exists(self, artifact: StoredArtifact) -> bool:
         try:
             self.get(artifact)
-        except Exception:
-            return False
+        except Exception as error:
+            response = getattr(error, "response", None)
+            status_code = getattr(error, "status_code", None) or getattr(
+                response,
+                "status_code",
+                None,
+            )
+            if status_code == 404:
+                return False
+            raise
         return True
 
     @staticmethod

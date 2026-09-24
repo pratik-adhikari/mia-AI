@@ -96,6 +96,7 @@ class ProductRun(WireModel):
     reused_from_run_id: str | None = None
     seeded_from_run_id: str | None = None
     started_at: AwareDatetime = Field(default_factory=utc_now)
+    workflow_generation: int = Field(default=0, ge=0)
     finished_at: AwareDatetime | None = None
     execution_lease_token: str | None = None
     execution_lease_expires_at: AwareDatetime | None = None

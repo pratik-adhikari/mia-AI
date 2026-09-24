@@ -274,11 +274,21 @@ class ProductCatalogue:
         if self.get_product(identifier.product_id, user_id=user_id) is None:
             raise KeyError(identifier.product_id)
         if identifier.role is ProductIdentifierRole.INSTANCE:
-            owned = identifier.model_copy(update={"owner_user_id": user_id})
+            owner_scoped_id = "product-instance-" + hashlib.sha256(
+                f"{user_id}\0{identifier.id}".encode()
+            ).hexdigest()[:24]
+            owned = identifier.model_copy(
+                update={
+                    "id": owner_scoped_id,
+                    "owner_user_id": user_id,
+                }
+            )
             self._execute(
                 "INSERT INTO product_instance_identifiers("
                 "id,user_id,product_id,payload,created_at"
-                ") VALUES(?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET payload=excluded.payload",
+                ") VALUES(?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET "
+                "user_id=excluded.user_id,product_id=excluded.product_id,"
+                "payload=excluded.payload,created_at=excluded.created_at",
                 (
                     owned.id,
                     user_id,
@@ -1006,6 +1016,7 @@ class ProductCatalogue:
 
         if not self.user_owns_product(snapshot.user_id, snapshot.product_id):
             raise PermissionError("unknown product")
+        self.assert_run_generation(snapshot.run_id)
         existing = self.get_product_work_snapshot(
             snapshot.product_id,
             user_id=snapshot.user_id,

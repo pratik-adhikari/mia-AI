@@ -63,6 +63,8 @@ async def resolve_product(
             "manufacturer": product.manufacturer or "",
             "image_url": product.image_url or "",
             "product_snapshot_version": snapshot.version if snapshot is not None else 0,
+            "workflow_generation": active.workflow_generation,
+            "source_generation": snapshot.source_generation if snapshot is not None else 0,
             "status": (
                 "awaiting_human"
                 if active.status is RunStatus.AWAITING_HUMAN
@@ -83,6 +85,16 @@ async def resolve_product(
         user_id=state["user_id"],
         refresh_requested=refresh_requested,
     )
+    base_source_generation = (
+        durable_snapshot.source_generation if durable_snapshot is not None else 0
+    )
+    source_generation = (
+        base_source_generation + 1
+        if decision.mode in {ReuseMode.FRESH, ReuseMode.REFRESH_SOURCES}
+        else base_source_generation
+    )
+    if source_generation == 0:
+        source_generation = 1
     cached = (
         catalogue.latest_successful_dpp(product.id, user_id=state["user_id"])
         if decision.mode is ReuseMode.REUSE_COMPLETED_DPP
@@ -125,6 +137,8 @@ async def resolve_product(
         "product_snapshot_version": (
             durable_snapshot.version if durable_snapshot is not None else 0
         ),
+        "workflow_generation": run.workflow_generation,
+        "source_generation": source_generation,
         "status": "reused" if cached else "running",
         "max_research_attempts": state.get("max_research_attempts", 2),
     }
@@ -385,6 +399,7 @@ async def extract_evidence(
             "iteration": 0,
             "nextSourceIndex": 0,
             "phase": "queued",
+            "sourceGeneration": int(state.get("source_generation", 1)),
         },
     )
     job_artifact_id = work.put_model(

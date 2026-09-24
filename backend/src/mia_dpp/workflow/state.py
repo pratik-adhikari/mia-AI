@@ -21,6 +21,8 @@ class MiaWorkflowState(TypedDict, total=False):
     product_url: str
     product_id: str
     run_id: str
+    workflow_generation: int
+    source_generation: int
     refresh_requested: bool
     reuse_mode: str
     target_submodels: tuple[str, ...]
@@ -84,6 +86,8 @@ def reset_product_state(
         "product_queue": product_queue,
         "product_id": "",
         "run_id": "",
+        "workflow_generation": 0,
+        "source_generation": 0,
         "cache_hit": False,
         "reuse_mode": "fresh",
         "product_snapshot_version": 0,

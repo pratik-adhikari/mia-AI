@@ -47,6 +47,7 @@ class ProductWorkSnapshot(WireModel):
     thread_id: str = Field(min_length=1)
     version: int = Field(default=1, ge=1)
     workflow_stage: ProductWorkStage = ProductWorkStage.RESOLVED
+    source_generation: int = Field(default=0, ge=0)
 
     template_keys: tuple[str, ...] = ()
     template_releases: tuple[str, ...] = ()

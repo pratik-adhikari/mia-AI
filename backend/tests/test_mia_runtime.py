@@ -145,17 +145,11 @@ def test_refresh_restarts_active_product_in_same_chat(tmp_path) -> None:
 
         async def ainvoke(self, update, **kwargs):
             self.invocations.append(update)
-            new_run = catalogue.start_run(
-                product.id,
-                "thread-refresh-same-chat",
-                refresh_requested=bool(update.get("refresh_requested")),
-                seeded_from_run_id=run.id,
-            )
             return {
                 **update,
                 "thread_id": "thread-refresh-same-chat",
                 "product_id": product.id,
-                "run_id": new_run.id,
+                "run_id": update["run_id"],
                 "status": "running",
                 "reply": "Refresh restarted.",
                 "decision_summary": "Refresh restarted.",
@@ -254,17 +248,11 @@ def test_zombie_running_run_restarts_from_saved_work_in_same_chat(tmp_path) -> N
             )
 
         async def ainvoke(self, update, **kwargs):
-            new_run = catalogue.start_run(
-                product.id,
-                "thread-zombie",
-                refresh_requested=bool(update.get("refresh_requested")),
-                seeded_from_run_id=run.id,
-            )
             return {
                 **update,
                 "thread_id": "thread-zombie",
                 "product_id": product.id,
-                "run_id": new_run.id,
+                "run_id": update["run_id"],
                 "status": "running",
                 "reply": "Recovered saved work.",
                 "decision_summary": "Recovered saved work.",
@@ -376,3 +364,37 @@ def test_refresh_during_live_run_is_queued_without_terminating_executor(tmp_path
     assert thread is not None and thread.pending_refresh_requested is True
     assert thread.workflow_generation == 0
     assert graph.invoked is False
+
+
+
+def test_stale_executor_failure_does_not_fail_replacement_run(tmp_path) -> None:
+    catalogue = ProductCatalogue(tmp_path / "catalogue.sqlite3")
+    product, _ = catalogue.get_or_create_product("https://example.com/fenced-failure")
+    old = catalogue.start_run(product.id, "thread-fenced-failure")
+    expired = old.model_copy(
+        update={"execution_lease_expires_at": datetime.now(UTC) - timedelta(seconds=1)}
+    )
+    catalogue._execute(
+        "UPDATE runs SET payload=? WHERE id=?",
+        (expired.model_dump_json(), old.id),
+    )
+    replacement = catalogue.claim_product_restart(
+        user_id="local-development",
+        product_id=product.id,
+        expected_run_id=old.id,
+        expected_generation=0,
+        reason="fixture recovery",
+        refresh_requested=False,
+        require_expired_lease=True,
+    )
+
+    mia = _mia(catalogue, object())
+    mia._record_failure(
+        old.thread_id,
+        RuntimeError("stale executor failed"),
+        user_id="local-development",
+        run_id=old.id,
+    )
+
+    assert catalogue.get_run(old.id).status is RunStatus.INCOMPLETE
+    assert catalogue.get_run(replacement.id).status is RunStatus.RUNNING

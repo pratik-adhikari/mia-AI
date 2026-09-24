@@ -33,6 +33,7 @@ def update_product_snapshot(
 ) -> ProductWorkSnapshot:
     """Merge authoritative stage pointers without discarding still-valid earlier work."""
 
+    work.ctx.catalogue.assert_run_generation(work.run_id)
     expected_version = int(work.state.get("product_snapshot_version", 0))
     current = work.ctx.catalogue.get_product_work_snapshot(
         work.product_id,
@@ -63,6 +64,7 @@ def update_product_snapshot(
             "run_id": work.run_id,
             "thread_id": work.state["thread_id"],
             "workflow_stage": stage,
+            "source_generation": int(work.state.get("source_generation", snapshot.source_generation)),
             **changes,
         }
     )

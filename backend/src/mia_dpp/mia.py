@@ -348,8 +348,14 @@ class Mia:
             self._record_assistant(response, user_id=user_id)
             return response
         except Exception as error:
+            failing_run_id = str(values.get("run_id")) if values.get("run_id") else None
             self._assign_message_to_latest_run(message.id, thread_id, user_id=user_id)
-            self._record_failure(thread_id, error, user_id=user_id)
+            self._record_failure(
+                thread_id,
+                error,
+                user_id=user_id,
+                run_id=failing_run_id,
+            )
             raise
         self._assign_message_to_latest_run(message.id, thread_id, user_id=user_id)
         result_values = dict(result)
@@ -538,6 +544,16 @@ class Mia:
             "user_message": user_message,
             "product_id": replacement.product_id,
             "run_id": replacement.id,
+            "workflow_generation": replacement.workflow_generation,
+            "source_generation": (
+                (
+                    durable.source_generation + 1
+                    if refresh_requested
+                    else durable.source_generation
+                )
+                if durable is not None
+                else 1
+            ),
             "refresh_requested": refresh_requested,
             "reuse_mode": (
                 "refresh_sources" if refresh_requested else "continue_saved_work"
@@ -566,15 +582,24 @@ class Mia:
             "research_attempts": 0,
             "status": "running",
         }
-        if self._use_agent_server:
-            result = await self._run_agent_server(thread_id, user_id, run_input=update)
-        else:
-            graph = await self._ensure_graph()
-            result = await graph.ainvoke(
-                update,
-                config=self._config(thread_id, user_id),
-                context=self.context,
+        try:
+            if self._use_agent_server:
+                result = await self._run_agent_server(thread_id, user_id, run_input=update)
+            else:
+                graph = await self._ensure_graph()
+                result = await graph.ainvoke(
+                    update,
+                    config=self._config(thread_id, user_id),
+                    context=self.context,
+                )
+        except Exception as error:
+            self._record_failure(
+                thread_id,
+                error,
+                user_id=user_id,
+                run_id=replacement.id,
             )
+            raise
         if message_id is not None:
             self.context.catalogue.assign_message_to_run(message_id, replacement.id)
         response = self._response_view.build(dict(result), trace_offset=trace_offset)
@@ -957,9 +982,22 @@ class Mia:
         if run is not None:
             self.context.catalogue.assign_message_to_run(message_id, run.id)
 
-    def _record_failure(self, thread_id: str, error: Exception, *, user_id: str) -> None:
-        run = self._latest_active_run(thread_id, user_id=user_id)
-        if run is None:
+    def _record_failure(
+        self,
+        thread_id: str,
+        error: Exception,
+        *,
+        user_id: str,
+        run_id: str | None = None,
+    ) -> None:
+        run = (
+            self.context.catalogue.get_run(run_id)
+            if run_id is not None
+            else self._latest_active_run(thread_id, user_id=user_id)
+        )
+        if run is None or not self.context.catalogue.run_is_current_generation(run.id):
+            return
+        if self.context.catalogue.get_thread(run.thread_id, user_id=user_id) is None:
             return
         detail = str(error) or type(error).__name__
         self.context.catalogue.add_event(

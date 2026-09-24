@@ -52,9 +52,11 @@ class ProductReuseService:
             and self._artifact_available(snapshot.reviewed_mapping_artifact_id, user_id=user_id)
             else None
         )
+        current_source_generation = snapshot.source_generation if snapshot is not None else 0
         pending_research = self._catalogue.latest_completed_background_job(
             product_id,
             user_id=user_id,
+            source_generation=current_source_generation,
         )
         research_unintegrated = (
             pending_research is not None
@@ -124,14 +126,24 @@ class ProductReuseService:
             product_id,
             user_id=user_id,
         )
-        if prior_run is not None and "evidence" in reusable:
+        if (
+            prior_run is not None
+            and "evidence" in reusable
+            and self._artifact_available(reusable["evidence"].id, user_id=user_id)
+        ):
+            reviewed_mapping = reusable.get("reviewed_mapping")
+            if reviewed_mapping is not None and not self._artifact_available(
+                reviewed_mapping.id,
+                user_id=user_id,
+            ):
+                reviewed_mapping = None
             return ReuseDecision(
                 mode=ReuseMode.CONTINUE_SAVED_WORK,
                 reason="Reusable historical artifacts were found and will bootstrap a snapshot.",
                 seeded_from_run_id=prior_run.id,
                 evidence_artifact_id=reusable["evidence"].id,
                 reviewed_mapping_artifact_id=(
-                    reusable["reviewed_mapping"].id if "reviewed_mapping" in reusable else None
+                    reviewed_mapping.id if reviewed_mapping is not None else None
                 ),
             )
 

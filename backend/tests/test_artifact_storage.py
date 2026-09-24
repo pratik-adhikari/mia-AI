@@ -41,3 +41,47 @@ def test_vercel_blob_reads_private_artifacts_with_private_access() -> None:
 
     assert store.get(artifact) == b"payload"
     assert client.calls == [(artifact.storage_uri, "private")]
+
+
+
+def test_vercel_exists_returns_false_only_for_not_found() -> None:
+    class NotFoundError(RuntimeError):
+        status_code = 404
+
+    class MissingClient:
+        def get(self, url: str, *, access: str) -> bytes:
+            raise NotFoundError("missing")
+
+    artifact = StoredArtifact(
+        id="artifact-missing",
+        key="evidence/source.json",
+        content_type="application/json",
+        sha256="0" * 64,
+        size=7,
+        storage_uri="https://example.private.blob.vercel-storage.com/missing.json",
+    )
+
+    assert VercelBlobArtifactStore(client=MissingClient()).exists(artifact) is False
+
+
+def test_vercel_exists_propagates_backend_failure() -> None:
+    class UnavailableError(RuntimeError):
+        status_code = 503
+
+    class BrokenClient:
+        def get(self, url: str, *, access: str) -> bytes:
+            raise UnavailableError("service unavailable")
+
+    artifact = StoredArtifact(
+        id="artifact-unavailable",
+        key="evidence/source.json",
+        content_type="application/json",
+        sha256="0" * 64,
+        size=7,
+        storage_uri="https://example.private.blob.vercel-storage.com/source.json",
+    )
+
+    import pytest
+
+    with pytest.raises(UnavailableError):
+        VercelBlobArtifactStore(client=BrokenClient()).exists(artifact)
