@@ -499,6 +499,7 @@ class MappingReviewService:
                 evidence_id=reviewed.evidence_id,
                 status=reviewed.status,
                 requirement_id=reviewed.requirement_id,
+                direct_target=reviewed.target_kind == "direct",
                 alternative_requirement_ids=reviewed.alternative_requirement_ids,
                 reason=reviewed.reason,
                 mapping_origin=(
