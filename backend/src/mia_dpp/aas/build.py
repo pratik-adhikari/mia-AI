@@ -192,15 +192,23 @@ def build_dpp(
             )
         )
 
+    aggregate_template_key = (
+        template_releases[0].key
+        if len(template_releases) == 1
+        else "multi_submodel"
+    )
+    aggregate_template_release = (
+        template_releases[0].release
+        if len(template_releases) == 1
+        else "+".join(release.release for release in template_releases)
+    )
     aggregate_validation = ValidationReport(
         valid=not any(
             finding.severity is Severity.ERROR
             for finding in aggregate_findings
         ),
-        template_key="multi_submodel",
-        template_release="+".join(
-            release.release for release in template_releases
-        ),
+        template_key=aggregate_template_key,
+        template_release=aggregate_template_release,
         artifact_sha256=artifact_sha,
         validator_versions={
             **{
@@ -218,7 +226,7 @@ def build_dpp(
         for gap in report.gaps
     )
     aggregate_gap_report = GapReport(
-        template_key="multi_submodel",
+        template_key=aggregate_template_key,
         gaps=aggregate_gaps,
         blocks_deployment=any(
             gap.severity is Severity.ERROR
