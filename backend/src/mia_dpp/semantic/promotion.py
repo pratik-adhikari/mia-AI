@@ -3,10 +3,6 @@
 from __future__ import annotations
 
 import hashlib
-from collections import defaultdict
-
-from pydantic import Field
-
 from mia_dpp.aas.identifiers import sanitize_id_short
 from mia_dpp.aas.templates import OfficialTemplateRepository
 from mia_dpp.domain.base import WireModel
@@ -33,7 +29,6 @@ from mia_dpp.semantic.eclass_resolution import (
 from mia_dpp.semantic.open_property import (
     OpenPropertyConflict,
     OpenPropertyDisposition,
-    OpenPropertyProposal,
     OpenPropertyProposalReport,
     technical_property_area_binding,
 )
