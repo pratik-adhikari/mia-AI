@@ -169,6 +169,12 @@ def _property_from_payload(payload: Mapping[str, object]) -> EclassProperty:
     )
 
 
+def _v2_path_irdi(irdi: str) -> str:
+    """Convert canonical IRDI separators to the JSON V2 endpoint path form."""
+
+    return quote(irdi.replace("#", "-"), safe="-_.")
+
+
 class EclassJsonV2Provider:
     """mTLS-capable adapter for the official ECLASS JSON webservice.
 
@@ -269,7 +275,7 @@ class EclassJsonV2Provider:
     async def get_property(self, irdi: str) -> EclassProperty | None:
         if not irdi.strip():
             raise ValueError("ECLASS IRDI must not be empty")
-        encoded = quote(irdi.strip(), safe="")
+        encoded = _v2_path_irdi(irdi.strip())
         response = await self._request(f"/properties/{encoded}")
         if response.status_code == 404:
             return None
