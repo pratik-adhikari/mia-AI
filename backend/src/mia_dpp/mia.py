@@ -31,7 +31,7 @@ from mia_dpp.config import Settings
 from mia_dpp.domain.product import BackgroundJob, MessageRole, ProductRun, RunStatus
 from mia_dpp.integrations.crawl4ai import Crawl4AIPageLoader
 from mia_dpp.integrations.ddgs import DdgsSearchProvider
-from mia_dpp.persistence.catalogue import LOCAL_USER_ID
+from mia_dpp.persistence.catalogue import ActiveProductRunExists, LOCAL_USER_ID
 from mia_dpp.persistence.workspace import WorkspaceView
 from mia_dpp.runtime.checkpoints import open_checkpointer
 from mia_dpp.runtime.factory import create_artifact_store, create_catalogue
@@ -42,6 +42,7 @@ from mia_dpp.tools.search import SearchProvider
 from mia_dpp.tools.web.tool import WebExtractionTool
 from mia_dpp.workflow.context import MiaContext
 from mia_dpp.workflow.graph import create_graph
+from mia_dpp.workflow.identity import direct_product_url
 
 
 @dataclass
@@ -124,7 +125,23 @@ class Mia:
         *,
         user_id: str = LOCAL_USER_ID,
     ) -> AgentResponse:
-        thread_id = request.thread_id or f"thread-{uuid.uuid4().hex}"
+        requested_thread_id = request.thread_id
+        merged_active_run: ProductRun | None = None
+        direct_url = direct_product_url(request.message)
+        if direct_url is not None:
+            product, _ = self.context.catalogue.get_or_create_product(
+                direct_url,
+                user_id=user_id,
+            )
+            active = self.context.catalogue.latest_active_run(product.id, user_id=user_id)
+            if active is not None and active.thread_id != requested_thread_id:
+                merged_active_run = active
+                thread_id = active.thread_id
+            else:
+                thread_id = requested_thread_id or f"thread-{uuid.uuid4().hex}"
+        else:
+            thread_id = requested_thread_id or f"thread-{uuid.uuid4().hex}"
+
         thread_exists = self.context.catalogue.get_thread(thread_id, user_id=user_id) is not None
         self.context.catalogue.get_or_create_thread(
             thread_id,
@@ -158,6 +175,38 @@ class Mia:
             user_id=user_id,
         )
         values = self._snapshot_values(snapshot)
+
+        if merged_active_run is not None:
+            self.context.catalogue.assign_message_to_run(message.id, merged_active_run.id)
+            if values:
+                response = self._response_view.build(values, trace_offset=trace_offset)
+            else:
+                response = AgentResponse(
+                    thread_id=merged_active_run.thread_id,
+                    reply="Existing work for this product is already active.",
+                    status=(
+                        AgentStatus.AWAITING_REVIEW
+                        if merged_active_run.status is RunStatus.AWAITING_HUMAN
+                        else AgentStatus.RUNNING
+                    ),
+                    decision_summary="Reused the active product workflow.",
+                )
+            response = response.model_copy(
+                update={
+                    "thread_id": merged_active_run.thread_id,
+                    "reply": (
+                        "This product already has active work, so I merged this request into "
+                        "the existing chat.\n\n" + response.reply
+                    ),
+                    "decision_summary": (
+                        "The existing active product workflow was reused instead of starting "
+                        "a concurrent run."
+                    ),
+                }
+            )
+            self._record_assistant(response, user_id=user_id)
+            return response
+
         if self._snapshot_interrupt(snapshot) is not None:
             self._assign_message_to_latest_run(message.id, thread_id, user_id=user_id)
             response = self._response_view.build(values, trace_offset=trace_offset)
@@ -196,6 +245,32 @@ class Mia:
                 result = await self._run_agent_server(thread_id, user_id, run_input=update)
             else:
                 result = await graph.ainvoke(update, config=config, context=self.context)
+        except ActiveProductRunExists as conflict:
+            active = conflict.run
+            self.context.catalogue.add_message(
+                active.thread_id,
+                MessageRole.USER,
+                request.message,
+                run_id=active.id,
+                user_id=user_id,
+            )
+            if not thread_exists and thread_id != active.thread_id:
+                self.context.catalogue.delete_thread(thread_id, user_id=user_id)
+            response = await self.thread_state(active.thread_id, user_id=user_id)
+            response = response.model_copy(
+                update={
+                    "thread_id": active.thread_id,
+                    "reply": (
+                        "This product already has active work, so I merged this request into "
+                        "the existing chat.\n\n" + response.reply
+                    ),
+                    "decision_summary": (
+                        "A concurrent product run was prevented and the existing chat was reused."
+                    ),
+                }
+            )
+            self._record_assistant(response, user_id=user_id)
+            return response
         except Exception as error:
             self._assign_message_to_latest_run(message.id, thread_id, user_id=user_id)
             self._record_failure(thread_id, error, user_id=user_id)

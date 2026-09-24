@@ -18,7 +18,7 @@ from mia_dpp.domain.product_work import ProductWorkSnapshot, ProductWorkStage, R
 from mia_dpp.services.product_reuse import ProductReuseService
 from mia_dpp.workflow.context import MiaContext
 from mia_dpp.services.product_identifiers import discover_product_identifiers
-from mia_dpp.persistence.catalogue import ProductIdentifierConflict
+from mia_dpp.persistence.catalogue import ActiveProductRunExists, ProductIdentifierConflict
 from mia_dpp.workflow.presentation import evidence_text, product_image_url
 from mia_dpp.workflow.product_snapshot import update_product_snapshot
 from mia_dpp.workflow.state import MiaWorkflowState, reset_product_state
@@ -40,6 +40,35 @@ async def resolve_product(
         state["product_url"],
         user_id=state["user_id"],
     )
+    active = catalogue.latest_active_run(product.id, user_id=state["user_id"])
+    if active is not None:
+        if active.thread_id != state["thread_id"]:
+            raise ActiveProductRunExists(active)
+        snapshot = catalogue.get_product_work_snapshot(product.id, user_id=state["user_id"])
+        return {
+            "product_id": product.id,
+            "run_id": active.id,
+            "reuse_mode": ReuseMode.RESUME_CHECKPOINT.value,
+            "reuse_prior_work": True,
+            "seeded_from_run_id": active.id,
+            "evidence_artifact_id": (
+                snapshot.evidence_artifact_id if snapshot and snapshot.evidence_artifact_id else ""
+            ),
+            "reviewed_mapping_artifact_id": (
+                snapshot.reviewed_mapping_artifact_id
+                if snapshot and snapshot.reviewed_mapping_artifact_id
+                else ""
+            ),
+            "product_name": product.name or "",
+            "manufacturer": product.manufacturer or "",
+            "image_url": product.image_url or "",
+            "status": (
+                "awaiting_human"
+                if active.status is RunStatus.AWAITING_HUMAN
+                else "running"
+            ),
+        }
+
     refresh_requested = state.get("refresh_requested", False)
     decision = ProductReuseService(catalogue).decide(
         product.id,

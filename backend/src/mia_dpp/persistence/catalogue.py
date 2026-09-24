@@ -46,6 +46,16 @@ class ProductSnapshotConflict(RuntimeError):
     """Raised when another workflow updated the product snapshot first."""
 
 
+class ActiveProductRunExists(RuntimeError):
+    """Raised when the user already has live work for the same product."""
+
+    def __init__(self, run: ProductRun) -> None:
+        super().__init__(
+            f"product {run.product_id} already has active run {run.id} in thread {run.thread_id}"
+        )
+        self.run = run
+
+
 class ProductIdentifierConflict(RuntimeError):
     """Raised when a unique identity key already belongs to another product."""
 
@@ -373,6 +383,13 @@ class ProductCatalogue:
             "UPDATE threads SET payload=?,updated_at=? WHERE id=? AND user_id=?",
             (deleted.model_dump_json(), now.isoformat(), thread_id, user_id),
         )
+        for run in self.list_runs_for_thread(thread_id, user_id=user_id):
+            if run.status in {RunStatus.RUNNING, RunStatus.AWAITING_HUMAN}:
+                self.finish_run(
+                    run.id,
+                    RunStatus.INCOMPLETE,
+                    error="Chat was deleted while this workflow was still active.",
+                )
         return deleted
 
     def user_owns_product(self, user_id: str, product_id: str) -> bool:
@@ -408,6 +425,7 @@ class ProductCatalogue:
                 raise PermissionError("unknown thread")
         if not self.user_owns_product(user_id, product_id):
             raise PermissionError("unknown product")
+
         run = ProductRun(
             id=_new_id("run"),
             product_id=product_id,
@@ -417,18 +435,40 @@ class ProductCatalogue:
             seeded_from_run_id=seeded_from_run_id,
             status=RunStatus.REUSED if reused_from_run_id else RunStatus.RUNNING,
         )
-        self._execute(
-            "INSERT INTO runs(id, product_id, thread_id, status, payload, started_at) "
-            "VALUES(?,?,?,?,?,?)",
-            (
-                run.id,
-                product_id,
-                thread_id,
-                run.status.value,
-                run.model_dump_json(),
-                run.started_at.isoformat(),
-            ),
-        )
+        with self._connect() as db:
+            if self._database_url is None:
+                db.execute("BEGIN IMMEDIATE")
+            else:
+                db.execute("SELECT id FROM products WHERE id=? FOR UPDATE", (product_id,))
+            rows = db.execute(
+                "SELECT runs.payload,threads.payload FROM runs "
+                "JOIN threads ON threads.id=runs.thread_id "
+                "WHERE runs.product_id=? AND threads.user_id=? "
+                "AND runs.status IN (?,?) ORDER BY runs.started_at DESC",
+                (
+                    product_id,
+                    user_id,
+                    RunStatus.RUNNING.value,
+                    RunStatus.AWAITING_HUMAN.value,
+                ),
+            ).fetchall()
+            for run_payload, thread_payload in rows:
+                existing = ProductRun.model_validate_json(run_payload)
+                thread = ThreadRecord.model_validate_json(thread_payload)
+                if thread.deleted_at is None:
+                    raise ActiveProductRunExists(existing)
+            db.execute(
+                "INSERT INTO runs(id, product_id, thread_id, status, payload, started_at) "
+                "VALUES(?,?,?,?,?,?)",
+                (
+                    run.id,
+                    product_id,
+                    thread_id,
+                    run.status.value,
+                    run.model_dump_json(),
+                    run.started_at.isoformat(),
+                ),
+            )
         return run
 
     def set_run_status(self, run_id: str, status: RunStatus) -> ProductRun:
@@ -478,6 +518,23 @@ class ProductCatalogue:
             "WHERE runs.product_id=? AND threads.user_id=? ORDER BY runs.started_at DESC",
             (product_id, user_id),
         )
+
+    def latest_active_run(
+        self,
+        product_id: str,
+        *,
+        user_id: str = LOCAL_USER_ID,
+    ) -> ProductRun | None:
+        """Return the newest non-deleted live workflow for this user/product."""
+
+        active = {RunStatus.RUNNING, RunStatus.AWAITING_HUMAN}
+        for run in self.list_runs(product_id, user_id=user_id):
+            if run.status not in active:
+                continue
+            thread = self.get_thread(run.thread_id, user_id=user_id)
+            if thread is not None and thread.deleted_at is None:
+                return run
+        return None
 
     def list_runs_for_thread(
         self,

@@ -302,12 +302,17 @@ export default function Workspace() {
         throw new Error("detail" in body && body.detail ? body.detail : `Python backend returned ${res.status}`);
       }
       const data = body as AgentResponse;
+      const redirectedToExistingThread = data.threadId !== activeThreadId;
       applyAgentResponse(data);
 
-      setMessages((prev) => [
-        ...prev,
-        { role: "assistant", content: data.reply },
-      ]);
+      if (redirectedToExistingThread) {
+        await openThread(data.threadId);
+      } else {
+        setMessages((prev) => [
+          ...prev,
+          { role: "assistant", content: data.reply },
+        ]);
+      }
     } catch {
       setMessages((prev) => [
         ...prev,
@@ -362,12 +367,17 @@ export default function Workspace() {
         );
       }
       const data = body as AgentResponse;
+      const redirectedToExistingThread = data.threadId !== activeThreadId;
       applyAgentResponse(data);
       setWebsiteUrl("");
-      setMessages((previous) => [
-        ...previous,
-        { role: "assistant", content: data.reply },
-      ]);
+      if (redirectedToExistingThread) {
+        await openThread(data.threadId);
+      } else {
+        setMessages((previous) => [
+          ...previous,
+          { role: "assistant", content: data.reply },
+        ]);
+      }
     } catch (error) {
       const message = error instanceof Error ? error.message : "unknown error";
       setMessages((previous) => [

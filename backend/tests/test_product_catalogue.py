@@ -81,7 +81,12 @@ def test_concurrent_dpp_versions_are_unique_and_sequential(tmp_path: Path) -> No
     path = tmp_path / "catalogue.sqlite3"
     catalogue = ProductCatalogue(path)
     product, _ = catalogue.get_or_create_product("https://example.com/product/versioned")
-    runs = tuple(catalogue.start_run(product.id, f"thread-{index}") for index in range(6))
+    created_runs = []
+    for index in range(6):
+        run = catalogue.start_run(product.id, f"thread-{index}")
+        catalogue.finish_run(run.id, RunStatus.COMPLETED)
+        created_runs.append(run)
+    runs = tuple(created_runs)
 
     def create(index: int):
         return ProductCatalogue(path).create_dpp_version(
@@ -339,3 +344,52 @@ def test_dpp_with_dummy_values_is_saved_as_provisional(tmp_path: Path) -> None:
     assert version.release_status is DppReleaseStatus.PROVISIONAL
     assert version.dummy_mapping_ids == ("mapping-dummy",)
     assert catalogue.latest_successful_dpp(product.id, user_id="user-a") == version
+
+
+
+def test_same_product_cannot_have_two_active_runs_for_one_user(tmp_path: Path) -> None:
+    from mia_dpp.persistence.catalogue import ActiveProductRunExists
+
+    catalogue = ProductCatalogue(tmp_path / "catalogue.sqlite3")
+    product, _ = catalogue.get_or_create_product(
+        "https://example.com/single-active",
+        user_id="user-a",
+    )
+    first = catalogue.start_run(
+        product.id,
+        "thread-active-one",
+        user_id="user-a",
+    )
+
+    with pytest.raises(ActiveProductRunExists) as error:
+        catalogue.start_run(
+            product.id,
+            "thread-active-two",
+            user_id="user-a",
+        )
+
+    assert error.value.run.id == first.id
+    assert error.value.run.thread_id == "thread-active-one"
+
+
+def test_deleted_active_chat_no_longer_blocks_new_product_work(tmp_path: Path) -> None:
+    catalogue = ProductCatalogue(tmp_path / "catalogue.sqlite3")
+    product, _ = catalogue.get_or_create_product(
+        "https://example.com/delete-active",
+        user_id="user-a",
+    )
+    first = catalogue.start_run(
+        product.id,
+        "thread-delete-active",
+        user_id="user-a",
+    )
+
+    catalogue.delete_thread("thread-delete-active", user_id="user-a")
+    replacement = catalogue.start_run(
+        product.id,
+        "thread-after-delete",
+        user_id="user-a",
+    )
+
+    assert catalogue.get_run(first.id).status is RunStatus.INCOMPLETE
+    assert replacement.thread_id == "thread-after-delete"

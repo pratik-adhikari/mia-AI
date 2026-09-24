@@ -249,3 +249,40 @@ Large artifacts are still persisted before the snapshot pointer moves. If a proc
 artifact is written but before the snapshot transaction commits, that artifact may be orphaned, but
 the previous snapshot remains authoritative and resumable. This is deliberate: an orphan artifact is
 safer than a snapshot pointing to incomplete state.
+
+
+## One active chat per user and product
+
+For the MVP, product work is single-session per user. If the same product already has a live
+`RUNNING` or `AWAITING_HUMAN` run, a new request for that product must not create another
+workflow.
+
+MIA now applies this rule at two levels:
+
+1. the application preflights explicit product URLs and redirects the request into the existing
+   product thread/checkpoint;
+2. `ProductCatalogue.start_run()` serializes creation per product and rejects a second active run,
+   which closes the race window for discovery or simultaneous requests.
+
+The workspace follows a redirected `threadId` and loads the existing message/checkpoint history, so
+this behaves as one continuing chat rather than two chats that happen to share product data.
+
+Deleting that chat marks any live run `incomplete`, preserving its product artifacts/history while
+allowing later work to start again.
+
+### Provisional DPP policy for the MVP
+
+A provisional DPP containing explicit human-approved DUMMY placeholders is intentionally usable by
+the MVP. If no newer product work/data exists, it may be returned and deployed so the user can see
+the generated DPP/QR experience.
+
+Therefore `provisional` is a trust label, not a hard deployment blocker in this branch. The reuse
+priority is:
+
+1. existing active product chat/checkpoint;
+2. otherwise the latest deployable DPP, including provisional;
+3. otherwise saved incomplete product work;
+4. otherwise fresh extraction.
+
+If a human explicitly requests source refresh, fresh source acquisition still bypasses cached DPP
+reuse.
