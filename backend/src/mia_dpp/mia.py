@@ -205,25 +205,114 @@ class Mia:
         user_id: str = LOCAL_USER_ID,
     ) -> AgentResponse:
         requested_thread_id = request.thread_id
+        provisional_thread_id = requested_thread_id or f"thread-{uuid.uuid4().hex}"
+        provisional_existed = (
+            self.context.catalogue.get_thread(
+                provisional_thread_id,
+                user_id=user_id,
+            )
+            is not None
+        )
+        self.context.catalogue.get_or_create_thread(
+            provisional_thread_id,
+            user_id,
+            title=request.message[:120],
+        )
+
+        conversation = getattr(self, "conversation", None)
+        if conversation is not None and not request.refresh_requested:
+            recent_messages = tuple(
+                {
+                    "role": item.role.value,
+                    "content": item.content,
+                }
+                for item in self.context.catalogue.list_messages(
+                    provisional_thread_id,
+                    user_id=user_id,
+                )[-12:]
+            )
+            turn = await conversation.run(
+                request.message,
+                thread_id=provisional_thread_id,
+                user_id=user_id,
+                recent_messages=recent_messages,
+            )
+            if turn.action is ConversationAction.REPLY:
+                message = self.context.catalogue.add_message(
+                    provisional_thread_id,
+                    MessageRole.USER,
+                    request.message,
+                    user_id=user_id,
+                )
+                self._assign_message_to_latest_run(
+                    message.id,
+                    provisional_thread_id,
+                    user_id=user_id,
+                )
+                status_view = self.query.work_status(
+                    provisional_thread_id,
+                    user_id=user_id,
+                )
+                response = AgentResponse(
+                    thread_id=provisional_thread_id,
+                    reply=turn.reply,
+                    status=self._conversation_status(status_view.run_status),
+                    decision_summary=turn.decision_summary,
+                    trace_events=self.store.list_events(
+                        provisional_thread_id,
+                        user_id=user_id,
+                    )[-12:],
+                    artifact_count=len(
+                        self.store.list_artifacts(
+                            provisional_thread_id,
+                            user_id=user_id,
+                        )
+                    ),
+                )
+                self._record_assistant(response, user_id=user_id)
+                return response
+
+            if turn.action is ConversationAction.RETRY_WORK:
+                message = self.context.catalogue.add_message(
+                    provisional_thread_id,
+                    MessageRole.USER,
+                    request.message,
+                    user_id=user_id,
+                )
+                return await self.retry_work(
+                    provisional_thread_id,
+                    user_id=user_id,
+                    message_id=message.id,
+                )
+
         active_product_run: ProductRun | None = None
         redirected_to_active_thread = False
         direct_url = direct_product_url(request.message)
+        thread_id = provisional_thread_id
         if direct_url is not None:
             product, _ = self.context.catalogue.get_or_create_product(
                 direct_url,
                 user_id=user_id,
             )
-            active = self.context.catalogue.latest_active_run(product.id, user_id=user_id)
+            active = self.context.catalogue.latest_active_run(
+                product.id,
+                user_id=user_id,
+            )
             if active is not None:
                 active_product_run = active
-                redirected_to_active_thread = active.thread_id != requested_thread_id
+                redirected_to_active_thread = active.thread_id != provisional_thread_id
                 thread_id = active.thread_id
-            else:
-                thread_id = requested_thread_id or f"thread-{uuid.uuid4().hex}"
-        else:
-            thread_id = requested_thread_id or f"thread-{uuid.uuid4().hex}"
 
-        thread_exists = self.context.catalogue.get_thread(thread_id, user_id=user_id) is not None
+        if thread_id != provisional_thread_id and not provisional_existed:
+            self.context.catalogue.delete_thread(
+                provisional_thread_id,
+                user_id=user_id,
+            )
+
+        thread_exists = (
+            self.context.catalogue.get_thread(thread_id, user_id=user_id)
+            is not None
+        )
         self.context.catalogue.get_or_create_thread(
             thread_id,
             user_id,
@@ -235,57 +324,6 @@ class Mia:
             request.message,
             user_id=user_id,
         )
-
-        conversation = getattr(self, "conversation", None)
-        if conversation is not None and not request.refresh_requested:
-            recent_messages = tuple(
-                {
-                    "role": item.role.value,
-                    "content": item.content,
-                }
-                for item in self.context.catalogue.list_messages(
-                    thread_id,
-                    user_id=user_id,
-                )[-12:]
-            )
-            turn = await conversation.run(
-                request.message,
-                thread_id=thread_id,
-                user_id=user_id,
-                recent_messages=recent_messages,
-            )
-            if turn.action is ConversationAction.REPLY:
-                self._assign_message_to_latest_run(
-                    message.id,
-                    thread_id,
-                    user_id=user_id,
-                )
-                status_view = self.query.work_status(thread_id, user_id=user_id)
-                response = AgentResponse(
-                    thread_id=thread_id,
-                    reply=turn.reply,
-                    status=self._conversation_status(status_view.run_status),
-                    decision_summary=turn.decision_summary,
-                    trace_events=self.store.list_events(
-                        thread_id,
-                        user_id=user_id,
-                    )[-12:],
-                    artifact_count=len(
-                        self.store.list_artifacts(
-                            thread_id,
-                            user_id=user_id,
-                        )
-                    ),
-                )
-                self._record_assistant(response, user_id=user_id)
-                return response
-
-            if turn.action is ConversationAction.RETRY_WORK:
-                return await self.retry_work(
-                    thread_id,
-                    user_id=user_id,
-                    message_id=message.id,
-                )
 
         remote = self._use_agent_server
         snapshot: Any | None = None
