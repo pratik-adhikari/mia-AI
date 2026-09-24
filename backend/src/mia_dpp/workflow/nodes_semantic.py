@@ -12,6 +12,7 @@ from mia_dpp.semantic import ContextViewSet, build_context_views
 from mia_dpp.semantic.decision_policy import apply_decision_policy
 from mia_dpp.semantic.diagnostics import build_routing_diagnostics
 from mia_dpp.semantic.eclass_diagnostics import (
+    EclassDiagnosticsReport,
     build_eclass_diagnostics,
     eclass_policy_decisions,
 )
@@ -413,13 +414,7 @@ async def shadow_open_property_proposals(
     package = work.load_state("evidence_artifact_id", ProductKnowledgePackage)
     normalization = work.load_state("normalization_artifact_id", NormalizationReport)
     resolution = work.load(resolution_id, EclassResolutionReport)
-    diagnostics = work.load(
-        diagnostics_id,
-        __import__(
-            "mia_dpp.semantic.eclass_diagnostics",
-            fromlist=["EclassDiagnosticsReport"],
-        ).EclassDiagnosticsReport,
-    )
+    diagnostics = work.load(diagnostics_id, EclassDiagnosticsReport)
     report: OpenPropertyProposalReport = build_open_property_proposals(
         package=package,
         normalization=normalization,
