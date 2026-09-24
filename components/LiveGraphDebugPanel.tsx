@@ -45,6 +45,7 @@ export function LiveGraphDebugPanel({
 }) {
   const [state, setState] = useState<DebugState>(EMPTY);
   const [layoutReady, setLayoutReady] = useState(false);
+  const [expandedGroup, setExpandedGroup] = useState<string | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const cyRef = useRef<cytoscape.Core | null>(null);
   const directionRef = useRef<"RIGHT" | "DOWN">("RIGHT");
@@ -151,11 +152,9 @@ export function LiveGraphDebugPanel({
     const cy = cyRef.current;
     if (!cy) return;
     cy.nodes().removeClass("running completed waiting failed");
-    for (const [id, status] of Object.entries(state.statuses)) {
-      cy.getElementById(id).addClass(status);
-    }
+    applyStatuses(cy, state.statuses, expandedGroup);
     cy.resize();
-  }, [state.statuses]);
+  }, [expandedGroup, state.statuses]);
 
   useEffect(() => {
     let destroyed = false;
@@ -173,25 +172,7 @@ export function LiveGraphDebugPanel({
       cyRef.current = cytoscape({
         container: containerRef.current,
         layout: { name: "preset" },
-        elements: [
-          ...state.nodes.map((node) => ({
-            data: {
-              id: node.id,
-              label: node.name.replaceAll(":", " · ") || node.id,
-              category: category(node.name || node.id),
-            },
-          })),
-          ...state.edges.map((edge, index) => ({
-            data: {
-              id: `edge-${index}`,
-              source: edge.source,
-              target: edge.target,
-              label: edge.label,
-              conditional: edge.conditional,
-            },
-            classes: edge.conditional ? "conditional" : "",
-          })),
-        ],
+        elements: graphElements(state.nodes, state.edges, expandedGroup),
         style: [
           {
             selector: "node",
@@ -200,8 +181,10 @@ export function LiveGraphDebugPanel({
               "font-family": "Inter, sans-serif",
               "font-size": 13,
               color: "#172033",
+              "text-halign": "center",
+              "text-valign": "center",
               "text-wrap": "wrap",
-              "text-max-width": "190px",
+              "text-max-width": "150px",
               width: "label",
               height: "label",
               padding: "14px",
@@ -215,6 +198,7 @@ export function LiveGraphDebugPanel({
           { selector: 'node[category = "human"]', style: { "background-color": "#d9efff", "border-color": "#3281bd" } },
           { selector: 'node[category = "crawl"]', style: { "background-color": "#d5f4ef", "border-color": "#198b78" } },
           { selector: 'node[category = "output"]', style: { "background-color": "#dce9ff", "border-color": "#3e6fc2" } },
+          { selector: "node[subgraph]", style: { "border-width": 2, "border-style": "dashed", "font-weight": 700, "background-color": "#eef2ff", "border-color": "#6476c8" } },
           {
             selector: "node.running",
             style: {
@@ -236,24 +220,28 @@ export function LiveGraphDebugPanel({
               "line-color": "#a8b3c4",
               "target-arrow-color": "#8e9bae",
               "target-arrow-shape": "triangle",
-              "curve-style": "bezier",
+              "curve-style": "taxi",
+              "taxi-direction": directionRef.current === "RIGHT" ? "rightward" : "downward",
               label: "data(label)",
               "font-size": 10,
               color: "#667085",
               "text-background-color": "#fff",
-              "text-background-opacity": 0.9,
-              "text-background-padding": "2px",
+              "text-background-opacity": 1,
+              "text-background-padding": "3px",
             },
           },
           { selector: "edge.conditional", style: { "line-style": "dashed" } },
         ],
       });
+      cyRef.current.on("tap", "node", (event) => {
+        const group = event.target.data("subgraph");
+        if (typeof group === "string") setExpandedGroup(group);
+      });
       cyRef.current.one("layoutstop", () => setLayoutReady(true));
       cyRef.current.layout(elkLayout(directionRef.current)).run();
-      cyRef.current?.nodes().removeClass("running completed waiting failed");
-      for (const [id, status] of Object.entries(stateRef.current.statuses)) {
-        cyRef.current?.getElementById(id).addClass(status);
-      }
+      applyEdgeLabelOffsets(cyRef.current, directionRef.current);
+      cyRef.current.nodes().removeClass("running completed waiting failed");
+      applyStatuses(cyRef.current, stateRef.current.statuses, expandedGroup);
     }
     setLayoutReady(false);
     void createGraph();
@@ -262,7 +250,7 @@ export function LiveGraphDebugPanel({
       cyRef.current?.destroy();
       cyRef.current = null;
     };
-  }, [state.edges, state.nodes]);
+  }, [expandedGroup, state.edges, state.nodes]);
 
   useEffect(() => {
     const container = containerRef.current;
@@ -273,7 +261,11 @@ export function LiveGraphDebugPanel({
       const direction = layoutDirection(container);
       if (direction !== directionRef.current) {
         directionRef.current = direction;
+        cy.edges().style("taxi-direction", direction === "RIGHT" ? "rightward" : "downward");
+        applyEdgeLabelOffsets(cy, direction);
         cy.layout(elkLayout(direction)).run();
+      } else {
+        cy.fit(undefined, 32);
       }
     });
     observer.observe(container);
@@ -282,15 +274,19 @@ export function LiveGraphDebugPanel({
 
   useEffect(() => applyNodeStates(), [applyNodeStates]);
 
-  const activeName = state.nodes.find((node) => node.id === state.activeNode)?.name.replaceAll(":", " · ");
-  const waitingName = state.nodes.find((node) => state.statuses[node.id] === "waiting")?.name.replaceAll(":", " · ");
-  const failedName = state.nodes.find((node) => state.statuses[node.id] === "failed")?.name.replaceAll(":", " · ");
+  const activeName = state.nodes.find((node) => node.id === state.activeNode)?.name;
+  const waitingName = state.nodes.find((node) => state.statuses[node.id] === "waiting")?.name;
+  const failedName = state.nodes.find((node) => state.statuses[node.id] === "failed")?.name;
+  const describeNode = (name: string) => {
+    const group = name.includes(":") ? groupLabel(name.split(":", 1)[0]) : null;
+    return `${group ? `${group} / ` : ""}${nodeLabel(name)}`;
+  };
   const activityLabel = activeName
-    ? `Running · ${activeName}`
+    ? `Running · ${describeNode(activeName)}`
     : state.runStatus === "waiting" && waitingName
-      ? `Waiting · ${waitingName}`
+      ? `Waiting · ${describeNode(waitingName)}`
       : state.runStatus === "failed" && failedName
-        ? `Failed · ${failedName}`
+        ? `Failed · ${describeNode(failedName)}`
         : state.runStatus === "completed"
           ? "Last run completed"
           : state.runStatus === "idle"
@@ -299,7 +295,7 @@ export function LiveGraphDebugPanel({
   return (
     <>
       <button aria-label="Close workflow debug panel" onClick={onClose} className="fixed inset-0 z-40 cursor-default bg-slate-950/25" />
-      <aside className="fixed inset-y-14 right-0 z-50 flex w-[min(1280px,98vw)] flex-col border-l border-slate-200 bg-white shadow-2xl">
+      <aside className="fixed inset-2 z-50 flex flex-col rounded-xl border border-slate-200 bg-white shadow-2xl">
         <header className="flex items-start justify-between border-b border-slate-200 px-5 py-4">
           <div>
             <div className="flex items-center gap-2">
@@ -311,7 +307,10 @@ export function LiveGraphDebugPanel({
               {activityLabel}
             </p>
           </div>
-          <button onClick={onClose} className="rounded-md px-2 py-1 text-sm text-slate-500 hover:bg-slate-100 hover:text-slate-900">Close</button>
+          <div className="flex items-center gap-2">
+            {expandedGroup && <button onClick={() => setExpandedGroup(null)} className="rounded-md border border-slate-200 px-2 py-1 text-xs text-slate-600 hover:bg-slate-100">← Overview</button>}
+            <button onClick={onClose} className="rounded-md px-2 py-1 text-sm text-slate-500 hover:bg-slate-100 hover:text-slate-900">Close</button>
+          </div>
         </header>
         <div className="flex flex-wrap items-center gap-x-4 gap-y-2 border-b border-slate-100 px-5 py-3 text-[10px] text-slate-600">
           <Legend color="bg-violet-300" label="Agent / model" />
@@ -333,7 +332,9 @@ export function LiveGraphDebugPanel({
           )}
         </div>
         <footer className="border-t border-slate-200 bg-slate-50 px-5 py-3 text-[11px] leading-relaxed text-slate-500">
-          {state.error ?? "Deep-research worker batches run outside this LangGraph and are not shown as graph nodes."}
+          {expandedGroup
+            ? `Compiled subgraph: ${groupLabel(expandedGroup)}. Select Overview to return to the full workflow.`
+            : state.error ?? "Select a subgraph tile to inspect its compiled steps. Deep-research worker batches run outside this LangGraph."}
         </footer>
       </aside>
     </>
@@ -347,6 +348,115 @@ function category(name: string): string {
   if (["discover_product", "semantic_mapping", "research"].includes(node)) return "agent";
   if (node.includes("aas") || node.includes("store_result")) return "output";
   return "workflow";
+}
+
+function graphElements(
+  nodes: GraphNode[],
+  edges: GraphEdge[],
+  expandedGroup: string | null,
+) {
+  const groups = [...new Set(nodes.flatMap((node) => node.id.includes(":") ? [node.id.split(":", 1)[0]] : []))];
+  const visibleNodes = expandedGroup
+    ? nodes.filter((node) => node.id.startsWith(`${expandedGroup}:`))
+    : nodes.filter((node) => !node.id.includes(":"));
+  const nodeElements: cytoscape.ElementDefinition[] = visibleNodes.map((node) => ({
+    data: {
+      id: node.id,
+      label: nodeLabel(node.name || node.id),
+      category: category(node.name || node.id),
+    },
+  }));
+  if (!expandedGroup) {
+    nodeElements.push(...groups.map((group) => ({
+      data: {
+        id: groupId(group),
+        label: groupLabel(group),
+        category: group === "aas_output" ? "output" : "workflow",
+        subgraph: group,
+      },
+    })));
+  }
+
+  const visibleEdges = edges.flatMap((edge, index) => {
+    if (expandedGroup) {
+      if (!edge.source.startsWith(`${expandedGroup}:`) || !edge.target.startsWith(`${expandedGroup}:`)) return [];
+      return [{ edge, index, source: edge.source, target: edge.target }];
+    }
+    const sourceGroup = edge.source.includes(":") ? edge.source.split(":", 1)[0] : null;
+    const targetGroup = edge.target.includes(":") ? edge.target.split(":", 1)[0] : null;
+    const source = sourceGroup ? groupId(sourceGroup) : edge.source;
+    const target = targetGroup ? groupId(targetGroup) : edge.target;
+    return source === target ? [] : [{ edge, index, source, target }];
+  });
+  const labeledEdgeCounts = new Map<string, number>();
+  for (const { edge, target } of visibleEdges) {
+    if (edge.conditional && edge.label) labeledEdgeCounts.set(target, (labeledEdgeCounts.get(target) ?? 0) + 1);
+  }
+  const labeledEdgeIndexes = new Map<string, number>();
+
+  return [
+    ...nodeElements,
+    ...visibleEdges.map(({ edge, index, source, target }) => {
+      const labelIndex = labeledEdgeIndexes.get(target) ?? 0;
+      labeledEdgeIndexes.set(target, labelIndex + 1);
+      const count = labeledEdgeCounts.get(target) ?? 1;
+      return {
+        data: {
+          id: `edge-${index}`,
+          source,
+          target,
+          label: edge.label,
+          conditional: edge.conditional,
+          labelOffset: edge.conditional && edge.label ? (labelIndex - (count - 1) / 2) * 14 : 0,
+        },
+        classes: edge.conditional ? "conditional" : "",
+      };
+    }),
+  ];
+}
+
+function groupId(group: string): string {
+  return `group:${group}`;
+}
+
+function groupLabel(group: string): string {
+  if (group === "evidence_and_coverage") return "Evidence & coverage";
+  if (group === "aas_output") return "AAS output";
+  return group.replaceAll("_", " ").replace(/\b\w/g, (letter) => letter.toUpperCase());
+}
+
+function nodeLabel(name: string): string {
+  const local = name.split(":").at(-1) ?? name;
+  if (local === "__start__") return "Start";
+  if (local === "__end__") return "End";
+  return local.replaceAll("_", " ").replace(/\b\w/g, (letter) => letter.toUpperCase()).replace(/\bDpp\b/g, "DPP");
+}
+
+function applyStatuses(
+  cy: cytoscape.Core,
+  statuses: Record<string, NodeStatus>,
+  expandedGroup: string | null,
+) {
+  const priority: Record<NodeStatus, number> = { completed: 1, waiting: 2, failed: 3, running: 4 };
+  const visibleStatuses = new Map<string, NodeStatus>();
+  for (const [id, status] of Object.entries(statuses)) {
+    if (expandedGroup && !id.startsWith(`${expandedGroup}:`)) continue;
+    const visibleId = expandedGroup || !id.includes(":") ? id : groupId(id.split(":", 1)[0]);
+    const existing = visibleStatuses.get(visibleId);
+    if (!existing || priority[status] > priority[existing]) visibleStatuses.set(visibleId, status);
+  }
+  for (const [id, status] of visibleStatuses) {
+    const node = cy.getElementById(id);
+    if (node.nonempty()) node.addClass(status);
+  }
+}
+
+function applyEdgeLabelOffsets(cy: cytoscape.Core, direction: "RIGHT" | "DOWN") {
+  cy.edges().forEach((edge) => {
+    const offset = Number(edge.data("labelOffset") ?? 0);
+    edge.style("text-margin-x", direction === "DOWN" ? offset : 0);
+    edge.style("text-margin-y", direction === "RIGHT" ? offset : 0);
+  });
 }
 
 function layoutDirection(container: HTMLDivElement): "RIGHT" | "DOWN" {
