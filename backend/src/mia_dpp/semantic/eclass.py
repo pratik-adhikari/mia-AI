@@ -226,16 +226,16 @@ class EclassJsonV2Provider:
             "Accept": "application/json",
             "Accept-Language": self._accept_language,
         }
+        url = f"{self._base_url}/{path.lstrip('/')}"
         if self._client is not None:
-            response = await self._client.get(path, params=params, headers=headers)
+            response = await self._client.get(url, params=params, headers=headers)
         else:
             assert self._ssl_context is not None
             async with httpx.AsyncClient(
-                base_url=self._base_url,
                 verify=self._ssl_context,
                 timeout=30.0,
             ) as client:
-                response = await client.get(path, params=params, headers=headers)
+                response = await client.get(url, params=params, headers=headers)
         return response
 
     async def search_properties(
