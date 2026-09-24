@@ -12,7 +12,7 @@ from mia_dpp.aas.templates import OfficialTemplateRepository
 from mia_dpp.canonical import sha256_json
 from mia_dpp.domain.base import WireModel
 from mia_dpp.domain.evidence import EvidenceRecord, ProductKnowledgePackage
-from mia_dpp.domain.mappings import MappingTarget
+from mia_dpp.domain.mappings import ListInstanceBinding, MappingTarget
 from mia_dpp.normalization.models import NormalizationReport, NormalizedEvidence
 from mia_dpp.semantic.decision_policy import DecisionPolicySettings, DecisionPriority
 from mia_dpp.semantic.eclass import EclassProperty
@@ -49,6 +49,31 @@ class OpenPropertyConflictKind(StrEnum):
     REDUNDANT_DUPLICATE = "redundant_duplicate"
     ID_SHORT_COLLISION = "id_short_collision"
     PROJECTION_CONTEXT_COLLISION = "projection_context_collision"
+
+
+TECHNICAL_PROPERTY_AREA_LIST_PATH = (
+    "TechnicalData",
+    "TechnicalPropertyAreas",
+    "[]",
+)
+
+
+def technical_property_area_binding(
+    context_path: tuple[str, ...],
+) -> ListInstanceBinding:
+    """Derive one stable TechnicalPropertyArea instance from preserved source hierarchy."""
+
+    label = context_path[-1] if context_path else "Technical Properties"
+    payload = {
+        "templatePath": TECHNICAL_PROPERTY_AREA_LIST_PATH,
+        "sourceContextPath": context_path,
+    }
+    return ListInstanceBinding(
+        template_path=TECHNICAL_PROPERTY_AREA_LIST_PATH,
+        instance_key="list-instance-" + sha256_json(payload)[:24],
+        source_context_path=context_path,
+        label=label,
+    )
 
 
 class SemanticSlotIdentity(WireModel):
@@ -276,11 +301,13 @@ def build_open_property_proposals(
                 property_.preferred_name,
                 fallback="Property",
             )
+            area_binding = technical_property_area_binding(record.context_path)
             target = mapping_target(
                 technical_data,
                 TECHNICAL_DATA_ARBITRARY_PROPERTY_PATH,
                 id_short=id_short,
                 semantic_id=property_.irdi,
+                list_instance_bindings=(area_binding,),
             )
             slot = _slot_identity(
                 target=target,
