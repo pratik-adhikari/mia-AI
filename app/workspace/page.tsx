@@ -543,7 +543,7 @@ export default function Workspace() {
         { role: "assistant", content: `The semantic review could not be saved: ${message}` },
       ]);
     } finally {
-      setBusy(false);
+      setPendingRequests((count) => Math.max(0, count - 1));
     }
   }
 
