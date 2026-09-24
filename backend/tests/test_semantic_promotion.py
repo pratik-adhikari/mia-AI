@@ -6,7 +6,9 @@ import hashlib
 from datetime import UTC, datetime
 
 import pytest
+from aas_core3 import jsonization, verification
 
+from mia_dpp.aas.build import build_dpp
 from mia_dpp.aas.requirements import build_template_index
 from mia_dpp.aas.templates import OfficialTemplateRepository
 from mia_dpp.domain.evidence import (
@@ -48,6 +50,7 @@ from mia_dpp.tools.mapping.targets import (
     TECHNICAL_DATA_ARBITRARY_PROPERTY_PATH,
     mapping_target,
 )
+from mia_dpp.tools.mapping.text_mapping import propose_text_mappings
 
 
 def _record(
@@ -428,3 +431,62 @@ def test_projection_uniqueness_rejects_unresolved_duplicate_targets() -> None:
 
     with pytest.raises(ValueError, match="duplicate projection targets"):
         MappingReviewService.validate_projection_uniqueness(result)
+
+
+
+def test_promoted_technical_property_reaches_final_technical_data_submodel() -> None:
+    repository, package, record, concept_a, _, proposals, resolution, diagnostics = _inputs(
+        priority=DecisionPriority.AUTO
+    )
+    promoted = promote_open_properties(
+        package=package,
+        mapping=_base_mapping(record),
+        existing_review_items=(),
+        proposals=proposals,
+        eclass_resolution=resolution,
+        eclass_diagnostics=diagnostics,
+        templates=repository,
+        cycle_seed="cycle-end-to-end",
+    )
+    assert len(promoted.mapping.mapped) == 1
+
+    nameplate = propose_text_mappings(
+        (
+            "AFRISO gauge, model RF100-16, serial number 2024-8871, built 2024, "
+            "IP65, 0-16 bar, material number 63820."
+        ),
+        repository,
+    )
+    approved_nameplate = [
+        mapping.model_copy(
+            update={
+                "id": f"mapping-nameplate-{index}",
+                "status": MappingStatus.APPROVED,
+            }
+        )
+        for index, mapping in enumerate(nameplate.mappings)
+    ]
+    dpp = build_dpp(
+        nameplate.product_name,
+        [*approved_nameplate, *promoted.mapping.mapped],
+        repository=repository,
+        now=datetime(2026, 1, 2, tzinfo=UTC),
+    )
+
+    environment = jsonization.environment_from_jsonable(dpp.environment)
+    assert list(verification.verify(environment)) == []
+    technical = next(
+        item
+        for item in dpp.environment["submodels"]
+        if item["idShort"] == "TechnicalData"
+    )
+    areas = next(
+        item
+        for item in technical["submodelElements"]
+        if item.get("idShort") == "TechnicalPropertyAreas"
+    )
+    rendered = str(areas)
+    assert "RatedPower" in rendered
+    assert concept_a.irdi in rendered
+    assert "500" in rendered
+    assert dpp.deployable is True
