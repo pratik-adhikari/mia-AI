@@ -20,7 +20,13 @@ class RunWorkspace:
     ctx: MiaContext
 
     def __post_init__(self) -> None:
+        self._heartbeat()
+
+    def _heartbeat(self) -> None:
+        """Fence stale workers and extend the lease of the current running generation."""
+
         self.ctx.catalogue.assert_run_generation(self.run_id)
+        self.ctx.catalogue.renew_run_lease(self.run_id)
 
     @property
     def product_id(self) -> str:
@@ -96,7 +102,7 @@ class RunWorkspace:
         content_type: str,
         derived_from: tuple[str, ...] = (),
     ) -> str:
-        self.ctx.catalogue.assert_run_generation(self.run_id)
+        self._heartbeat()
         artifact = self.ctx.artifacts.put(
             key,
             data,
@@ -115,5 +121,5 @@ class RunWorkspace:
         *,
         metadata: dict[str, Any] | None = None,
     ) -> None:
-        self.ctx.catalogue.assert_run_generation(self.run_id)
+        self._heartbeat()
         self.ctx.catalogue.add_event(self.run_id, event_type, summary, metadata=metadata)
