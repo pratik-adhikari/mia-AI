@@ -228,33 +228,12 @@ class Mia:
             user_id,
             title=request.message[:120],
         )
-        remote = self._use_agent_server
-        snapshot: Any | None = None
-        if remote:
-            snapshot = await self._agent_server_snapshot(thread_id, user_id)
-            if snapshot is None and not thread_exists:
-                await self._agent_server_client().threads.create(
-                    thread_id=self._agent_server_thread_id(thread_id, user_id),
-                    if_exists="do_nothing",
-                )
-                snapshot = {"values": {}, "tasks": []}
-            elif snapshot is None:
-                # Existing local SQLite threads predate Agent Server ownership. Keep them
-                # resumable on their original checkpoint rather than silently forking state.
-                remote = False
-        if not remote:
-            graph = await self._ensure_graph()
-            config = self._config(thread_id, user_id)
-            snapshot = await graph.aget_state(config)
-        assert snapshot is not None
-        trace_offset = len(self.store.list_events(thread_id, user_id=user_id))
         message = self.context.catalogue.add_message(
             thread_id,
             MessageRole.USER,
             request.message,
             user_id=user_id,
         )
-        values = self._snapshot_values(snapshot)
 
         conversation = getattr(self, "conversation", None)
         if conversation is not None and not request.refresh_requested:
@@ -299,6 +278,28 @@ class Mia:
                 )
                 self._record_assistant(response, user_id=user_id)
                 return response
+
+        remote = self._use_agent_server
+        snapshot: Any | None = None
+        if remote:
+            snapshot = await self._agent_server_snapshot(thread_id, user_id)
+            if snapshot is None and not thread_exists:
+                await self._agent_server_client().threads.create(
+                    thread_id=self._agent_server_thread_id(thread_id, user_id),
+                    if_exists="do_nothing",
+                )
+                snapshot = {"values": {}, "tasks": []}
+            elif snapshot is None:
+                # Existing local SQLite threads predate Agent Server ownership. Keep them
+                # resumable on their original checkpoint rather than silently forking state.
+                remote = False
+        if not remote:
+            graph = await self._ensure_graph()
+            config = self._config(thread_id, user_id)
+            snapshot = await graph.aget_state(config)
+        assert snapshot is not None
+        trace_offset = len(self.store.list_events(thread_id, user_id=user_id))
+        values = self._snapshot_values(snapshot)
 
         if active_product_run is not None:
             lease_live = self.context.catalogue.run_lease_is_live(active_product_run)
