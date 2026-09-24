@@ -315,7 +315,10 @@ async def extract_evidence(
     possible_duplicate_ids: list[str] = []
     for identifier in identifiers:
         try:
-            work.ctx.catalogue.register_product_identifier(identifier)
+            work.ctx.catalogue.register_product_identifier(
+                identifier,
+                user_id=work.user_id,
+            )
         except ProductIdentifierConflict as error:
             possible_duplicate_ids.append(error.existing_product_id)
     manufacturer_product_id = next(

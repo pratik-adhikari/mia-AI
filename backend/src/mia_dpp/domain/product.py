@@ -67,6 +67,7 @@ class ProductIdentifier(WireModel):
     normalized_value: str
     namespace: str | None = None
     role: ProductIdentifierRole
+    owner_user_id: str | None = None
     source_evidence_id: str | None = None
     verified: bool = False
     created_at: AwareDatetime = Field(default_factory=utc_now)

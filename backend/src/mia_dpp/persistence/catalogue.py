@@ -266,11 +266,29 @@ class ProductCatalogue:
     def register_product_identifier(
         self,
         identifier: ProductIdentifier,
+        *,
+        user_id: str = LOCAL_USER_ID,
     ) -> ProductIdentifier:
-        """Persist one identifier without silently merging products on identity collision."""
+        """Keep public product identity separate from account-owned physical instances."""
 
-        if self.get_product(identifier.product_id) is None:
+        if self.get_product(identifier.product_id, user_id=user_id) is None:
             raise KeyError(identifier.product_id)
+        if identifier.role is ProductIdentifierRole.INSTANCE:
+            owned = identifier.model_copy(update={"owner_user_id": user_id})
+            self._execute(
+                "INSERT INTO product_instance_identifiers("
+                "id,user_id,product_id,payload,created_at"
+                ") VALUES(?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET payload=excluded.payload",
+                (
+                    owned.id,
+                    user_id,
+                    owned.product_id,
+                    owned.model_dump_json(),
+                    owned.created_at.isoformat(),
+                ),
+            )
+            return owned
+
         if identifier.role is ProductIdentifierRole.IDENTITY:
             existing = self._fetchone(
                 "SELECT product_id FROM product_identifiers "
@@ -284,21 +302,40 @@ class ProductCatalogue:
             )
             if existing is not None and str(existing[0]) != identifier.product_id:
                 raise ProductIdentifierConflict(str(existing[0]))
-        self._execute(
-            "INSERT INTO product_identifiers("
-            "id,product_id,scheme,namespace,normalized_value,role,payload,created_at"
-            ") VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET payload=excluded.payload",
-            (
-                identifier.id,
-                identifier.product_id,
-                identifier.scheme,
-                identifier.namespace,
-                identifier.normalized_value,
-                identifier.role.value,
-                identifier.model_dump_json(),
-                identifier.created_at.isoformat(),
-            ),
-        )
+        try:
+            self._execute(
+                "INSERT INTO product_identifiers("
+                "id,product_id,scheme,namespace,normalized_value,role,payload,created_at"
+                ") VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET payload=excluded.payload",
+                (
+                    identifier.id,
+                    identifier.product_id,
+                    identifier.scheme,
+                    identifier.namespace,
+                    identifier.normalized_value,
+                    identifier.role.value,
+                    identifier.model_dump_json(),
+                    identifier.created_at.isoformat(),
+                ),
+            )
+        except Exception as error:
+            if (
+                identifier.role is ProductIdentifierRole.IDENTITY
+                and self._is_unique_violation(error)
+            ):
+                existing = self._fetchone(
+                    "SELECT product_id FROM product_identifiers "
+                    "WHERE scheme=? AND COALESCE(namespace,'')=? "
+                    "AND normalized_value=? AND role='identity' LIMIT 1",
+                    (
+                        identifier.scheme,
+                        identifier.namespace or "",
+                        identifier.normalized_value,
+                    ),
+                )
+                if existing is not None:
+                    raise ProductIdentifierConflict(str(existing[0])) from error
+            raise
         return identifier
 
     def list_product_identifiers(
@@ -309,11 +346,19 @@ class ProductCatalogue:
     ) -> tuple[ProductIdentifier, ...]:
         if not self.user_owns_product(user_id, product_id):
             return ()
-        return self._many(
+        shared = self._many(
             ProductIdentifier,
-            "SELECT payload FROM product_identifiers WHERE product_id=? ORDER BY created_at,id",
+            "SELECT payload FROM product_identifiers "
+            "WHERE product_id=? AND role<>'instance' ORDER BY created_at,id",
             (product_id,),
         )
+        private_instances = self._many(
+            ProductIdentifier,
+            "SELECT payload FROM product_instance_identifiers "
+            "WHERE product_id=? AND user_id=? ORDER BY created_at,id",
+            (product_id, user_id),
+        )
+        return (*shared, *private_instances)
 
     def find_identity_identifier(
         self,

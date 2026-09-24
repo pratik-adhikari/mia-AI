@@ -87,3 +87,30 @@ def test_same_strong_identity_on_two_products_is_flagged_not_merged(tmp_path: Pa
 
     assert error.value.existing_product_id == first.id
     assert catalogue.get_product(second.id, user_id="user-a") == second
+
+
+
+def test_instance_identifiers_are_private_to_the_account(tmp_path: Path) -> None:
+    catalogue = ProductCatalogue(tmp_path / "catalogue.sqlite3")
+    product, _ = catalogue.get_or_create_product(
+        "https://example.com/shared-model",
+        user_id="user-a",
+    )
+    catalogue.get_or_create_product(
+        "https://example.com/shared-model",
+        user_id="user-b",
+    )
+    serial = discover_product_identifiers(
+        ProductKnowledgePackage(
+            product_id=product.id,
+            product_name="Shared model",
+            evidence=(_evidence("ev-serial", "Serial number", "SN-A-123"),),
+        ),
+        manufacturer="Example",
+    )[0]
+
+    stored = catalogue.register_product_identifier(serial, user_id="user-a")
+
+    assert stored.owner_user_id == "user-a"
+    assert stored in catalogue.list_product_identifiers(product.id, user_id="user-a")
+    assert stored not in catalogue.list_product_identifiers(product.id, user_id="user-b")

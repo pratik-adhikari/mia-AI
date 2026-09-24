@@ -377,3 +377,16 @@ artifact -> run -> thread -> thread.user_id
 The public product identity may be shared by two accounts, but bytes produced by one account's run
 remain inaccessible to the other account unless a separate sharing mechanism is introduced.
 Internal workflow loads also use the run owner when resolving artifact metadata.
+
+
+## Instance identifiers are account-private
+
+Product identity/classification and physical-instance identity have different ownership.
+
+GTIN, manufacturer-namespaced MPN/article numbers, and ECLASS classification remain product-level
+facts. Serial numbers and other `instance` identifiers are stored in a user-scoped table and are
+returned only to the account that contributed them.
+
+This prevents two accounts associated with the same canonical product record from seeing each
+other's physical-unit serial numbers. Identity unique-index races are also translated into
+`ProductIdentifierConflict` instead of leaking a raw database exception.
