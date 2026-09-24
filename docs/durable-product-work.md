@@ -85,3 +85,30 @@ Examples:
 
 This document describes the target invariants. The implementation is intentionally split into small
 commits so the separate Jev semantic-mapping experiment can later merge at the generic mapper seam.
+
+
+## Implemented invariants on this branch
+
+The branch now enforces the following behavior:
+
+1. A product has one user-scoped, versioned durable work snapshot.
+2. New attempts check that snapshot before reacquiring product sources.
+3. Explicit refresh never silently reuses saved evidence.
+4. Human decisions are stored as immutable audit records in addition to current mapping state.
+5. Human-supplied DUMMY values carry explicit provenance and are excluded from reusable semantic
+   mapping knowledge.
+6. Mapping knowledge is private to the reviewing account unless a future explicit promotion changes
+   its scope.
+7. Human-reviewed mappings are reused without semantic remapping only when evidence and template
+   fingerprints still match.
+8. Legacy reviewed mappings without fingerprints are reused but reopened for confirmation.
+9. Changed evidence or template fingerprints make the old review stale instead of silently trusted.
+10. Chat deletion hides chat history but does not remove the product snapshot, run artifacts, or
+    human audit records.
+11. A failed build/validation snapshot remains a valid starting point for a later continuation.
+
+## Still intentionally separate
+
+Product identity beyond canonical URL (GTIN, manufacturer part number, ECLASS identifiers), richer
+evidence-conflict ranking, and multi-process optimistic locking are separate follow-up concerns.
+They build on this snapshot/audit foundation and do not belong inside the semantic mapper itself.
