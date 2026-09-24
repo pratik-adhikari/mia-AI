@@ -85,10 +85,28 @@ export default function AssetsPage() {
                         <span className={latestDpp?.deployable ? "text-ok" : "text-warn"}>{statusLabel(item)}</span>
                         <span className="ml-auto text-muted">{runCount} run{runCount === 1 ? "" : "s"}</span>
                       </div>
-                      {(item.humanReviewedMappings > 0 || item.humanDummyMappings > 0) && (
+                      <div className="mt-3 grid grid-cols-3 gap-2 text-[10px]">
+                        <div className="rounded-lg bg-mist px-2 py-1.5">
+                          <span className="block font-mono text-[12px] text-ink">{item.humanReviewCount}</span>
+                          <span className="text-muted">human actions</span>
+                        </div>
+                        <div className="rounded-lg bg-mist px-2 py-1.5">
+                          <span className="block font-mono text-[12px] text-violet-700">{item.humanDummyMappings}</span>
+                          <span className="text-muted">DUMMY</span>
+                        </div>
+                        <div className="rounded-lg bg-mist px-2 py-1.5">
+                          <span className="block font-mono text-[12px] text-warn">{item.unresolvedRequiredCount}</span>
+                          <span className="text-muted">mandatory left</span>
+                        </div>
+                      </div>
+                      {item.lastHumanReviewer && (
                         <p className="mt-2 text-[11px] text-violet-700">
-                          Human reviewed {item.humanReviewedMappings}
-                          {item.humanDummyMappings > 0 ? ` · DUMMY ${item.humanDummyMappings}` : ""}
+                          Last human verification · {item.lastHumanReviewer}
+                        </p>
+                      )}
+                      {item.snapshot && (
+                        <p className="mt-1 text-[10px] text-muted">
+                          Saved stage · {item.snapshot.workflowStage.replaceAll("_", " ")} · snapshot v{item.snapshot.version}
                         </p>
                       )}
                     </div>

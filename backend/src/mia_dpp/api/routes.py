@@ -558,7 +558,14 @@ async def product_library(
         runs = catalogue.list_runs(product.id, user_id=user_id)
         latest_run = runs[0] if runs else None
         latest_dpp = catalogue.latest_successful_dpp(product.id, user_id=user_id)
-        reviewed, dummy = _mapping_provenance_counts(application, product.id, user_id)
+        reviewed, _legacy_dummy = _mapping_provenance_counts(application, product.id, user_id)
+        snapshot = catalogue.get_product_work_snapshot(product.id, user_id=user_id)
+        human_reviews = catalogue.list_human_reviews(product.id, user_id=user_id)
+        dummy = sum(item.value_kind == "dummy" for item in human_reviews)
+        last_reviewer = next(
+            (item.actor_name for item in reversed(human_reviews) if item.actor_name),
+            None,
+        )
         resumable = latest_run is not None and latest_run.status in {
             RunStatus.RUNNING,
             RunStatus.AWAITING_HUMAN,
@@ -578,6 +585,12 @@ async def product_library(
                 ),
                 human_reviewed_mappings=reviewed,
                 human_dummy_mappings=dummy,
+                human_review_count=len(human_reviews),
+                last_human_reviewer=last_reviewer,
+                unresolved_required_count=(
+                    len(snapshot.unresolved_required_ids) if snapshot is not None else 0
+                ),
+                snapshot=snapshot,
             )
         )
     return tuple(items)
@@ -600,6 +613,8 @@ async def product_detail(
         runs=catalogue.list_runs(product_id, user_id=user_id),
         dpp_versions=catalogue.list_dpp_versions(product_id, user_id=user_id),
         artifacts=catalogue.list_artifacts(product_id=product_id, user_id=user_id),
+        snapshot=catalogue.get_product_work_snapshot(product_id, user_id=user_id),
+        human_reviews=catalogue.list_human_reviews(product_id, user_id=user_id),
     )
 
 

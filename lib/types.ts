@@ -491,6 +491,54 @@ export interface StoredArtifact {
   createdAt: string;
 }
 
+export interface ProductWorkSnapshot {
+  id: string;
+  userId: string;
+  productId: string;
+  runId: string;
+  threadId: string;
+  version: number;
+  workflowStage:
+    | "resolved" | "evidence" | "targets" | "mapping" | "human_review"
+    | "coverage" | "human_input" | "build" | "validation" | "completed" | "failed";
+  templateKeys: string[];
+  templateReleases: string[];
+  evidenceArtifactId: string | null;
+  reviewedMappingArtifactId: string | null;
+  coverageArtifactId: string | null;
+  dppArtifactId: string | null;
+  aasArtifactId: string | null;
+  validationArtifactId: string | null;
+  unresolvedRequiredIds: string[];
+  humanReviewPending: boolean;
+  lastError: string | null;
+  updatedAt: string;
+}
+
+export interface HumanReviewRecord {
+  id: string;
+  userId: string;
+  productId: string;
+  runId: string;
+  threadId: string;
+  mappingCycleId: string | null;
+  reviewId: string | null;
+  evidenceId: string | null;
+  proposedMappingId: string | null;
+  proposedRequirementId: string | null;
+  finalMappingId: string | null;
+  finalRequirementId: string | null;
+  correctedEvidenceId: string | null;
+  action:
+    | "accepted_mapping" | "corrected_target" | "corrected_value"
+    | "supplied_value" | "supplied_dummy" | "rejected_evidence"
+    | "marked_irrelevant" | "marked_unmapped" | "reconfirmed_mapping";
+  actorName: string | null;
+  comment: string | null;
+  valueKind: "verified" | "dummy" | null;
+  createdAt: string;
+}
+
 export interface ProductLibraryItem {
   product: ProductRecord;
   latestDpp: DppVersionRecord | null;
@@ -501,6 +549,10 @@ export interface ProductLibraryItem {
   workflowStatus: string;
   humanReviewedMappings: number;
   humanDummyMappings: number;
+  humanReviewCount: number;
+  lastHumanReviewer: string | null;
+  unresolvedRequiredCount: number;
+  snapshot: ProductWorkSnapshot | null;
 }
 
 export interface ProductDetail {
@@ -508,6 +560,8 @@ export interface ProductDetail {
   runs: ProductRun[];
   dppVersions: DppVersionRecord[];
   artifacts: StoredArtifact[];
+  snapshot: ProductWorkSnapshot | null;
+  humanReviews: HumanReviewRecord[];
 }
 
 export interface StoredChatMessage {

@@ -49,7 +49,7 @@ export default function ProductDetailPage() {
     return <main className="min-h-screen bg-mist p-8 text-sm text-muted">Loading product…</main>;
   }
 
-  const { product, runs, dppVersions, artifacts } = detail;
+  const { product, runs, dppVersions, artifacts, snapshot, humanReviews } = detail;
   const title = product.name ?? product.manufacturerProductId ?? "Unnamed product";
   const resumableRun = runs.find((run) => run.status === "running" || run.status === "awaiting_human");
 
@@ -106,6 +106,19 @@ export default function ProductDetailPage() {
           </div>
         </div>
 
+        {snapshot && (
+          <section className="mt-8 rounded-2xl border border-hairline bg-paper p-6">
+            <h2 className="text-lg font-semibold text-ink">Saved product work</h2>
+            <div className="mt-4 grid gap-4 text-sm sm:grid-cols-4">
+              <div><p className="text-muted">Stage</p><p className="mt-1 text-ink">{snapshot.workflowStage.replaceAll("_", " ")}</p></div>
+              <div><p className="text-muted">Snapshot</p><p className="mt-1 font-mono text-ink">v{snapshot.version}</p></div>
+              <div><p className="text-muted">Mandatory unresolved</p><p className="mt-1 text-warn">{snapshot.unresolvedRequiredIds.length}</p></div>
+              <div><p className="text-muted">Human review pending</p><p className="mt-1 text-ink">{snapshot.humanReviewPending ? "Yes" : "No"}</p></div>
+            </div>
+            {snapshot.lastError && <p className="mt-4 text-xs text-red-700">{snapshot.lastError}</p>}
+          </section>
+        )}
+
         <div className="mt-8 grid gap-8 lg:grid-cols-2">
           <section className="rounded-2xl border border-hairline bg-paper p-6">
             <h2 className="text-lg font-semibold text-ink">DPP versions</h2>
@@ -156,6 +169,30 @@ export default function ProductDetailPage() {
             </div>
           </section>
         </div>
+
+        <section className="mt-8 rounded-2xl border border-hairline bg-paper p-6">
+          <h2 className="text-lg font-semibold text-ink">Human decision history</h2>
+          <div className="mt-4 space-y-3">
+            {humanReviews.length === 0 && <p className="text-sm text-muted">No human decisions recorded yet.</p>}
+            {humanReviews.map((review) => (
+              <div key={review.id} className="rounded-xl border border-violet-100 bg-violet-50/40 p-4">
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <p className="text-sm font-medium text-violet-800">
+                      {review.actorName || "Authenticated reviewer"} · {review.action.replaceAll("_", " ")}
+                    </p>
+                    <p className="mt-1 text-xs text-muted">{time(review.createdAt)}</p>
+                    {review.finalRequirementId && <p className="mt-2 font-mono text-[11px] text-ink">{review.finalRequirementId}</p>}
+                    {review.comment && <p className="mt-2 text-xs text-ink">{review.comment}</p>}
+                  </div>
+                  {review.valueKind === "dummy" && (
+                    <span className="rounded-full bg-violet-100 px-2.5 py-1 text-[10px] font-semibold text-violet-700">DUMMY VALUE</span>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+        </section>
 
         <section className="mt-8 rounded-2xl border border-hairline bg-paper p-6">
           <h2 className="text-lg font-semibold text-ink">Artifacts</h2>
