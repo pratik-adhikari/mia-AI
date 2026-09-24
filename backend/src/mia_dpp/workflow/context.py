@@ -8,6 +8,8 @@ from mia_dpp.aas.templates import OfficialTemplateRepository
 from mia_dpp.agents.discovery.models import DiscoveryAgent
 from mia_dpp.agents.research.models import ResearchAgent
 from mia_dpp.persistence.catalogue import ProductCatalogue
+from mia_dpp.semantic.jev import JevDecisionClient
+from mia_dpp.semantic.models import ContextScope
 from mia_dpp.storage.base import ArtifactStore
 from mia_dpp.tools.mapping.models import SemanticMapper
 from mia_dpp.tools.mapping.review import MappingReviewService
@@ -26,3 +28,10 @@ class MiaContext:
     search: SearchProvider
     research_agent: ResearchAgent
     semantic_mapper: SemanticMapper | None = None
+    jev_decider: JevDecisionClient | None = None
+    jev_routing_scopes: tuple[ContextScope, ...] = (
+        ContextScope.PROPERTY,
+        ContextScope.SIBLINGS,
+        ContextScope.FULL_PRODUCT,
+    )
+    jev_routing_max_concurrency: int = 8
