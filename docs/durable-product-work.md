@@ -347,3 +347,17 @@ and the stale generation must stop/reconcile.
 
 Resolve/restart paths seed `productSnapshotVersion` from the durable snapshot, and every successful
 snapshot write returns the new version into graph state for the next node.
+
+
+## Late research invalidates cached DPP reuse
+
+A completed background-research job is itself durable invalidation state. If its job ID is newer than
+`ProductWorkSnapshot.lastIntegratedResearchJobId`, the reuse service does not return an older
+deployable DPP. It continues saved work and passes that completed job into the integration node.
+
+Similarly, a snapshot from a newer failed/incomplete run takes precedence over an older deployable
+DPP. A DPP short-circuits only when the authoritative snapshot is `COMPLETED` for that same DPP
+run and there is no completed research waiting to be integrated.
+
+This preserves the MVP rule that verified or provisional DPPs are reusable when no newer product
+knowledge exists, while preventing stale cached passports from hiding newer evidence.

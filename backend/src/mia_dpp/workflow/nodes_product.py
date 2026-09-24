@@ -114,6 +114,7 @@ async def resolve_product(
         "seeded_from_run_id": decision.seeded_from_run_id or "",
         "evidence_artifact_id": decision.evidence_artifact_id or "",
         "reviewed_mapping_artifact_id": decision.reviewed_mapping_artifact_id or "",
+        "background_job_id": decision.pending_research_job_id or "",
         "reused_dpp_version_id": decision.reused_dpp_version_id or "",
         "product_name": product.name or "",
         "manufacturer": product.manufacturer or "",

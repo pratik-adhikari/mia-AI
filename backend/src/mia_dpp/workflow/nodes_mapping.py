@@ -10,6 +10,7 @@ if TYPE_CHECKING:
     from langgraph.runtime import Runtime
 
 from mia_dpp.aas.requirements import build_template_index
+from mia_dpp.canonical import sha256_json
 from mia_dpp.agent.models import AgentReviewRequest, AgentValueRequest
 from mia_dpp.domain.evidence import ProductKnowledgePackage
 from mia_dpp.domain.mappings import CoverageStatus, MappingResult, SemanticReviewItem
@@ -480,7 +481,15 @@ async def integrate_background_research(
     known_ids = {item.id for item in existing_package.evidence}
     new_ids = {item.id for item in merged_package.evidence} - known_ids
     if not new_ids:
-        return {}
+        snapshot = update_product_snapshot(
+            work,
+            ProductWorkStage.MAPPING,
+            last_integrated_research_job_id=job.id,
+        )
+        return {
+            "background_job_id": job.id,
+            "product_snapshot_version": snapshot.version,
+        }
 
     current_mapping_id = state.get("reviewed_mapping_artifact_id") or work.state_id(
         "semantic_mapping_artifact_id"
@@ -575,19 +584,33 @@ async def integrate_background_research(
             "conflictingRequirementIds": list(conflict_requirement_ids),
         },
     )
+    merged_fingerprint = sha256_json(
+        {
+            "sources": [
+                item.content_sha256 for item in merged_package.acquired_sources
+            ],
+            "evidence": [item.id for item in merged_package.evidence],
+        }
+    )
     snapshot = update_product_snapshot(
         work,
         ProductWorkStage.HUMAN_REVIEW if conflicts else ProductWorkStage.MAPPING,
         evidence_artifact_id=merged_evidence_id,
         reviewed_mapping_artifact_id=(None if conflicts else merged_mapping_id),
         semantic_mapping_artifact_id=merged_mapping_id,
+        source_fingerprint=merged_fingerprint,
+        evidence_fingerprint=merged_fingerprint,
         mapping_cycle_id=mapping_cycle_id or None,
         human_review_pending=bool(conflicts),
         conflicting_requirement_ids=conflict_requirement_ids,
         conflict_artifact_id=conflict_artifact_id or None,
+        last_integrated_research_job_id=job.id,
     )
     update: dict[str, Any] = {
         "evidence_artifact_id": merged_evidence_id,
+        "source_fingerprint": merged_fingerprint,
+        "evidence_fingerprint": merged_fingerprint,
+        "background_job_id": job.id,
         "known_source_urls": tuple(
             dict.fromkeys(
                 (

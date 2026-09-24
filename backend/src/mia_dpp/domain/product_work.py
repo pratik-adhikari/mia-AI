@@ -79,6 +79,7 @@ class ProductWorkSnapshot(WireModel):
     unresolved_required_ids: tuple[str, ...] = ()
     conflicting_requirement_ids: tuple[str, ...] = ()
     human_review_pending: bool = False
+    last_integrated_research_job_id: str | None = None
     last_error: str | None = None
 
     created_at: AwareDatetime = Field(default_factory=utc_now)
@@ -130,3 +131,4 @@ class ReuseDecision(WireModel):
     evidence_artifact_id: str | None = None
     reviewed_mapping_artifact_id: str | None = None
     reused_dpp_version_id: str | None = None
+    pending_research_job_id: str | None = None

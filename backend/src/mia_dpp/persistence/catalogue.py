@@ -1462,6 +1462,22 @@ class ProductCatalogue:
             (user_id,),
         )
 
+    def latest_completed_background_job(
+        self,
+        product_id: str,
+        *,
+        user_id: str,
+    ) -> BackgroundJob | None:
+        """Return the newest completed research job for one owned product."""
+
+        return self._one(
+            BackgroundJob,
+            "SELECT payload FROM background_jobs "
+            "WHERE user_id=? AND product_id=? AND status=? "
+            "ORDER BY completed_at DESC,updated_at DESC LIMIT 1",
+            (user_id, product_id, BackgroundJobStatus.COMPLETED.value),
+        )
+
     def next_queued_background_job(self) -> BackgroundJob | None:
         """Return the oldest queued worker job for an atomic worker claim."""
 
