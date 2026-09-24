@@ -437,6 +437,19 @@ export type ProductRunStatus =
   | "failed"
   | "reused";
 
+export interface ProductIdentifier {
+  id: string;
+  productId: string;
+  scheme: string;
+  value: string;
+  normalizedValue: string;
+  namespace: string | null;
+  role: "identity" | "instance" | "classification";
+  sourceEvidenceId: string | null;
+  verified: boolean;
+  createdAt: string;
+}
+
 export interface ProductRecord {
   id: string;
   canonicalUrl: string;
@@ -566,6 +579,7 @@ export interface ProductDetail {
   artifacts: StoredArtifact[];
   snapshot: ProductWorkSnapshot | null;
   humanReviews: HumanReviewRecord[];
+  identifiers: ProductIdentifier[];
 }
 
 export interface StoredChatMessage {

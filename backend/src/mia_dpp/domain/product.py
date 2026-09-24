@@ -49,6 +49,27 @@ class ThreadRecord(WireModel):
     deleted_at: AwareDatetime | None = None
 
 
+class ProductIdentifierRole(StrEnum):
+    IDENTITY = "identity"
+    INSTANCE = "instance"
+    CLASSIFICATION = "classification"
+
+
+class ProductIdentifier(WireModel):
+    """One durable identifier with semantics explicit enough to prevent unsafe deduplication."""
+
+    id: str
+    product_id: str
+    scheme: str
+    value: str
+    normalized_value: str
+    namespace: str | None = None
+    role: ProductIdentifierRole
+    source_evidence_id: str | None = None
+    verified: bool = False
+    created_at: AwareDatetime = Field(default_factory=utc_now)
+
+
 class ProductRecord(WireModel):
     id: str
     canonical_url: str

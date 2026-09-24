@@ -49,7 +49,7 @@ export default function ProductDetailPage() {
     return <main className="min-h-screen bg-mist p-8 text-sm text-muted">Loading product…</main>;
   }
 
-  const { product, runs, dppVersions, artifacts, snapshot, humanReviews } = detail;
+  const { product, runs, dppVersions, artifacts, snapshot, humanReviews, identifiers } = detail;
   const title = product.name ?? product.manufacturerProductId ?? "Unnamed product";
   const resumableRun = runs.find((run) => run.status === "running" || run.status === "awaiting_human");
 
@@ -117,6 +117,28 @@ export default function ProductDetailPage() {
             </dl>
           </div>
         </div>
+
+        {identifiers.length > 0 && (
+          <section className="mt-8 rounded-2xl border border-hairline bg-paper p-6">
+            <h2 className="text-lg font-semibold text-ink">Product identifiers</h2>
+            <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+              {identifiers.map((identifier) => (
+                <div key={identifier.id} className="rounded-xl border border-hairline p-3">
+                  <div className="flex items-center justify-between gap-2">
+                    <p className="font-mono text-[11px] text-muted">{identifier.scheme}</p>
+                    <span className="rounded-full bg-mist px-2 py-0.5 text-[10px] text-muted">
+                      {identifier.role}
+                    </span>
+                  </div>
+                  <p className="mt-2 break-all text-sm text-ink">{identifier.value}</p>
+                  {identifier.namespace && (
+                    <p className="mt-1 text-[11px] text-muted">namespace · {identifier.namespace}</p>
+                  )}
+                </div>
+              ))}
+            </div>
+          </section>
+        )}
 
         {snapshot && (
           <section className="mt-8 rounded-2xl border border-hairline bg-paper p-6">

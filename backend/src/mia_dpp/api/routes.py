@@ -629,6 +629,7 @@ async def product_detail(
         artifacts=catalogue.list_artifacts(product_id=product_id, user_id=user_id),
         snapshot=catalogue.get_product_work_snapshot(product_id, user_id=user_id),
         human_reviews=catalogue.list_human_reviews(product_id, user_id=user_id),
+        identifiers=catalogue.list_product_identifiers(product_id, user_id=user_id),
     )
 
 

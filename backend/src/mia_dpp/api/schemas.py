@@ -7,7 +7,7 @@ from typing import Literal
 from mia_dpp.domain.base import WireModel
 from mia_dpp.domain.evidence import EvidenceRecord
 from mia_dpp.domain.mappings import FieldMapping
-from mia_dpp.domain.product import DppVersion, ProductRecord, ProductRun
+from mia_dpp.domain.product import DppVersion, ProductIdentifier, ProductRecord, ProductRun
 from mia_dpp.domain.product_work import HumanReviewRecord, ProductWorkSnapshot
 from mia_dpp.storage.models import StoredArtifact
 
@@ -50,6 +50,7 @@ class ProductDetail(WireModel):
     artifacts: tuple[StoredArtifact, ...] = ()
     snapshot: ProductWorkSnapshot | None = None
     human_reviews: tuple[HumanReviewRecord, ...] = ()
+    identifiers: tuple[ProductIdentifier, ...] = ()
 
 
 class StorageStatus(WireModel):

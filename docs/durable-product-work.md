@@ -209,3 +209,24 @@ The immutable audit record therefore binds two related identities:
 
 This prevents a client from forging another person's name while still allowing local development to
 use the explicit `Local user` identity.
+
+
+## Product identifiers are not all the same kind
+
+URL identity is useful but not sufficient, so MIA now models identifiers separately from the
+`ProductRecord`. Every identifier has an explicit role:
+
+- `identity`: may identify the same product across URLs, e.g. GTIN or a manufacturer-namespaced MPN;
+- `instance`: identifies one physical unit, e.g. a serial number;
+- `classification`: describes what kind of product/property it is, e.g. ECLASS classification/IRDI.
+
+This distinction is critical for ECLASS integration. An ECLASS class or semantic identifier can be
+shared by many different products and therefore **must never be used as a unique product key**.
+
+Manufacturer article/part numbers are treated as identity only when a manufacturer namespace is
+known. Generic labels without enough namespace context are retained as evidence but are not promoted
+to identity keys.
+
+The identifier registry is the basis for future cross-URL reconciliation. It intentionally stores
+and queries identity keys before implementing automatic product-record merging, so duplicate
+histories can be detected without performing unsafe merges.

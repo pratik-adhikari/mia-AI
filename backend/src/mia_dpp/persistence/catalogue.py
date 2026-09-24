@@ -23,6 +23,8 @@ from mia_dpp.domain.product import (
     DppReleaseStatus,
     DppVersion,
     MessageRole,
+    ProductIdentifier,
+    ProductIdentifierRole,
     ProductRecord,
     ProductRun,
     RunEvent,
@@ -42,6 +44,14 @@ ModelT = TypeVar("ModelT", bound=BaseModel)
 
 class ProductSnapshotConflict(RuntimeError):
     """Raised when another workflow updated the product snapshot first."""
+
+
+class ProductIdentifierConflict(RuntimeError):
+    """Raised when a unique identity key already belongs to another product."""
+
+    def __init__(self, existing_product_id: str) -> None:
+        super().__init__(f"identifier already belongs to product {existing_product_id}")
+        self.existing_product_id = existing_product_id
 
 
 SCHEMA = """
@@ -240,6 +250,78 @@ class ProductCatalogue:
             "JOIN user_products ON user_products.product_id=products.id "
             "WHERE user_products.user_id=? ORDER BY products.updated_at DESC",
             (user_id,),
+        )
+
+    def register_product_identifier(
+        self,
+        identifier: ProductIdentifier,
+    ) -> ProductIdentifier:
+        """Persist one identifier without silently merging products on identity collision."""
+
+        if self.get_product(identifier.product_id) is None:
+            raise KeyError(identifier.product_id)
+        if identifier.role is ProductIdentifierRole.IDENTITY:
+            existing = self._fetchone(
+                "SELECT product_id FROM product_identifiers "
+                "WHERE scheme=? AND COALESCE(namespace,'')=? "
+                "AND normalized_value=? AND role='identity' LIMIT 1",
+                (
+                    identifier.scheme,
+                    identifier.namespace or "",
+                    identifier.normalized_value,
+                ),
+            )
+            if existing is not None and str(existing[0]) != identifier.product_id:
+                raise ProductIdentifierConflict(str(existing[0]))
+        self._execute(
+            "INSERT INTO product_identifiers("
+            "id,product_id,scheme,namespace,normalized_value,role,payload,created_at"
+            ") VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET payload=excluded.payload",
+            (
+                identifier.id,
+                identifier.product_id,
+                identifier.scheme,
+                identifier.namespace,
+                identifier.normalized_value,
+                identifier.role.value,
+                identifier.model_dump_json(),
+                identifier.created_at.isoformat(),
+            ),
+        )
+        return identifier
+
+    def list_product_identifiers(
+        self,
+        product_id: str,
+        *,
+        user_id: str = LOCAL_USER_ID,
+    ) -> tuple[ProductIdentifier, ...]:
+        if not self.user_owns_product(user_id, product_id):
+            return ()
+        return self._many(
+            ProductIdentifier,
+            "SELECT payload FROM product_identifiers WHERE product_id=? ORDER BY created_at,id",
+            (product_id,),
+        )
+
+    def find_identity_identifier(
+        self,
+        *,
+        scheme: str,
+        normalized_value: str,
+        namespace: str | None = None,
+        user_id: str = LOCAL_USER_ID,
+    ) -> ProductIdentifier | None:
+        return self._one(
+            ProductIdentifier,
+            "SELECT product_identifiers.payload FROM product_identifiers "
+            "JOIN user_products ON user_products.product_id=product_identifiers.product_id "
+            "WHERE product_identifiers.scheme=? "
+            "AND COALESCE(product_identifiers.namespace,'')=? "
+            "AND product_identifiers.normalized_value=? "
+            "AND product_identifiers.role='identity' "
+            "AND user_products.user_id=? LIMIT 1",
+            (scheme, namespace or "", normalized_value, user_id),
         )
 
     def get_or_create_thread(

@@ -17,6 +17,8 @@ from mia_dpp.domain.product import RunStatus
 from mia_dpp.domain.product_work import ProductWorkSnapshot, ProductWorkStage, ReuseMode
 from mia_dpp.services.product_reuse import ProductReuseService
 from mia_dpp.workflow.context import MiaContext
+from mia_dpp.services.product_identifiers import discover_product_identifiers
+from mia_dpp.persistence.catalogue import ProductIdentifierConflict
 from mia_dpp.workflow.presentation import evidence_text, product_image_url
 from mia_dpp.workflow.product_snapshot import update_product_snapshot
 from mia_dpp.workflow.state import MiaWorkflowState, reset_product_state
@@ -268,15 +270,46 @@ async def extract_evidence(
     product = work.ctx.catalogue.get_product(work.product_id, user_id=work.user_id)
     if product is None:
         raise KeyError(work.product_id)
+    identifiers = discover_product_identifiers(
+        package,
+        manufacturer=manufacturer or product.manufacturer,
+    )
+    possible_duplicate_ids: list[str] = []
+    for identifier in identifiers:
+        try:
+            work.ctx.catalogue.register_product_identifier(identifier)
+        except ProductIdentifierConflict as error:
+            possible_duplicate_ids.append(error.existing_product_id)
+    manufacturer_product_id = next(
+        (
+            item.value
+            for item in identifiers
+            if item.scheme in {"manufacturer_part_number", "manufacturer_article_number"}
+            and item.role.value == "identity"
+        ),
+        None,
+    )
     work.ctx.catalogue.update_product(
         product.model_copy(
             update={
                 "name": package.product_name,
                 "manufacturer": manufacturer or product.manufacturer,
+                "manufacturer_product_id": (
+                    product.manufacturer_product_id or manufacturer_product_id
+                ),
                 "image_url": image_url or product.image_url,
             }
         )
     )
+    if possible_duplicate_ids:
+        work.event(
+            "product.identity_match_detected",
+            "A strong product identity already belongs to another durable product record.",
+            metadata={
+                "possibleDuplicateProductIds": list(dict.fromkeys(possible_duplicate_ids)),
+                "automaticMerge": False,
+            },
+        )
     fingerprint = sha256_json(
         {
             "sources": [item.content_sha256 for item in package.acquired_sources],
