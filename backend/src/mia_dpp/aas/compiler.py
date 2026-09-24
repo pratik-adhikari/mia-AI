@@ -22,6 +22,8 @@ from mia_dpp.errors import CompilationError, MappingError
 
 _VALUE_MODEL_TYPES = {"Property", "MultiLanguageProperty", "Range", "File", "Blob"}
 _CONTAINER_MODEL_TYPES = {"SubmodelElementCollection", "SubmodelElementList", "Entity"}
+
+
 def _reference_json(reference: SemanticReference) -> dict[str, Any]:
     return reference.model_dump(mode="json", by_alias=True)
 
