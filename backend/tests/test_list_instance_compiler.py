@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 
 from aas_core3 import jsonization, verification
+import pytest
 
 from mia_dpp.aas import AasCompiler
 from mia_dpp.aas.templates import OfficialTemplateRepository
@@ -14,7 +15,7 @@ from mia_dpp.domain.evidence import (
     ProductKnowledgePackage,
     SourceLocation,
 )
-from mia_dpp.domain.mappings import FieldMapping, MappingStatus
+from mia_dpp.domain.mappings import FieldMapping, ListInstanceBinding, MappingStatus
 from mia_dpp.semantic.open_property import technical_property_area_binding
 from mia_dpp.tools.mapping.confidence import (
     MatchQuality,
@@ -180,9 +181,74 @@ def test_same_list_binding_still_rejects_duplicate_projection_identity() -> None
 
     from mia_dpp.errors import MappingError
 
-    try:
+    with pytest.raises(MappingError, match="projection identities must be unique"):
         AasCompiler(repository).compile(package, mappings, template)
-    except MappingError as error:
-        assert "projection identities must be unique" in str(error)
-    else:
-        raise AssertionError("duplicate projection identity must be rejected")
+
+
+def test_unbound_legacy_wildcard_target_remains_backward_compatible() -> None:
+    repository = OfficialTemplateRepository()
+    template = repository.load("technical_data")
+    record = _record(
+        "ev-legacy",
+        "Rated power",
+        "500",
+        ("Technical Specifications",),
+    )
+    package = ProductKnowledgePackage(
+        product_id="robot-1",
+        product_name="Robot",
+        evidence=(record,),
+    )
+    assessment = assess_mapping(
+        source_label=MatchQuality.STRONG,
+        value_format=ValueFormatQuality.VALID,
+        semantic_match=MatchQuality.STRONG,
+        destination_candidates=1,
+    )
+    target = mapping_target(
+        template,
+        TECHNICAL_DATA_ARBITRARY_PROPERTY_PATH,
+        id_short="RatedPower",
+        semantic_id="0173-1#02-POWER#001",
+    )
+    mapping = FieldMapping(
+        id="mapping-legacy",
+        evidence_id=record.id,
+        source_field="Rated power",
+        source_value="500",
+        target=target,
+        assessment=assessment,
+        reasoning="Legacy wildcard mapping without explicit list binding.",
+        status=MappingStatus.AUTO,
+    )
+
+    artifact = AasCompiler(repository).compile(package, (mapping,), template)
+    technical_areas = next(
+        item
+        for item in artifact.submodel["submodelElements"]
+        if item.get("idShort") == "TechnicalPropertyAreas"
+    )
+
+    assert target.list_instance_bindings == ()
+    assert len(technical_areas["value"]) == 1
+    assert technical_areas["value"][0]["value"][0]["idShort"] == "RatedPower"
+
+
+def test_mapping_target_rejects_binding_outside_target_template_path() -> None:
+    repository = OfficialTemplateRepository()
+    template = repository.load("technical_data")
+    invalid = ListInstanceBinding(
+        template_path=("TechnicalData", "Other", "[]"),
+        instance_key="list-instance-" + "a" * 24,
+        source_context_path=("Motor A",),
+        label="Motor A",
+    )
+
+    with pytest.raises(ValueError, match="must identify a \[\] in template_path"):
+        mapping_target(
+            template,
+            TECHNICAL_DATA_ARBITRARY_PROPERTY_PATH,
+            id_short="RatedPower",
+            semantic_id="0173-1#02-POWER#001",
+            list_instance_bindings=(invalid,),
+        )
