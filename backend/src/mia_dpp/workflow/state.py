@@ -22,9 +22,11 @@ class MiaWorkflowState(TypedDict, total=False):
     product_id: str
     run_id: str
     refresh_requested: bool
+    reuse_mode: str
     target_submodels: tuple[str, ...]
 
     # Cache and presentation
+    product_snapshot_version: int
     cache_hit: bool
     reuse_prior_work: bool
     seeded_from_run_id: str
@@ -75,6 +77,8 @@ def reset_product_state(
         "product_id": "",
         "run_id": "",
         "cache_hit": False,
+        "reuse_mode": "fresh",
+        "product_snapshot_version": 0,
         "reuse_prior_work": False,
         "seeded_from_run_id": "",
         "reused_dpp_version_id": "",

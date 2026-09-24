@@ -14,6 +14,8 @@ if TYPE_CHECKING:
 from mia_dpp.canonical import sha256_json
 from mia_dpp.domain.evidence import ExtractedAsset, ProductKnowledgePackage
 from mia_dpp.domain.product import RunStatus
+from mia_dpp.domain.product_work import ProductWorkSnapshot, ProductWorkStage, ReuseMode
+from mia_dpp.services.product_reuse import ProductReuseService
 from mia_dpp.workflow.context import MiaContext
 from mia_dpp.workflow.presentation import evidence_text, product_image_url
 from mia_dpp.workflow.state import MiaWorkflowState, reset_product_state
@@ -36,15 +38,15 @@ async def resolve_product(
         user_id=state["user_id"],
     )
     refresh_requested = state.get("refresh_requested", False)
-    cached = (
-        None
-        if refresh_requested
-        else catalogue.latest_successful_dpp(product.id, user_id=state["user_id"])
+    decision = ProductReuseService(catalogue).decide(
+        product.id,
+        user_id=state["user_id"],
+        refresh_requested=refresh_requested,
     )
-    seeded_run, reusable = (
-        (None, {})
-        if cached is not None or refresh_requested
-        else catalogue.latest_reusable_artifacts(product.id, user_id=state["user_id"])
+    cached = (
+        catalogue.latest_successful_dpp(product.id, user_id=state["user_id"])
+        if decision.mode is ReuseMode.REUSE_COMPLETED_DPP
+        else None
     )
     run = catalogue.start_run(
         product.id,
@@ -52,7 +54,7 @@ async def resolve_product(
         user_id=state["user_id"],
         refresh_requested=refresh_requested,
         reused_from_run_id=cached.run_id if cached else None,
-        seeded_from_run_id=seeded_run.id if seeded_run else None,
+        seeded_from_run_id=decision.seeded_from_run_id,
     )
     catalogue.add_event(
         run.id,
@@ -60,8 +62,9 @@ async def resolve_product(
         "Resolved product identity and checked the durable DPP cache.",
         metadata={
             "cacheHit": cached is not None,
-            "reusedPriorWork": seeded_run is not None,
-            "seededFromRunId": seeded_run.id if seeded_run else None,
+            "reuseMode": decision.mode.value,
+            "reusedPriorWork": decision.mode is ReuseMode.CONTINUE_SAVED_WORK,
+            "seededFromRunId": decision.seeded_from_run_id,
             "canonicalUrl": product.canonical_url,
         },
     )
@@ -69,13 +72,12 @@ async def resolve_product(
         "product_id": product.id,
         "run_id": run.id,
         "cache_hit": cached is not None,
-        "reuse_prior_work": seeded_run is not None,
-        "seeded_from_run_id": seeded_run.id if seeded_run else "",
-        "evidence_artifact_id": reusable["evidence"].id if "evidence" in reusable else "",
-        "reviewed_mapping_artifact_id": (
-            reusable["reviewed_mapping"].id if "reviewed_mapping" in reusable else ""
-        ),
-        "reused_dpp_version_id": cached.id if cached else "",
+        "reuse_mode": decision.mode.value,
+        "reuse_prior_work": decision.mode is ReuseMode.CONTINUE_SAVED_WORK,
+        "seeded_from_run_id": decision.seeded_from_run_id or "",
+        "evidence_artifact_id": decision.evidence_artifact_id or "",
+        "reviewed_mapping_artifact_id": decision.reviewed_mapping_artifact_id or "",
+        "reused_dpp_version_id": decision.reused_dpp_version_id or "",
         "product_name": product.name or "",
         "manufacturer": product.manufacturer or "",
         "image_url": product.image_url or "",
@@ -147,11 +149,27 @@ async def extract_evidence(
                 "evidenceArtifactId": evidence_id,
             },
         )
+        snapshot = work.ctx.catalogue.save_product_work_snapshot(
+            ProductWorkSnapshot(
+                id=f"snapshot-{work.product_id}",
+                user_id=work.user_id,
+                product_id=work.product_id,
+                run_id=work.run_id,
+                thread_id=state["thread_id"],
+                workflow_stage=ProductWorkStage.EVIDENCE,
+                template_keys=state.get("target_submodels", ()),
+                evidence_artifact_id=evidence_id,
+                reviewed_mapping_artifact_id=state.get("reviewed_mapping_artifact_id") or None,
+                source_fingerprint=fingerprint,
+                evidence_fingerprint=fingerprint,
+            )
+        )
         return {
             "evidence_artifact_id": evidence_id,
             "known_source_urls": source_urls,
             "product_name": package.product_name,
             "source_fingerprint": fingerprint,
+            "product_snapshot_version": snapshot.version,
         }
 
     total_started = perf_counter()
@@ -306,6 +324,20 @@ async def extract_evidence(
         "Queued durable deep research without blocking initial mapping.",
         metadata={"jobId": job.id, "artifactId": job_artifact_id},
     )
+    snapshot = work.ctx.catalogue.save_product_work_snapshot(
+        ProductWorkSnapshot(
+            id=f"snapshot-{work.product_id}",
+            user_id=work.user_id,
+            product_id=work.product_id,
+            run_id=work.run_id,
+            thread_id=state["thread_id"],
+            workflow_stage=ProductWorkStage.EVIDENCE,
+            template_keys=state.get("target_submodels", ()),
+            evidence_artifact_id=evidence_id,
+            source_fingerprint=fingerprint,
+            evidence_fingerprint=fingerprint,
+        )
+    )
     return {
         "evidence_artifact_id": evidence_id,
         "product_name": package.product_name,
@@ -314,6 +346,7 @@ async def extract_evidence(
         "known_source_urls": source_urls,
         "source_fingerprint": fingerprint,
         "background_job_id": job.id,
+        "product_snapshot_version": snapshot.version,
     }
 
 

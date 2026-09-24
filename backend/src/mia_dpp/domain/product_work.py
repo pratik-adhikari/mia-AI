@@ -110,3 +110,15 @@ class HumanReviewRecord(WireModel):
     comment: str | None = Field(default=None, max_length=1000)
     value_kind: Literal["verified", "dummy"] | None = None
     created_at: AwareDatetime = Field(default_factory=utc_now)
+
+
+
+class ReuseDecision(WireModel):
+    """Backend-owned decision about which durable product state may be reused."""
+
+    mode: ReuseMode
+    reason: str = Field(min_length=1)
+    seeded_from_run_id: str | None = None
+    evidence_artifact_id: str | None = None
+    reviewed_mapping_artifact_id: str | None = None
+    reused_dpp_version_id: str | None = None
