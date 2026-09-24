@@ -14,8 +14,8 @@ from mia_dpp.aas.templates import OfficialTemplateRepository
 from mia_dpp.agent.models import AgentResponse, AgentStatus
 from mia_dpp.domain.mappings import MappingStatus
 from mia_dpp.domain.product import RunStatus
-from mia_dpp.services.product_query import EvidenceSearchHit, WorkStatusView
 from mia_dpp.main import app
+from mia_dpp.services.product_query import EvidenceSearchHit, WorkStatusView
 from mia_dpp.tools.mapping.text_mapping import propose_text_mappings
 
 
