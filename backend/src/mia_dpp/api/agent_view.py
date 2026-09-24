@@ -105,7 +105,10 @@ class AgentResponseView:
     ) -> tuple[SemanticReviewItem, ...]:
         if not artifact_id:
             return ()
-        artifact = self._context.catalogue.get_artifact(str(artifact_id))
+        artifact = self._context.catalogue.get_artifact(
+            str(artifact_id),
+            user_id=work.user_id,
+        )
         if artifact is None:
             return ()
         return tuple(

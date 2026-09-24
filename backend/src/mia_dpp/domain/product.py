@@ -19,6 +19,11 @@ class RunStatus(StrEnum):
     REUSED = "reused"
 
 
+class DppReleaseStatus(StrEnum):
+    VERIFIED = "verified"
+    PROVISIONAL = "provisional"
+
+
 class MessageRole(StrEnum):
     USER = "user"
     ASSISTANT = "assistant"
@@ -41,6 +46,31 @@ class ThreadRecord(WireModel):
     created_at: AwareDatetime = Field(default_factory=utc_now)
     updated_at: AwareDatetime = Field(default_factory=utc_now)
     last_message_at: AwareDatetime | None = None
+    deleted_at: AwareDatetime | None = None
+    workflow_generation: int = Field(default=0, ge=0)
+    pending_refresh_requested: bool = False
+
+
+class ProductIdentifierRole(StrEnum):
+    IDENTITY = "identity"
+    INSTANCE = "instance"
+    CLASSIFICATION = "classification"
+
+
+class ProductIdentifier(WireModel):
+    """One durable identifier with semantics explicit enough to prevent unsafe deduplication."""
+
+    id: str
+    product_id: str
+    scheme: str
+    value: str
+    normalized_value: str
+    namespace: str | None = None
+    role: ProductIdentifierRole
+    owner_user_id: str | None = None
+    source_evidence_id: str | None = None
+    verified: bool = False
+    created_at: AwareDatetime = Field(default_factory=utc_now)
 
 
 class ProductRecord(WireModel):
@@ -64,8 +94,13 @@ class ProductRun(WireModel):
     status: RunStatus = RunStatus.RUNNING
     refresh_requested: bool = False
     reused_from_run_id: str | None = None
+    seeded_from_run_id: str | None = None
     started_at: AwareDatetime = Field(default_factory=utc_now)
+    workflow_generation: int = Field(default=0, ge=0)
     finished_at: AwareDatetime | None = None
+    execution_lease_token: str | None = None
+    execution_lease_expires_at: AwareDatetime | None = None
+    last_heartbeat_at: AwareDatetime | None = None
     error: str | None = None
     metrics: dict[str, int | float | str | bool | None] = Field(default_factory=dict)
 
@@ -98,6 +133,8 @@ class DppVersion(WireModel):
     validation_artifact_id: str | None = None
     source_fingerprint: str | None = None
     deployable: bool = False
+    release_status: DppReleaseStatus = DppReleaseStatus.VERIFIED
+    dummy_mapping_ids: tuple[str, ...] = ()
     created_at: AwareDatetime = Field(default_factory=utc_now)
 
 

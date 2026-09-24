@@ -25,7 +25,7 @@ from mia_dpp.agent.models import (
     AgentTraceEvent,
     AgentValueRequest,
 )
-from mia_dpp.api.auth import AuthenticatedUser
+from mia_dpp.api.auth import AuthenticatedUser, AuthenticatedUserName
 from mia_dpp.api.schemas import (
     DppBuildRequest,
     HealthResponse,
@@ -33,7 +33,9 @@ from mia_dpp.api.schemas import (
     ProductLibraryItem,
     StorageStatus,
 )
+from mia_dpp.domain.mappings import MappingResult
 from mia_dpp.domain.product import (
+    DppReleaseStatus,
     BackgroundJob,
     BackgroundJobStatus,
     ChatMessage,
@@ -168,11 +170,13 @@ async def agent_review(
     payload: AgentReviewRequest,
     http_request: Request,
     user_id: AuthenticatedUser,
+    actor_name: AuthenticatedUserName,
 ) -> AgentResponse:
     """Resume an interrupt with trusted mapping-review decisions."""
 
     try:
-        return await _application(http_request).review(payload, user_id=user_id)
+        trusted = payload.model_copy(update={"actor_name": actor_name})
+        return await _application(http_request).review(trusted, user_id=user_id)
     except (KeyError, TypeError, ValueError) as error:
         raise HTTPException(
             status_code=422,
@@ -185,10 +189,12 @@ async def agent_value(
     payload: AgentValueRequest,
     http_request: Request,
     user_id: AuthenticatedUser,
+    actor_name: AuthenticatedUserName,
 ) -> AgentResponse:
     """Resume an interrupt with a trusted human-supplied requirement value."""
     try:
-        return await _application(http_request).provide_value(payload, user_id=user_id)
+        trusted = payload.model_copy(update={"actor_name": actor_name})
+        return await _application(http_request).provide_value(trusted, user_id=user_id)
     except (KeyError, TypeError, ValueError) as error:
         raise HTTPException(
             status_code=422,
@@ -292,11 +298,11 @@ async def workspace_trace(
 )
 async def mapping_knowledge(
     http_request: Request,
-    _user_id: AuthenticatedUser,
+    user_id: AuthenticatedUser,
 ) -> tuple[MappingKnowledgeEntry, ...]:
     """List backend-owned mapping knowledge for the Integration Graph."""
 
-    return _application(http_request).store.list_mapping_knowledge()
+    return _application(http_request).store.list_mapping_knowledge(user_id=user_id)
 
 
 @router.post("/api/dpp", response_model=DppPackage)
@@ -361,6 +367,9 @@ async def create_dpp(
                 error=None if package.deployable else "Manual DPP validation blocked deployment",
             )
             if package.deployable:
+                dummy_mapping_ids = tuple(
+                    item.id for item in payload.mappings if item.human_value_kind == "dummy"
+                )
                 catalogue.create_dpp_version(
                     product.id,
                     run.id,
@@ -371,6 +380,12 @@ async def create_dpp(
                         package.model_dump_json(by_alias=True).encode()
                     ).hexdigest(),
                     deployable=True,
+                    release_status=(
+                        DppReleaseStatus.PROVISIONAL
+                        if dummy_mapping_ids
+                        else DppReleaseStatus.VERIFIED
+                    ),
+                    dummy_mapping_ids=dummy_mapping_ids,
                 )
         return package
     except TemplateRepositoryError as error:
@@ -440,6 +455,21 @@ async def thread_messages(
         thread_id,
         user_id=user_id,
     )
+
+
+@router.delete("/api/threads/{thread_id}", status_code=204)
+async def delete_thread(
+    thread_id: str,
+    http_request: Request,
+    user_id: AuthenticatedUser,
+) -> Response:
+    """Remove a chat from history while retaining product/run artifacts for audit and reuse."""
+
+    catalogue = _application(http_request).context.catalogue
+    if catalogue.get_thread(thread_id, user_id=user_id) is None:
+        raise HTTPException(status_code=404, detail="unknown thread")
+    catalogue.delete_thread(thread_id, user_id=user_id)
+    return Response(status_code=204)
 
 
 @router.get("/api/threads", response_model=tuple[ThreadRecord, ...])
@@ -535,15 +565,49 @@ async def product_library(
 ) -> tuple[ProductLibraryItem, ...]:
     """List every durable product with its latest successful passport."""
 
-    catalogue = _application(http_request).context.catalogue
-    return tuple(
-        ProductLibraryItem(
-            product=product,
-            latest_dpp=catalogue.latest_successful_dpp(product.id, user_id=user_id),
-            run_count=len(catalogue.list_runs(product.id, user_id=user_id)),
+    application = _application(http_request)
+    catalogue = application.context.catalogue
+    items: list[ProductLibraryItem] = []
+    for product in catalogue.list_products(user_id=user_id):
+        runs = catalogue.list_runs(product.id, user_id=user_id)
+        latest_run = runs[0] if runs else None
+        latest_dpp = catalogue.latest_successful_dpp(product.id, user_id=user_id)
+        reviewed, _legacy_dummy = _mapping_provenance_counts(application, product.id, user_id)
+        snapshot = catalogue.get_product_work_snapshot(product.id, user_id=user_id)
+        human_reviews = catalogue.list_human_reviews(product.id, user_id=user_id)
+        dummy = sum(item.value_kind == "dummy" for item in human_reviews)
+        last_reviewer = next(
+            (item.actor_name for item in reversed(human_reviews) if item.actor_name),
+            None,
         )
-        for product in catalogue.list_products(user_id=user_id)
-    )
+        resumable = latest_run is not None and latest_run.status in {
+            RunStatus.RUNNING,
+            RunStatus.AWAITING_HUMAN,
+        }
+        items.append(
+            ProductLibraryItem(
+                product=product,
+                latest_dpp=latest_dpp,
+                latest_run=latest_run,
+                run_count=len(runs),
+                resumable=resumable,
+                resume_thread_id=latest_run.thread_id if resumable and latest_run else None,
+                workflow_status=(
+                    latest_run.status.value
+                    if latest_run is not None
+                    else ("completed" if latest_dpp is not None else "idle")
+                ),
+                human_reviewed_mappings=reviewed,
+                human_dummy_mappings=dummy,
+                human_review_count=len(human_reviews),
+                last_human_reviewer=last_reviewer,
+                unresolved_required_count=(
+                    len(snapshot.unresolved_required_ids) if snapshot is not None else 0
+                ),
+                snapshot=snapshot,
+            )
+        )
+    return tuple(items)
 
 
 @router.get("/api/products/{product_id}", response_model=ProductDetail)
@@ -563,6 +627,13 @@ async def product_detail(
         runs=catalogue.list_runs(product_id, user_id=user_id),
         dpp_versions=catalogue.list_dpp_versions(product_id, user_id=user_id),
         artifacts=catalogue.list_artifacts(product_id=product_id, user_id=user_id),
+        snapshot=catalogue.get_product_work_snapshot(product_id, user_id=user_id),
+        snapshot_history=catalogue.list_product_work_snapshot_history(
+            product_id,
+            user_id=user_id,
+        ),
+        human_reviews=catalogue.list_human_reviews(product_id, user_id=user_id),
+        identifiers=catalogue.list_product_identifiers(product_id, user_id=user_id),
     )
 
 
@@ -575,13 +646,38 @@ async def read_durable_artifact(
     """Read a product-library artifact by its durable catalogue identity."""
 
     mia = _application(http_request)
-    artifact = mia.context.catalogue.get_artifact(artifact_id)
+    artifact = mia.context.catalogue.get_artifact(artifact_id, user_id=user_id)
     if artifact is None or artifact.run_id is None:
         raise HTTPException(status_code=404, detail="unknown artifact")
     run = mia.context.catalogue.get_run(artifact.run_id)
-    if run is None or mia.context.catalogue.get_thread(run.thread_id, user_id=user_id) is None:
+    if run is None:
         raise HTTPException(status_code=404, detail="unknown artifact")
     return Response(
         content=mia.context.artifacts.get(artifact),
         media_type=artifact.content_type,
     )
+
+
+def _mapping_provenance_counts(application: Mia, product_id: str, user_id: str) -> tuple[int, int]:
+    preferred = {
+        "mapping/human-value.json",
+        "mapping/reviewed.json",
+        "mapping/research-integrated.json",
+        "mapping/reused-reviewed.json",
+        "mapping/mapping.json",
+    }
+    for artifact in reversed(
+        application.context.catalogue.list_artifacts(product_id=product_id, user_id=user_id)
+    ):
+        if artifact.key not in preferred:
+            continue
+        try:
+            mapping = MappingResult.model_validate_json(application.context.artifacts.get(artifact))
+        except ValueError:
+            continue
+        rows = (*mapping.mapped, *mapping.ambiguous, *mapping.rejected)
+        return (
+            sum(item.human_reviewed for item in rows),
+            sum(item.human_value_kind == "dummy" for item in rows),
+        )
+    return 0, 0

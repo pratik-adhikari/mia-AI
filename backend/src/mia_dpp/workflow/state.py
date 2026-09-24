@@ -21,11 +21,17 @@ class MiaWorkflowState(TypedDict, total=False):
     product_url: str
     product_id: str
     run_id: str
+    workflow_generation: int
+    source_generation: int
     refresh_requested: bool
+    reuse_mode: str
     target_submodels: tuple[str, ...]
 
     # Cache and presentation
+    product_snapshot_version: int
     cache_hit: bool
+    reuse_prior_work: bool
+    seeded_from_run_id: str
     reused_dpp_version_id: str
     product_name: str
     manufacturer: str
@@ -38,6 +44,7 @@ class MiaWorkflowState(TypedDict, total=False):
     deterministic_mapping_artifact_id: str
     semantic_mapping_artifact_id: str
     review_items_artifact_id: str
+    conflict_artifact_id: str
     reviewed_mapping_artifact_id: str
     coverage_artifact_id: str
     dpp_artifact_id: str
@@ -50,10 +57,17 @@ class MiaWorkflowState(TypedDict, total=False):
     review_required: bool
     required_unresolved: int
     missing_requirement_ids: tuple[str, ...]
+    conflicting_requirement_ids: tuple[str, ...]
     research_attempts: int
     research_found_source: bool
     max_research_attempts: int
     source_fingerprint: str
+    evidence_fingerprint: str
+    target_fingerprint: str
+    mapping_input_fingerprint: str
+    semantic_mapper_fingerprint: str
+    review_fingerprint: str
+    build_input_fingerprint: str
     build_deployable: bool
 
     # Terminal communication
@@ -72,7 +86,13 @@ def reset_product_state(
         "product_queue": product_queue,
         "product_id": "",
         "run_id": "",
+        "workflow_generation": 0,
+        "source_generation": 0,
         "cache_hit": False,
+        "reuse_mode": "fresh",
+        "product_snapshot_version": 0,
+        "reuse_prior_work": False,
+        "seeded_from_run_id": "",
         "reused_dpp_version_id": "",
         "product_name": "",
         "manufacturer": "",
@@ -83,6 +103,7 @@ def reset_product_state(
         "deterministic_mapping_artifact_id": "",
         "semantic_mapping_artifact_id": "",
         "review_items_artifact_id": "",
+        "conflict_artifact_id": "",
         "reviewed_mapping_artifact_id": "",
         "coverage_artifact_id": "",
         "dpp_artifact_id": "",
@@ -93,9 +114,16 @@ def reset_product_state(
         "review_required": False,
         "required_unresolved": 0,
         "missing_requirement_ids": (),
+        "conflicting_requirement_ids": (),
         "research_attempts": 0,
         "research_found_source": False,
         "source_fingerprint": "",
+        "evidence_fingerprint": "",
+        "target_fingerprint": "",
+        "mapping_input_fingerprint": "",
+        "semantic_mapper_fingerprint": "",
+        "review_fingerprint": "",
+        "build_input_fingerprint": "",
         "build_deployable": False,
         "status": "running",
     }

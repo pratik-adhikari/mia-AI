@@ -64,3 +64,17 @@ def test_mapping_assessment_requires_an_explanation() -> None:
     assert valid.basis is MappingBasis.EXACT
     with pytest.raises(ValidationError, match="at least 1 character"):
         MappingAssessment(basis=MappingBasis.EXACT, review_required=False, reason="")
+
+
+
+def test_agent_request_has_explicit_refresh_flag() -> None:
+    from mia_dpp.agent.models import AgentRequest
+
+    normal = AgentRequest(message="Import product website: https://example.com/product")
+    refresh = AgentRequest(
+        message="Import product website: https://example.com/product",
+        refresh_requested=True,
+    )
+
+    assert normal.refresh_requested is False
+    assert refresh.refresh_requested is True

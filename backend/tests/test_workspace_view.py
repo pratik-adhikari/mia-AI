@@ -5,6 +5,7 @@ from io import BytesIO
 from pathlib import Path
 
 from mia_dpp.persistence.catalogue import ProductCatalogue
+from mia_dpp.domain.product import RunStatus
 from mia_dpp.persistence.workspace import WorkspaceView
 from mia_dpp.storage.local import LocalArtifactStore
 
@@ -71,6 +72,7 @@ def test_workspace_zip_keeps_repeated_logical_artifact_names(tmp_path: Path) -> 
             run_id=run.id,
         )
         catalogue.register_artifact(artifact)
+        catalogue.finish_run(run.id, RunStatus.COMPLETED)
 
     archive = zipfile.ZipFile(
         BytesIO(WorkspaceView(catalogue, storage).export_zip("thread-versioned"))

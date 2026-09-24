@@ -49,8 +49,18 @@ export default function ProductDetailPage() {
     return <main className="min-h-screen bg-mist p-8 text-sm text-muted">Loading product…</main>;
   }
 
-  const { product, runs, dppVersions, artifacts } = detail;
+  const {
+    product,
+    runs,
+    dppVersions,
+    artifacts,
+    snapshot,
+    snapshotHistory,
+    humanReviews,
+    identifiers,
+  } = detail;
   const title = product.name ?? product.manufacturerProductId ?? "Unnamed product";
+  const resumableRun = runs.find((run) => run.status === "running" || run.status === "awaiting_human");
 
   return (
     <main className="min-h-screen bg-mist">
@@ -59,9 +69,24 @@ export default function ProductDetailPage() {
           <Link href="/products" className="text-[13px] text-muted hover:text-ink">
             ← Product library
           </Link>
-          <Link href="/workspace" className="rounded-full bg-ink px-3 py-1.5 text-[12px] text-white">
-            Open workspace
-          </Link>
+          <div className="flex items-center gap-2">
+            <Link
+              href={
+                resumableRun
+                  ? `/workspace?thread=${encodeURIComponent(resumableRun.threadId)}`
+                  : `/workspace?product=${encodeURIComponent(product.id)}&action=continue`
+              }
+              className="rounded-full bg-ink px-3 py-1.5 text-[12px] text-white"
+            >
+              {resumableRun ? "Resume workspace" : "Continue saved work"}
+            </Link>
+            <Link
+              href={`/workspace?product=${encodeURIComponent(product.id)}&action=refresh`}
+              className="rounded-full border border-hairline px-3 py-1.5 text-[12px] text-ink"
+            >
+              Refresh sources
+            </Link>
+          </div>
         </div>
       </header>
 
@@ -102,6 +127,69 @@ export default function ProductDetailPage() {
           </div>
         </div>
 
+        {identifiers.length > 0 && (
+          <section className="mt-8 rounded-2xl border border-hairline bg-paper p-6">
+            <h2 className="text-lg font-semibold text-ink">Product identifiers</h2>
+            <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+              {identifiers.map((identifier) => (
+                <div key={identifier.id} className="rounded-xl border border-hairline p-3">
+                  <div className="flex items-center justify-between gap-2">
+                    <p className="font-mono text-[11px] text-muted">{identifier.scheme}</p>
+                    <span className="rounded-full bg-mist px-2 py-0.5 text-[10px] text-muted">
+                      {identifier.role}
+                    </span>
+                  </div>
+                  <p className="mt-2 break-all text-sm text-ink">{identifier.value}</p>
+                  {identifier.namespace && (
+                    <p className="mt-1 text-[11px] text-muted">namespace · {identifier.namespace}</p>
+                  )}
+                </div>
+              ))}
+            </div>
+          </section>
+        )}
+
+        {snapshot && (
+          <section className="mt-8 rounded-2xl border border-hairline bg-paper p-6">
+            <h2 className="text-lg font-semibold text-ink">Saved product work</h2>
+            <div className="mt-4 grid gap-4 text-sm sm:grid-cols-4">
+              <div><p className="text-muted">Stage</p><p className="mt-1 text-ink">{snapshot.workflowStage.replaceAll("_", " ")}</p></div>
+              <div><p className="text-muted">Snapshot</p><p className="mt-1 font-mono text-ink">v{snapshot.version}</p></div>
+              <div><p className="text-muted">Mandatory unresolved</p><p className="mt-1 text-warn">{snapshot.unresolvedRequiredIds.length}</p></div>
+              <div><p className="text-muted">Human review pending</p><p className="mt-1 text-ink">{snapshot.humanReviewPending ? "Yes" : "No"}</p></div>
+            </div>
+            {snapshot.lastError && <p className="mt-4 text-xs text-red-700">{snapshot.lastError}</p>}
+          </section>
+        )}
+
+        {snapshotHistory.length > 0 && (
+          <section className="mt-8 rounded-2xl border border-hairline bg-paper p-6">
+            <h2 className="text-lg font-semibold text-ink">Saved state history</h2>
+            <div className="mt-4 overflow-x-auto">
+              <table className="w-full min-w-[620px] text-left text-sm">
+                <thead className="text-xs uppercase tracking-wide text-muted">
+                  <tr>
+                    <th className="pb-3 font-medium">Version</th>
+                    <th className="pb-3 font-medium">Stage</th>
+                    <th className="pb-3 font-medium">Run</th>
+                    <th className="pb-3 font-medium">Updated</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-hairline">
+                  {[...snapshotHistory].reverse().map((item) => (
+                    <tr key={item.id + "-" + item.version}>
+                      <td className="py-3 font-mono text-xs text-ink">v{item.version}</td>
+                      <td className="py-3 text-ink">{item.workflowStage.replaceAll("_", " ")}</td>
+                      <td className="py-3 font-mono text-xs text-muted">{item.runId}</td>
+                      <td className="py-3 text-muted">{time(item.updatedAt)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </section>
+        )}
+
         <div className="mt-8 grid gap-8 lg:grid-cols-2">
           <section className="rounded-2xl border border-hairline bg-paper p-6">
             <h2 className="text-lg font-semibold text-ink">DPP versions</h2>
@@ -111,8 +199,22 @@ export default function ProductDetailPage() {
                 <div key={version.id} className="rounded-xl border border-hairline p-4">
                   <div className="flex items-center justify-between gap-4">
                     <div>
-                      <p className="font-medium text-ink">Version {version.version}</p>
+                      <div className="flex items-center gap-2">
+                        <p className="font-medium text-ink">Version {version.version}</p>
+                        <span className={`rounded-full px-2 py-0.5 text-[10px] font-medium ${
+                          version.releaseStatus === "verified"
+                            ? "bg-ok/10 text-ok"
+                            : "bg-warn/10 text-warn"
+                        }`}>
+                          {version.releaseStatus}
+                        </span>
+                      </div>
                       <p className="mt-1 text-xs text-muted">{time(version.createdAt)}</p>
+                      {version.dummyMappingIds.length > 0 && (
+                        <p className="mt-1 text-xs text-violet-700">
+                          {version.dummyMappingIds.length} human-approved DUMMY placeholder{version.dummyMappingIds.length === 1 ? "" : "s"}
+                        </p>
+                      )}
                     </div>
                     <a
                       href={`${API_URL}/api/artifacts/${encodeURIComponent(version.dppArtifactId)}`}
@@ -136,6 +238,12 @@ export default function ProductDetailPage() {
                       <p className="font-mono text-xs text-muted">{run.id}</p>
                       <p className="mt-1 text-sm text-ink">{time(run.startedAt)}</p>
                       {run.error && <p className="mt-2 text-xs text-red-700">{run.error}</p>}
+                      {run.seededFromRunId && <p className="mt-2 text-xs text-violet-700">Reused historical work from {run.seededFromRunId}</p>}
+                      {(run.status === "running" || run.status === "awaiting_human") && (
+                        <Link href={`/workspace?thread=${encodeURIComponent(run.threadId)}`} className="mt-2 inline-flex text-xs font-medium text-signal hover:underline">
+                          Resume this run
+                        </Link>
+                      )}
                     </div>
                     <span className={`rounded-full px-2.5 py-1 text-xs ${statusClass(run.status)}`}>
                       {run.status.replace("_", " ")}
@@ -146,6 +254,30 @@ export default function ProductDetailPage() {
             </div>
           </section>
         </div>
+
+        <section className="mt-8 rounded-2xl border border-hairline bg-paper p-6">
+          <h2 className="text-lg font-semibold text-ink">Human decision history</h2>
+          <div className="mt-4 space-y-3">
+            {humanReviews.length === 0 && <p className="text-sm text-muted">No human decisions recorded yet.</p>}
+            {humanReviews.map((review) => (
+              <div key={review.id} className="rounded-xl border border-violet-100 bg-violet-50/40 p-4">
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <p className="text-sm font-medium text-violet-800">
+                      {review.actorName || "Authenticated reviewer"} · {review.action.replaceAll("_", " ")}
+                    </p>
+                    <p className="mt-1 text-xs text-muted">{time(review.createdAt)}</p>
+                    {review.finalRequirementId && <p className="mt-2 font-mono text-[11px] text-ink">{review.finalRequirementId}</p>}
+                    {review.comment && <p className="mt-2 text-xs text-ink">{review.comment}</p>}
+                  </div>
+                  {review.valueKind === "dummy" && (
+                    <span className="rounded-full bg-violet-100 px-2.5 py-1 text-[10px] font-semibold text-violet-700">DUMMY VALUE</span>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+        </section>
 
         <section className="mt-8 rounded-2xl border border-hairline bg-paper p-6">
           <h2 className="text-lg font-semibold text-ink">Artifacts</h2>

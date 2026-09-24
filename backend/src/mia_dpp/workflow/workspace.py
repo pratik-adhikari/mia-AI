@@ -19,6 +19,9 @@ class RunWorkspace:
     state: MiaWorkflowState
     ctx: MiaContext
 
+    def __post_init__(self) -> None:
+        self.ctx.catalogue.assert_run_generation(self.run_id)
+
     @property
     def product_id(self) -> str:
         return self.state["product_id"]
@@ -38,7 +41,7 @@ class RunWorkspace:
         return str(artifact_id)
 
     def load(self, artifact_id: str, model: type[ModelT]) -> ModelT:
-        artifact = self.ctx.catalogue.get_artifact(artifact_id)
+        artifact = self.ctx.catalogue.get_artifact(artifact_id, user_id=self.user_id)
         if artifact is None:
             raise KeyError(f"unknown artifact: {artifact_id}")
         return model.model_validate_json(self.ctx.artifacts.get(artifact))
@@ -47,7 +50,10 @@ class RunWorkspace:
         return self.load(self.state_id(key), model)
 
     def load_json(self, key: str) -> Any:
-        artifact = self.ctx.catalogue.get_artifact(self.state_id(key))
+        artifact = self.ctx.catalogue.get_artifact(
+            self.state_id(key),
+            user_id=self.user_id,
+        )
         if artifact is None:
             raise KeyError(f"unknown artifact: {self.state_id(key)}")
         return json.loads(self.ctx.artifacts.get(artifact))
@@ -90,6 +96,7 @@ class RunWorkspace:
         content_type: str,
         derived_from: tuple[str, ...] = (),
     ) -> str:
+        self.ctx.catalogue.assert_run_generation(self.run_id)
         artifact = self.ctx.artifacts.put(
             key,
             data,
@@ -108,4 +115,5 @@ class RunWorkspace:
         *,
         metadata: dict[str, Any] | None = None,
     ) -> None:
+        self.ctx.catalogue.assert_run_generation(self.run_id)
         self.ctx.catalogue.add_event(self.run_id, event_type, summary, metadata=metadata)

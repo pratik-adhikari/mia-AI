@@ -109,10 +109,18 @@ class MappingKnowledgeStatus(StrEnum):
     TRUSTED = "trusted"
 
 
+class MappingKnowledgeScope(StrEnum):
+    USER = "user"
+    ORGANIZATION = "organization"
+    GLOBAL = "global"
+
+
 class MappingKnowledgeEntry(WireModel):
     """Reviewed mapping knowledge reusable as non-authoritative semantic context."""
 
     id: str
+    scope: MappingKnowledgeScope = MappingKnowledgeScope.USER
+    owner_id: str | None = "local-development"
     source_field: str
     example_values: tuple[str, ...]
     target_template: str

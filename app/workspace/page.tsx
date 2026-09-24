@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
+import { useSearchParams } from "next/navigation";
 import { UserButton } from "@clerk/nextjs";
 import type {
   AgentTraceEvent,
@@ -22,6 +23,7 @@ import type {
   MappingKnowledgeEntry,
   BackgroundJob,
   ThreadRecord,
+  ProductDetail,
 } from "@/lib/types";
 import { CoveragePanel } from "@/components/CoveragePanel";
 import { EvidencePanel } from "@/components/EvidencePanel";
@@ -63,6 +65,7 @@ const SAMPLES = [
 export default function Workspace() {
   const authenticationEnabled = useAuthenticationEnabled();
   const authenticatedFetch = useAuthenticatedFetch();
+  const searchParams = useSearchParams();
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [threads, setThreads] = useState<ThreadRecord[]>([]);
   const [input, setInput] = useState("");
@@ -85,6 +88,7 @@ export default function Workspace() {
   const [artifacts, setArtifacts] = useState<WorkspaceArtifact[]>([]);
   const [backgroundJob, setBackgroundJob] = useState<BackgroundJob | null>(null);
   const [workspaceError, setWorkspaceError] = useState<string | null>(null);
+  const [restoredRunNotice, setRestoredRunNotice] = useState<string | null>(null);
   const [researchDispatchError, setResearchDispatchError] = useState<string | null>(null);
   const [semanticReview, setSemanticReview] = useState<SemanticReviewItem[]>([]);
   const [humanRequest, setHumanRequest] = useState<HumanRequest | null>(null);
@@ -95,6 +99,8 @@ export default function Workspace() {
   const [tab, setTab] = useState<WorkspaceTab>("mappings");
   const [debugPanelOpen, setDebugPanelOpen] = useState(false);
   const endRef = useRef<HTMLDivElement>(null);
+  const restoredThreadRef = useRef<string | null>(null);
+  const productActionRef = useRef<string | null>(null);
 
   const mergeActivity = useCallback((events: AgentTraceEvent[]) => {
     setAgentActivity((previous) => {
@@ -170,6 +176,38 @@ export default function Workspace() {
   }, [authenticatedFetch]);
 
   useEffect(() => {
+    const requestedThread = searchParams.get("thread");
+    if (!requestedThread || restoredThreadRef.current === requestedThread) return;
+    restoredThreadRef.current = requestedThread;
+    void openThread(requestedThread);
+  }, [searchParams]);
+
+  useEffect(() => {
+    const productId = searchParams.get("product");
+    if (!productId || searchParams.get("thread")) return;
+    const action = searchParams.get("action") === "refresh" ? "refresh" : "continue";
+    const key = `${productId}:${action}`;
+    if (productActionRef.current === key) return;
+    productActionRef.current = key;
+
+    const start = async () => {
+      const response = await authenticatedFetch(
+        `${API_URL}/api/products/${encodeURIComponent(productId)}`
+      );
+      if (!response.ok) {
+        setWorkspaceError("The saved product could not be loaded.");
+        return;
+      }
+      const detail = (await response.json()) as ProductDetail;
+      await send(
+        `Import product website: ${detail.product.canonicalUrl}`,
+        { refreshRequested: action === "refresh" }
+      );
+    };
+    void start();
+  }, [searchParams, authenticatedFetch]);
+
+  useEffect(() => {
     const researchActive = backgroundJob?.status === "queued" || backgroundJob?.status === "running";
     if ((!busy && !researchActive) || !threadId) return;
     let cancelled = false;
@@ -216,17 +254,42 @@ export default function Workspace() {
       ),
     ]);
     if (messagesResponse.ok) setMessages((await messagesResponse.json()) as ChatMessage[]);
-    if (stateResponse.ok) applyAgentResponse((await stateResponse.json()) as AgentResponse);
+    if (stateResponse.ok) {
+      const state = (await stateResponse.json()) as AgentResponse;
+      applyAgentResponse(state);
+      setRestoredRunNotice(state.status === "failed" ? state.reply : null);
+    }
     void refreshArtifacts(selectedThreadId);
     void refreshBackgroundJobs(selectedThreadId);
   }
 
-  async function send(text: string) {
+  async function deleteThread(selectedThreadId: string) {
+    if (!window.confirm("Delete this chat from Chat History? Product evidence and mapping audit data will remain reusable.")) return;
+    const response = await authenticatedFetch(
+      `${API_URL}/api/threads/${encodeURIComponent(selectedThreadId)}`,
+      { method: "DELETE" }
+    );
+    if (!response.ok) return;
+    setThreads((previous) => previous.filter((item) => item.id !== selectedThreadId));
+    if (threadId === selectedThreadId) {
+      setThreadId(null);
+      setMessages([]);
+      setSemanticReview([]);
+      setHumanRequest(null);
+      setRestoredRunNotice(null);
+    }
+  }
+
+  async function send(
+    text: string,
+    options: { refreshRequested?: boolean } = {}
+  ) {
     const t = text.trim();
     if (!t || busy) return;
 
     const next: ChatMessage[] = [...messages, { role: "user", content: t }];
     setMessages(next);
+    setRestoredRunNotice(null);
     setInput("");
     const activeThreadId = activeThread();
     setBusy(true);
@@ -235,19 +298,28 @@ export default function Workspace() {
       const res = await authenticatedFetch("/agent/messages", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ threadId: activeThreadId, message: t }),
+        body: JSON.stringify({
+          threadId: activeThreadId,
+          message: t,
+          refreshRequested: options.refreshRequested ?? false,
+        }),
       });
       const body = (await res.json()) as AgentResponse | { detail?: string };
       if (!res.ok) {
         throw new Error("detail" in body && body.detail ? body.detail : `Python backend returned ${res.status}`);
       }
       const data = body as AgentResponse;
+      const redirectedToExistingThread = data.threadId !== activeThreadId;
       applyAgentResponse(data);
 
-      setMessages((prev) => [
-        ...prev,
-        { role: "assistant", content: data.reply },
-      ]);
+      if (redirectedToExistingThread) {
+        await openThread(data.threadId);
+      } else {
+        setMessages((prev) => [
+          ...prev,
+          { role: "assistant", content: data.reply },
+        ]);
+      }
     } catch {
       setMessages((prev) => [
         ...prev,
@@ -279,6 +351,7 @@ export default function Workspace() {
         body: JSON.stringify({
           threadId: activeThreadId,
           message: `Import product website: ${url}`,
+          refreshRequested: false,
         }),
       });
       const responseText = await response.text();
@@ -301,12 +374,17 @@ export default function Workspace() {
         );
       }
       const data = body as AgentResponse;
+      const redirectedToExistingThread = data.threadId !== activeThreadId;
       applyAgentResponse(data);
       setWebsiteUrl("");
-      setMessages((previous) => [
-        ...previous,
-        { role: "assistant", content: data.reply },
-      ]);
+      if (redirectedToExistingThread) {
+        await openThread(data.threadId);
+      } else {
+        setMessages((previous) => [
+          ...previous,
+          { role: "assistant", content: data.reply },
+        ]);
+      }
     } catch (error) {
       const message = error instanceof Error ? error.message : "unknown error";
       setMessages((previous) => [
@@ -343,8 +421,8 @@ export default function Workspace() {
     }
   }
 
-  async function submitHumanValue() {
-    if (!threadId || !humanRequest?.requirementId || !humanValue.trim() || busy) return;
+  async function submitHumanValue(useDummy = false) {
+    if (!threadId || !humanRequest?.requirementId || (!useDummy && !humanValue.trim()) || busy) return;
     setBusy(true);
     try {
       const response = await authenticatedFetch(`${API_URL}/api/agent/value`, {
@@ -354,7 +432,8 @@ export default function Workspace() {
           threadId,
           productId: humanRequest.productId,
           requirementId: humanRequest.requirementId,
-          value: humanValue.trim(),
+          value: useDummy ? "" : humanValue.trim(),
+          useDummy,
         }),
       });
       const body = (await response.json()) as AgentResponse | { detail?: string };
@@ -366,7 +445,7 @@ export default function Workspace() {
       setHumanValue("");
       setMessages((previous) => [
         ...previous,
-        { role: "user", content: humanValue.trim() },
+        { role: "user", content: useDummy ? "Use a human-approved DUMMY placeholder." : humanValue.trim() },
         { role: "assistant", content: data.reply },
       ]);
     } catch (error) {
@@ -509,6 +588,8 @@ export default function Workspace() {
       status: "approved",
       mappingOrigin: "human",
       humanReviewed: true,
+      humanActorName: "You",
+      humanValueKind: "verified",
       humanComment: comment?.trim() || null,
       reasoning: "Corrected by you and awaiting trusted backend persistence.",
     };
@@ -637,19 +718,28 @@ export default function Workspace() {
             </button>
           )}
           {threads.length > 0 && (
-            <select
-              aria-label="Conversation history"
-              value={threadId ?? ""}
-              onChange={(event) => void openThread(event.target.value)}
-              className="hidden max-w-44 rounded-lg border border-hairline bg-white px-2 py-1.5 text-[12px] text-ink sm:block"
-            >
-              <option value="" disabled>Conversation history</option>
-              {threads.map((thread) => (
-                <option key={thread.id} value={thread.id}>
-                  {thread.title || thread.id}
-                </option>
-              ))}
-            </select>
+            <div className="hidden items-center gap-1 sm:flex">
+              <select
+                aria-label="Conversation history"
+                value={threadId ?? ""}
+                onChange={(event) => void openThread(event.target.value)}
+                className="max-w-44 rounded-lg border border-hairline bg-white px-2 py-1.5 text-[12px] text-ink"
+              >
+                <option value="" disabled>Chat History</option>
+                {threads.map((thread) => (
+                  <option key={thread.id} value={thread.id}>{thread.title || thread.id}</option>
+                ))}
+              </select>
+              {threadId && (
+                <button
+                  type="button"
+                  onClick={() => void deleteThread(threadId)}
+                  className="rounded-lg border border-hairline px-2 py-1.5 text-[11px] text-red-700 hover:bg-red-50"
+                >
+                  Delete
+                </button>
+              )}
+            </div>
           )}
           <Link href="/products" className="hidden text-[13px] text-muted hover:text-ink sm:inline">
             Products
@@ -700,6 +790,12 @@ export default function Workspace() {
             )}
 
             <div className="mx-auto max-w-md space-y-5">
+              {restoredRunNotice && (
+                <div role="status" className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
+                  <p>{restoredRunNotice}</p>
+                  <Link href="/workspace/assets" className="mt-2 inline-block font-medium underline">Open Assets</Link>
+                </div>
+              )}
               {messages.map((m, i) => (
                 <div
                   key={i}
@@ -793,12 +889,15 @@ export default function Workspace() {
                       className="min-w-0 flex-1 rounded-lg border border-hairline px-3 py-2 text-sm"
                       placeholder="Enter the verified value"
                     />
-                    <button
-                      type="submit"
-                      disabled={!humanValue.trim()}
-                      className="rounded-lg bg-ink px-4 py-2 text-xs font-medium text-white disabled:opacity-30"
-                    >
+                    <button type="submit" disabled={!humanValue.trim()} className="rounded-lg bg-ink px-4 py-2 text-xs font-medium text-white disabled:opacity-30">
                       Save value
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => void submitHumanValue(true)}
+                      className="rounded-lg border border-violet-200 bg-violet-50 px-3 py-2 text-xs font-medium text-violet-700"
+                    >
+                      Use DUMMY
                     </button>
                   </div>
                 </form>

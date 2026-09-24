@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import uuid
 from collections.abc import AsyncIterator, Mapping
 from dataclasses import dataclass, field
@@ -31,7 +32,7 @@ from mia_dpp.config import Settings
 from mia_dpp.domain.product import BackgroundJob, MessageRole, ProductRun, RunStatus
 from mia_dpp.integrations.crawl4ai import Crawl4AIPageLoader
 from mia_dpp.integrations.ddgs import DdgsSearchProvider
-from mia_dpp.persistence.catalogue import LOCAL_USER_ID
+from mia_dpp.persistence.catalogue import ActiveProductRunExists, LOCAL_USER_ID
 from mia_dpp.persistence.workspace import WorkspaceView
 from mia_dpp.runtime.checkpoints import open_checkpointer
 from mia_dpp.runtime.factory import create_artifact_store, create_catalogue
@@ -42,6 +43,8 @@ from mia_dpp.tools.search import SearchProvider
 from mia_dpp.tools.web.tool import WebExtractionTool
 from mia_dpp.workflow.context import MiaContext
 from mia_dpp.workflow.graph import create_graph
+from mia_dpp.workflow.identity import direct_product_url
+from mia_dpp.workflow.state import reset_product_state
 
 
 @dataclass
@@ -118,13 +121,110 @@ class Mia:
     def configured(self) -> bool:
         return self.context.semantic_mapper is not None
 
+    async def reconcile_local_stale_runs(self) -> tuple[ProductRun, ...]:
+        """Retire interrupted local runs that have no live executor or review checkpoint."""
+
+        if not self.settings.local_mode:
+            return ()
+
+        async def inspect(run: ProductRun, user_id: str) -> ProductRun | None:
+            try:
+                allow_live_lease = False
+                if run.status is RunStatus.RUNNING:
+                    if self.context.catalogue.run_lease_is_live(run):
+                        if not self._use_agent_server or await self._agent_server_run_is_active(
+                            run, user_id=user_id
+                        ):
+                            return None
+                        allow_live_lease = True
+                        reason = "No active execution remained after restart; saved product work remains available."
+                    else:
+                        reason = "Execution stopped and its lease expired; saved product work remains available."
+                elif run.status is RunStatus.AWAITING_HUMAN:
+                    if await self._has_review_checkpoint(run, user_id=user_id):
+                        return None
+                    reason = "The pending review checkpoint is unavailable; saved product work remains available."
+                else:
+                    return None
+                return self.context.catalogue.interrupt_unresumable_run(
+                    run, reason=reason, allow_live_lease=allow_live_lease
+                )
+            except Exception:
+                logging.exception("Could not inspect run %s during local recovery", run.id)
+                return None
+
+        results = [
+            await inspect(run, user_id)
+            for run, user_id in self.context.catalogue.list_active_runs_with_owners()
+        ]
+        return tuple(run for run in results if run is not None)
+
+    async def _agent_server_run_is_active(self, run: ProductRun, *, user_id: str) -> bool:
+        thread_id = self._agent_server_thread_id(run.thread_id, user_id)
+        try:
+            for status in ("running", "pending"):
+                if await self._agent_server_client().runs.list(
+                    thread_id, status=status, limit=1
+                ):
+                    return True
+        except httpx.HTTPStatusError as error:
+            if error.response.status_code != 404:
+                raise
+        return False
+
+    async def _has_review_checkpoint(self, run: ProductRun, *, user_id: str) -> bool:
+        if self._use_agent_server:
+            snapshot = await self._agent_server_snapshot(run.thread_id, user_id)
+            if snapshot is not None:
+                return self._snapshot_matches_review(snapshot, run.id)
+        graph = await self._ensure_graph()
+        snapshot = await graph.aget_state(
+            self._config(run.thread_id, user_id), subgraphs=True
+        )
+        return self._snapshot_matches_review(snapshot, run.id)
+
+    @staticmethod
+    def _snapshot_matches_review(snapshot: Any, run_id: str) -> bool:
+        if Mia._snapshot_values(snapshot).get("run_id") != run_id:
+            return False
+        interrupts = snapshot.get("interrupts", ()) if isinstance(snapshot, Mapping) else getattr(snapshot, "interrupts", ())
+        if interrupts:
+            return True
+        tasks = snapshot.get("tasks", ()) if isinstance(snapshot, Mapping) else getattr(snapshot, "tasks", ())
+        for task in tasks:
+            task_interrupts = task.get("interrupts", ()) if isinstance(task, Mapping) else getattr(task, "interrupts", ())
+            if task_interrupts:
+                return True
+            nested = task.get("state") if isinstance(task, Mapping) else getattr(task, "state", None)
+            if nested is not None and Mia._snapshot_matches_review(nested, run_id):
+                return True
+        return False
+
     async def message(
         self,
         request: AgentRequest,
         *,
         user_id: str = LOCAL_USER_ID,
     ) -> AgentResponse:
-        thread_id = request.thread_id or f"thread-{uuid.uuid4().hex}"
+        requested_thread_id = request.thread_id
+        active_product_run: ProductRun | None = None
+        redirected_to_active_thread = False
+        direct_url = direct_product_url(request.message)
+        if direct_url is not None:
+            product, _ = self.context.catalogue.get_or_create_product(
+                direct_url,
+                user_id=user_id,
+            )
+            active = self.context.catalogue.latest_active_run(product.id, user_id=user_id)
+            if active is not None:
+                active_product_run = active
+                redirected_to_active_thread = active.thread_id != requested_thread_id
+                thread_id = active.thread_id
+            else:
+                thread_id = requested_thread_id or f"thread-{uuid.uuid4().hex}"
+        else:
+            thread_id = requested_thread_id or f"thread-{uuid.uuid4().hex}"
+
         thread_exists = self.context.catalogue.get_thread(thread_id, user_id=user_id) is not None
         self.context.catalogue.get_or_create_thread(
             thread_id,
@@ -148,7 +248,7 @@ class Mia:
         if not remote:
             graph = await self._ensure_graph()
             config = self._config(thread_id, user_id)
-            snapshot = await graph.aget_state(config)
+            snapshot = await graph.aget_state(config, subgraphs=True)
         assert snapshot is not None
         trace_offset = len(self.store.list_events(thread_id, user_id=user_id))
         message = self.context.catalogue.add_message(
@@ -158,6 +258,111 @@ class Mia:
             user_id=user_id,
         )
         values = self._snapshot_values(snapshot)
+
+        if active_product_run is not None:
+            lease_live = self.context.catalogue.run_lease_is_live(active_product_run)
+            if (
+                request.refresh_requested
+                and active_product_run.status is RunStatus.RUNNING
+                and lease_live
+            ):
+                self.context.catalogue.request_thread_refresh(thread_id, user_id=user_id)
+                self.context.catalogue.assign_message_to_run(message.id, active_product_run.id)
+                if values:
+                    response = self._response_view.build(values, trace_offset=trace_offset)
+                else:
+                    response = AgentResponse(
+                        thread_id=active_product_run.thread_id,
+                        reply="Existing work for this product is still running.",
+                        status=AgentStatus.RUNNING,
+                        decision_summary="Source refresh queued behind the live product execution.",
+                    )
+                response = response.model_copy(
+                    update={
+                        "thread_id": active_product_run.thread_id,
+                        "reply": (
+                            "Source refresh is queued in this same chat and will start as soon as "
+                            "the current live execution safely returns.\n\n" + response.reply
+                        ),
+                        "decision_summary": (
+                            "Kept the live execution and queued refresh instead of terminating it."
+                        ),
+                    }
+                )
+                self._record_assistant(response, user_id=user_id)
+                return response
+
+            should_restart = request.refresh_requested or (
+                active_product_run.status is RunStatus.RUNNING and not lease_live
+            )
+            if should_restart:
+                reason = (
+                    "Source refresh requested; restarted product work in the same chat."
+                    if request.refresh_requested
+                    else (
+                        "Recovered a RUNNING run only after its execution lease expired, "
+                        "using a new workflow generation in the same chat."
+                    )
+                )
+                response = await self._restart_product_work_in_same_thread(
+                    thread_id=thread_id,
+                    user_id=user_id,
+                    active_run=active_product_run,
+                    product_url=direct_url or "",
+                    user_message=request.message,
+                    refresh_requested=request.refresh_requested,
+                    previous_values=values,
+                    trace_offset=trace_offset,
+                    message_id=message.id,
+                    reason=reason,
+                    allow_terminal=False,
+                )
+                if redirected_to_active_thread:
+                    response = response.model_copy(
+                        update={
+                            "reply": (
+                                "This product already had an active chat, so I continued there.\n\n"
+                                + response.reply
+                            )
+                        }
+                    )
+                return response
+
+            self.context.catalogue.assign_message_to_run(message.id, active_product_run.id)
+            if values:
+                response = self._response_view.build(values, trace_offset=trace_offset)
+            else:
+                response = AgentResponse(
+                    thread_id=active_product_run.thread_id,
+                    reply="Existing work for this product is already active.",
+                    status=(
+                        AgentStatus.AWAITING_REVIEW
+                        if active_product_run.status is RunStatus.AWAITING_HUMAN
+                        else AgentStatus.RUNNING
+                    ),
+                    decision_summary="Reused the active product workflow.",
+                )
+            response = response.model_copy(
+                update={
+                    "thread_id": active_product_run.thread_id,
+                    "reply": (
+                        (
+                            "This product already has active work, so I merged this request into "
+                            "the existing chat.\n\n"
+                        )
+                        if redirected_to_active_thread
+                        else ""
+                    )
+                    + response.reply,
+                    "decision_summary": (
+                        "The existing active product workflow was reused instead of starting "
+                        "a concurrent run."
+                    ),
+                }
+            )
+            self._record_assistant(response, user_id=user_id)
+            return response
+
         if self._snapshot_interrupt(snapshot) is not None:
             self._assign_message_to_latest_run(message.id, thread_id, user_id=user_id)
             response = self._response_view.build(values, trace_offset=trace_offset)
@@ -169,6 +374,7 @@ class Mia:
             "thread_id": thread_id,
             "user_id": user_id,
             "user_message": request.message,
+            "refresh_requested": request.refresh_requested,
         }
         if initial:
             update.update(
@@ -180,6 +386,21 @@ class Mia:
                     "status": "running",
                 }
             )
+        invocation_thread = self.context.catalogue.get_thread(thread_id, user_id=user_id)
+        invocation_generation = (
+            invocation_thread.workflow_generation if invocation_thread is not None else 0
+        )
+        invocation_run = (
+            self.context.catalogue.get_run(str(values["run_id"]))
+            if values.get("run_id")
+            else self.context.catalogue.run_for_thread_generation(
+                thread_id,
+                invocation_generation,
+                user_id=user_id,
+            )
+        )
+        invocation_run_id = invocation_run.id if invocation_run is not None else None
+
         if not self.configured and "http" in request.message.casefold():
             response = AgentResponse(
                 thread_id=thread_id,
@@ -195,12 +416,71 @@ class Mia:
                 result = await self._run_agent_server(thread_id, user_id, run_input=update)
             else:
                 result = await graph.ainvoke(update, config=config, context=self.context)
+                result = self._snapshot_values(await graph.aget_state(config, subgraphs=True))
+        except ActiveProductRunExists as conflict:
+            active = conflict.run
+            self.context.catalogue.add_message(
+                active.thread_id,
+                MessageRole.USER,
+                request.message,
+                run_id=active.id,
+                user_id=user_id,
+            )
+            if not thread_exists and thread_id != active.thread_id:
+                self.context.catalogue.delete_thread(thread_id, user_id=user_id)
+            response = await self.thread_state(active.thread_id, user_id=user_id)
+            response = response.model_copy(
+                update={
+                    "thread_id": active.thread_id,
+                    "reply": (
+                        "This product already has active work, so I merged this request into "
+                        "the existing chat.\n\n" + response.reply
+                    ),
+                    "decision_summary": (
+                        "A concurrent product run was prevented and the existing chat was reused."
+                    ),
+                }
+            )
+            self._record_assistant(response, user_id=user_id)
+            return response
         except Exception as error:
-            self._assign_message_to_latest_run(message.id, thread_id, user_id=user_id)
-            self._record_failure(thread_id, error, user_id=user_id)
+            if invocation_run_id is not None:
+                self.context.catalogue.assign_message_to_run(message.id, invocation_run_id)
+                self._record_failure(
+                    thread_id,
+                    error,
+                    user_id=user_id,
+                    run_id=invocation_run_id,
+                )
             raise
-        self._assign_message_to_latest_run(message.id, thread_id, user_id=user_id)
-        response = self._response_view.build(dict(result), trace_offset=trace_offset)
+        result_values = dict(result)
+        result_run_id = result_values.get("run_id")
+        if result_run_id:
+            self.context.catalogue.assign_message_to_run(message.id, str(result_run_id))
+        thread = self.context.catalogue.get_thread(thread_id, user_id=user_id)
+        if (
+            thread is not None
+            and thread.pending_refresh_requested
+            and result_values.get("product_id")
+            and result_values.get("run_id")
+            and result_values.get("product_url")
+        ):
+            completed_run = self.context.catalogue.get_run(str(result_values["run_id"]))
+            if completed_run is not None:
+                return await self._restart_product_work_in_same_thread(
+                    thread_id=thread_id,
+                    user_id=user_id,
+                    active_run=completed_run,
+                    product_url=str(result_values["product_url"]),
+                    user_message="Refresh sources requested while previous product work was running.",
+                    refresh_requested=True,
+                    previous_values=result_values,
+                    trace_offset=trace_offset,
+                    message_id=None,
+                    reason="Queued source refresh started after the live execution returned.",
+                    allow_terminal=True,
+                )
+        response = self._response_view.build(result_values, trace_offset=trace_offset)
         self._record_assistant(response, user_id=user_id)
         return response
 
@@ -247,8 +527,20 @@ class Mia:
         )
         if snapshot is None:
             graph = await self._ensure_graph()
-            snapshot = await graph.aget_state(self._config(thread_id, user_id))
+            snapshot = await graph.aget_state(
+                self._config(thread_id, user_id), subgraphs=True
+            )
         values = self._snapshot_values(snapshot)
+        latest_run = self._latest_run(thread_id, user_id=user_id)
+        if latest_run is not None and latest_run.status is RunStatus.INCOMPLETE and (
+            not values or values.get("run_id") in {None, latest_run.id}
+        ):
+            return AgentResponse(
+                thread_id=thread_id,
+                reply="This workflow was interrupted. Continue saved work from Assets.",
+                status=AgentStatus.FAILED,
+                decision_summary="The previous execution stopped; durable product work remains available.",
+            )
         if not values:
             return AgentResponse(
                 thread_id=thread_id,
@@ -290,6 +582,7 @@ class Mia:
             user_id=user_id,
         )
         self._assign_message_to_latest_run(user_message.id, thread_id, user_id=user_id)
+        failing_run_id: str | None = None
         try:
             snapshot = (
                 await self._agent_server_snapshot(thread_id, user_id)
@@ -297,6 +590,12 @@ class Mia:
                 else None
             )
             if snapshot is not None:
+                snapshot_values = self._snapshot_values(snapshot)
+                failing_run_id = (
+                    str(snapshot_values["run_id"])
+                    if snapshot_values.get("run_id")
+                    else None
+                )
                 result = await self._run_agent_server(
                     thread_id, user_id, command={"resume": payload}
                 )
@@ -304,18 +603,154 @@ class Mia:
                 from langgraph.types import Command
 
                 graph = await self._ensure_graph()
+                local_snapshot = await graph.aget_state(
+                    self._config(thread_id, user_id), subgraphs=True
+                )
+                snapshot_values = self._snapshot_values(local_snapshot)
+                failing_run_id = (
+                    str(snapshot_values["run_id"])
+                    if snapshot_values.get("run_id")
+                    else None
+                )
                 result = await graph.ainvoke(
                     Command(resume=payload),
                     config=self._config(thread_id, user_id),
                     context=self.context,
                 )
+                result = self._snapshot_values(
+                    await graph.aget_state(self._config(thread_id, user_id), subgraphs=True)
+                )
         except ValueError as error:
-            self._record_rejected_input(thread_id, error, user_id=user_id)
+            self._record_rejected_input(
+                thread_id,
+                error,
+                user_id=user_id,
+                run_id=failing_run_id,
+            )
             raise
         except Exception as error:
-            self._record_failure(thread_id, error, user_id=user_id)
+            self._record_failure(
+                thread_id,
+                error,
+                user_id=user_id,
+                run_id=failing_run_id,
+            )
             raise
         response = self._response_view.build(dict(result), trace_offset=trace_offset)
+        self._record_assistant(response, user_id=user_id)
+        return response
+
+    async def _restart_product_work_in_same_thread(
+        self,
+        *,
+        thread_id: str,
+        user_id: str,
+        active_run: ProductRun,
+        product_url: str,
+        user_message: str,
+        refresh_requested: bool,
+        previous_values: dict[str, Any],
+        trace_offset: int,
+        message_id: str | None,
+        reason: str,
+        allow_terminal: bool,
+    ) -> AgentResponse:
+        """Recover or refresh product work atomically in the same visible chat."""
+
+        thread = self.context.catalogue.get_thread(thread_id, user_id=user_id)
+        if thread is None:
+            raise KeyError(thread_id)
+        durable = self.context.catalogue.get_product_work_snapshot(
+            active_run.product_id,
+            user_id=user_id,
+        )
+        replacement = self.context.catalogue.claim_product_restart(
+            user_id=user_id,
+            product_id=active_run.product_id,
+            expected_run_id=active_run.id,
+            expected_generation=thread.workflow_generation,
+            reason=reason,
+            refresh_requested=refresh_requested,
+            require_expired_lease=(
+                active_run.status is RunStatus.RUNNING and not allow_terminal
+            ),
+            allow_terminal=allow_terminal,
+        )
+        update: dict[str, Any] = {
+            **reset_product_state(product_url=product_url),
+            "thread_id": thread_id,
+            "user_id": user_id,
+            "user_message": user_message,
+            "product_id": replacement.product_id,
+            "run_id": replacement.id,
+            "workflow_generation": replacement.workflow_generation,
+            "source_generation": (
+                (
+                    durable.source_generation + 1
+                    if refresh_requested
+                    else durable.source_generation
+                )
+                if durable is not None
+                else 1
+            ),
+            "refresh_requested": refresh_requested,
+            "reuse_mode": (
+                "refresh_sources" if refresh_requested else "continue_saved_work"
+            ),
+            "reuse_prior_work": bool(
+                not refresh_requested and durable is not None and durable.evidence_artifact_id
+            ),
+            "seeded_from_run_id": active_run.id,
+            "evidence_artifact_id": (
+                durable.evidence_artifact_id
+                if durable is not None and durable.evidence_artifact_id
+                else ""
+            ),
+            "reviewed_mapping_artifact_id": (
+                durable.reviewed_mapping_artifact_id
+                if durable is not None and durable.reviewed_mapping_artifact_id
+                else ""
+            ),
+            "product_snapshot_version": durable.version if durable is not None else 0,
+            "discovery_history_json": previous_values.get("discovery_history_json", "[]"),
+            "target_submodels": previous_values.get(
+                "target_submodels",
+                ("digital_nameplate", "technical_data"),
+            ),
+            "max_research_attempts": previous_values.get("max_research_attempts", 2),
+            "research_attempts": 0,
+            "status": "running",
+        }
+        try:
+            if self._use_agent_server:
+                result = await self._run_agent_server(thread_id, user_id, run_input=update)
+            else:
+                graph = await self._ensure_graph()
+                result = await graph.ainvoke(
+                    update,
+                    config=self._config(thread_id, user_id),
+                    context=self.context,
+                )
+                result = self._snapshot_values(
+                    await graph.aget_state(self._config(thread_id, user_id), subgraphs=True)
+                )
+        except Exception as error:
+            self._record_failure(
+                thread_id,
+                error,
+                user_id=user_id,
+                run_id=replacement.id,
+            )
+            raise
+        if message_id is not None:
+            self.context.catalogue.assign_message_to_run(message_id, replacement.id)
+        response = self._response_view.build(dict(result), trace_offset=trace_offset)
+        response = response.model_copy(
+            update={
+                "thread_id": thread_id,
+                "decision_summary": reason,
+            }
+        )
         self._record_assistant(response, user_id=user_id)
         return response
 
@@ -341,17 +776,23 @@ class Mia:
             self._agent_client = get_client(url=self.settings.agent_server_url)
         return self._agent_client
 
-    @staticmethod
-    def _agent_server_thread_id(thread_id: str, user_id: str) -> str:
-        # Keep arbitrary public/API thread IDs and user identifiers out of Agent Server URLs.
-        return str(uuid.uuid5(uuid.NAMESPACE_URL, f"mia-dpp:{user_id}:{thread_id}"))
+    def _agent_server_thread_id(self, thread_id: str, user_id: str) -> str:
+        # Workflow generations let one visible chat restart safely without reusing an old checkpoint.
+        thread = self.context.catalogue.get_thread(thread_id, user_id=user_id)
+        generation = thread.workflow_generation if thread is not None else 0
+        return str(
+            uuid.uuid5(
+                uuid.NAMESPACE_URL,
+                f"mia-dpp:{user_id}:{thread_id}:generation:{generation}",
+            )
+        )
 
     async def _agent_server_snapshot(self, thread_id: str, user_id: str) -> Any | None:
         if not self._use_agent_server:
             return None
         try:
             return await self._agent_server_client().threads.get_state(
-                self._agent_server_thread_id(thread_id, user_id)
+                self._agent_server_thread_id(thread_id, user_id), subgraphs=True
             )
         except httpx.HTTPStatusError as error:
             if error.response.status_code == 404:
@@ -607,7 +1048,16 @@ class Mia:
     @staticmethod
     def _snapshot_values(snapshot: Any) -> dict[str, Any]:
         values = snapshot.get("values", {}) if isinstance(snapshot, Mapping) else snapshot.values
-        return dict(values) if isinstance(values, Mapping) else {}
+        result = dict(values) if isinstance(values, Mapping) else {}
+        tasks = snapshot.get("tasks", ()) if isinstance(snapshot, Mapping) else snapshot.tasks
+        for task in tasks:
+            interrupts = task.get("interrupts", ()) if isinstance(task, Mapping) else task.interrupts
+            if not interrupts:
+                continue
+            nested = task.get("state") if isinstance(task, Mapping) else task.state
+            if nested is not None:
+                result.update(Mia._snapshot_values(nested))
+        return result
 
     @staticmethod
     def _snapshot_status(snapshot: Any) -> str:
@@ -683,9 +1133,24 @@ class Mia:
         if run is not None:
             self.context.catalogue.assign_message_to_run(message_id, run.id)
 
-    def _record_failure(self, thread_id: str, error: Exception, *, user_id: str) -> None:
-        run = self._latest_active_run(thread_id, user_id=user_id)
-        if run is None:
+    def _record_failure(
+        self,
+        thread_id: str,
+        error: Exception,
+        *,
+        user_id: str,
+        run_id: str | None = None,
+    ) -> None:
+        run = (
+            self.context.catalogue.get_run(run_id)
+            if run_id is not None
+            else self._latest_active_run(thread_id, user_id=user_id)
+        )
+        if run is None or not self.context.catalogue.run_is_current_generation(run.id):
+            return
+        if run.status not in {RunStatus.RUNNING, RunStatus.AWAITING_HUMAN}:
+            return
+        if self.context.catalogue.get_thread(run.thread_id, user_id=user_id) is None:
             return
         detail = str(error) or type(error).__name__
         self.context.catalogue.add_event(
@@ -702,15 +1167,25 @@ class Mia:
         error: ValueError,
         *,
         user_id: str,
+        run_id: str | None = None,
     ) -> None:
-        run = self._latest_active_run(thread_id, user_id=user_id)
-        if run is not None:
-            self.context.catalogue.add_event(
-                run.id,
-                "workflow.input_rejected",
-                "Rejected invalid human input without advancing the workflow.",
-                metadata={"error": str(error)},
-            )
+        run = (
+            self.context.catalogue.get_run(run_id)
+            if run_id is not None
+            else self._latest_active_run(thread_id, user_id=user_id)
+        )
+        if run is None or not self.context.catalogue.run_is_current_generation(run.id):
+            return
+        if run.status not in {RunStatus.RUNNING, RunStatus.AWAITING_HUMAN}:
+            return
+        if self.context.catalogue.get_thread(run.thread_id, user_id=user_id) is None:
+            return
+        self.context.catalogue.add_event(
+            run.id,
+            "workflow.input_rejected",
+            "Rejected invalid human input without advancing the workflow.",
+            metadata={"error": str(error)},
+        )
 
     def _latest_active_run(self, thread_id: str, *, user_id: str) -> ProductRun | None:
         active = {RunStatus.RUNNING, RunStatus.AWAITING_HUMAN}
@@ -740,7 +1215,12 @@ class Mia:
                 return cast(object, interrupts[0])
         return None
 
-    @staticmethod
-    def _config(thread_id: str, user_id: str) -> dict[str, dict[str, str]]:
-        # Clerk users may choose the same client-side thread ID; checkpoint keys must not collide.
-        return {"configurable": {"thread_id": f"{user_id}:{thread_id}"}}
+    def _config(self, thread_id: str, user_id: str) -> dict[str, dict[str, str]]:
+        # A new workflow generation creates a clean checkpoint namespace inside the same visible chat.
+        thread = self.context.catalogue.get_thread(thread_id, user_id=user_id)
+        generation = thread.workflow_generation if thread is not None else 0
+        return {
+            "configurable": {
+                "thread_id": f"{user_id}:{thread_id}:generation:{generation}"
+            }
+        }

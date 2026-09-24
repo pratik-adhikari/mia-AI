@@ -19,6 +19,7 @@ def create_app(mia: Mia | None = None) -> FastAPI:
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
         try:
+            await application.reconcile_local_stale_runs()
             yield
         finally:
             await application.close()

@@ -48,6 +48,9 @@ class EvidenceRecord(WireModel):
     unit: str | None = None
     context_path: tuple[str, ...] = ()
     source_type: SourceType = SourceType.WEBSITE
+    human_actor_name: str | None = Field(default=None, max_length=200)
+    human_value_kind: Literal["verified", "dummy"] | None = None
+    human_reason: str | None = Field(default=None, max_length=1000)
     source_uri: str = Field(min_length=1)
     source_content_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     source_location: SourceLocation

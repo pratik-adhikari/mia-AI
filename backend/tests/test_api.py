@@ -251,3 +251,65 @@ def test_thread_state_endpoint_restores_owned_workspace(
     assert response.status_code == 200
     assert response.json()["threadId"] == "thread-restored"
     assert response.json()["status"] == "awaiting_review"
+
+
+
+def test_review_actor_name_is_bound_to_authenticated_identity(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, object] = {}
+
+    async def review(payload: object, *, user_id: str) -> AgentResponse:
+        captured["payload"] = payload
+        return AgentResponse(
+            thread_id="thread-review-auth",
+            reply="reviewed",
+            status=AgentStatus.COMPLETED,
+            decision_summary="reviewed",
+        )
+
+    monkeypatch.setattr(app.state.mia, "review", review)
+    response = request(
+        "POST",
+        "/api/agent/review",
+        {
+            "threadId": "thread-review-auth",
+            "productId": "product-review-auth",
+            "actorName": "Forged reviewer",
+            "decisions": [{"reviewId": "review-1", "decision": "keep"}],
+        },
+    )
+
+    assert response.status_code == 200
+    assert getattr(captured["payload"], "actor_name") == "Local user"
+
+
+def test_human_value_actor_name_is_bound_to_authenticated_identity(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, object] = {}
+
+    async def provide_value(payload: object, *, user_id: str) -> AgentResponse:
+        captured["payload"] = payload
+        return AgentResponse(
+            thread_id="thread-value-auth",
+            reply="recorded",
+            status=AgentStatus.COMPLETED,
+            decision_summary="recorded",
+        )
+
+    monkeypatch.setattr(app.state.mia, "provide_value", provide_value)
+    response = request(
+        "POST",
+        "/api/agent/value",
+        {
+            "threadId": "thread-value-auth",
+            "productId": "product-value-auth",
+            "requirementId": "req-value-auth",
+            "value": "example",
+            "actorName": "Forged reviewer",
+        },
+    )
+
+    assert response.status_code == 200
+    assert getattr(captured["payload"], "actor_name") == "Local user"

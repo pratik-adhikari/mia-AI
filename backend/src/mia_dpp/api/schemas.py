@@ -7,7 +7,8 @@ from typing import Literal
 from mia_dpp.domain.base import WireModel
 from mia_dpp.domain.evidence import EvidenceRecord
 from mia_dpp.domain.mappings import FieldMapping
-from mia_dpp.domain.product import DppVersion, ProductRecord, ProductRun
+from mia_dpp.domain.product import DppVersion, ProductIdentifier, ProductRecord, ProductRun
+from mia_dpp.domain.product_work import HumanReviewRecord, ProductWorkSnapshot
 from mia_dpp.storage.models import StoredArtifact
 
 
@@ -29,7 +30,17 @@ class HealthResponse(WireModel):
 class ProductLibraryItem(WireModel):
     product: ProductRecord
     latest_dpp: DppVersion | None = None
+    latest_run: ProductRun | None = None
     run_count: int = 0
+    resumable: bool = False
+    resume_thread_id: str | None = None
+    workflow_status: str = "idle"
+    human_reviewed_mappings: int = 0
+    human_dummy_mappings: int = 0
+    human_review_count: int = 0
+    last_human_reviewer: str | None = None
+    unresolved_required_count: int = 0
+    snapshot: ProductWorkSnapshot | None = None
 
 
 class ProductDetail(WireModel):
@@ -37,6 +48,10 @@ class ProductDetail(WireModel):
     runs: tuple[ProductRun, ...] = ()
     dpp_versions: tuple[DppVersion, ...] = ()
     artifacts: tuple[StoredArtifact, ...] = ()
+    snapshot: ProductWorkSnapshot | None = None
+    snapshot_history: tuple[ProductWorkSnapshot, ...] = ()
+    human_reviews: tuple[HumanReviewRecord, ...] = ()
+    identifiers: tuple[ProductIdentifier, ...] = ()
 
 
 class StorageStatus(WireModel):

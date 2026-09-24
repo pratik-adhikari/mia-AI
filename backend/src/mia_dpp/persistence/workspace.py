@@ -39,7 +39,7 @@ class WorkspaceView:
         allowed = {item.id for item in self._stored(thread_id, user_id=user_id)}
         if artifact_id not in allowed:
             raise KeyError("unknown artifact")
-        artifact = self._catalogue.get_artifact(artifact_id)
+        artifact = self._catalogue.get_artifact(artifact_id, user_id=user_id)
         if artifact is None:
             raise KeyError("unknown artifact")
         return self._view(artifact), self._artifacts.get(artifact)
@@ -107,8 +107,12 @@ class WorkspaceView:
             "jsonArtifacts": contents,
         }
 
-    def list_mapping_knowledge(self) -> tuple[MappingKnowledgeEntry, ...]:
-        return self._catalogue.list_mapping_knowledge()
+    def list_mapping_knowledge(
+        self,
+        *,
+        user_id: str = LOCAL_USER_ID,
+    ) -> tuple[MappingKnowledgeEntry, ...]:
+        return self._catalogue.list_mapping_knowledge(user_id=user_id)
 
     def _stored(self, thread_id: str, *, user_id: str) -> tuple[StoredArtifact, ...]:
         run_ids = tuple(

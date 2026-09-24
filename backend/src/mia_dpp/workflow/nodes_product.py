@@ -14,8 +14,13 @@ if TYPE_CHECKING:
 from mia_dpp.canonical import sha256_json
 from mia_dpp.domain.evidence import ExtractedAsset, ProductKnowledgePackage
 from mia_dpp.domain.product import RunStatus
+from mia_dpp.domain.product_work import ProductWorkSnapshot, ProductWorkStage, ReuseMode
+from mia_dpp.services.product_reuse import ProductReuseService
 from mia_dpp.workflow.context import MiaContext
+from mia_dpp.services.product_identifiers import discover_product_identifiers
+from mia_dpp.persistence.catalogue import ActiveProductRunExists, ProductIdentifierConflict
 from mia_dpp.workflow.presentation import evidence_text, product_image_url
+from mia_dpp.workflow.product_snapshot import update_product_snapshot
 from mia_dpp.workflow.state import MiaWorkflowState, reset_product_state
 from mia_dpp.workflow.workspace import RunWorkspace
 
@@ -35,32 +40,105 @@ async def resolve_product(
         state["product_url"],
         user_id=state["user_id"],
     )
+    active = catalogue.latest_active_run(product.id, user_id=state["user_id"])
+    if active is not None:
+        if active.thread_id != state["thread_id"]:
+            raise ActiveProductRunExists(active)
+        snapshot = catalogue.get_product_work_snapshot(product.id, user_id=state["user_id"])
+        return {
+            "product_id": product.id,
+            "run_id": active.id,
+            "reuse_mode": ReuseMode.RESUME_CHECKPOINT.value,
+            "reuse_prior_work": True,
+            "seeded_from_run_id": active.id,
+            "evidence_artifact_id": (
+                snapshot.evidence_artifact_id if snapshot and snapshot.evidence_artifact_id else ""
+            ),
+            "reviewed_mapping_artifact_id": (
+                snapshot.reviewed_mapping_artifact_id
+                if snapshot and snapshot.reviewed_mapping_artifact_id
+                else ""
+            ),
+            "product_name": product.name or "",
+            "manufacturer": product.manufacturer or "",
+            "image_url": product.image_url or "",
+            "product_snapshot_version": snapshot.version if snapshot is not None else 0,
+            "workflow_generation": active.workflow_generation,
+            "source_generation": snapshot.source_generation if snapshot is not None else 0,
+            "status": (
+                "awaiting_human"
+                if active.status is RunStatus.AWAITING_HUMAN
+                else "running"
+            ),
+        }
+
+    refresh_requested = state.get("refresh_requested", False)
+    durable_snapshot = catalogue.get_product_work_snapshot(
+        product.id,
+        user_id=state["user_id"],
+    )
+    decision = ProductReuseService(
+        catalogue,
+        runtime.context.artifacts,
+    ).decide(
+        product.id,
+        user_id=state["user_id"],
+        refresh_requested=refresh_requested,
+    )
+    base_source_generation = (
+        durable_snapshot.source_generation if durable_snapshot is not None else 0
+    )
+    source_generation = (
+        base_source_generation + 1
+        if decision.mode in {ReuseMode.FRESH, ReuseMode.REFRESH_SOURCES}
+        else base_source_generation
+    )
+    if source_generation == 0:
+        source_generation = 1
     cached = (
-        None
-        if state.get("refresh_requested", False)
-        else catalogue.latest_successful_dpp(product.id, user_id=state["user_id"])
+        catalogue.latest_successful_dpp(product.id, user_id=state["user_id"])
+        if decision.mode is ReuseMode.REUSE_COMPLETED_DPP
+        else None
     )
     run = catalogue.start_run(
         product.id,
         state["thread_id"],
         user_id=state["user_id"],
-        refresh_requested=state.get("refresh_requested", False),
+        refresh_requested=refresh_requested,
         reused_from_run_id=cached.run_id if cached else None,
+        seeded_from_run_id=decision.seeded_from_run_id,
     )
     catalogue.add_event(
         run.id,
         "product.resolved",
         "Resolved product identity and checked the durable DPP cache.",
-        metadata={"cacheHit": cached is not None, "canonicalUrl": product.canonical_url},
+        metadata={
+            "cacheHit": cached is not None,
+            "reuseMode": decision.mode.value,
+            "reusedPriorWork": decision.mode is ReuseMode.CONTINUE_SAVED_WORK,
+            "seededFromRunId": decision.seeded_from_run_id,
+            "canonicalUrl": product.canonical_url,
+        },
     )
     return {
         "product_id": product.id,
         "run_id": run.id,
         "cache_hit": cached is not None,
-        "reused_dpp_version_id": cached.id if cached else "",
+        "reuse_mode": decision.mode.value,
+        "reuse_prior_work": decision.mode is ReuseMode.CONTINUE_SAVED_WORK,
+        "seeded_from_run_id": decision.seeded_from_run_id or "",
+        "evidence_artifact_id": decision.evidence_artifact_id or "",
+        "reviewed_mapping_artifact_id": decision.reviewed_mapping_artifact_id or "",
+        "background_job_id": decision.pending_research_job_id or "",
+        "reused_dpp_version_id": decision.reused_dpp_version_id or "",
         "product_name": product.name or "",
         "manufacturer": product.manufacturer or "",
         "image_url": product.image_url or "",
+        "product_snapshot_version": (
+            durable_snapshot.version if durable_snapshot is not None else 0
+        ),
+        "workflow_generation": run.workflow_generation,
+        "source_generation": source_generation,
         "status": "reused" if cached else "running",
         "max_research_attempts": state.get("max_research_attempts", 2),
     }
@@ -101,6 +179,52 @@ async def extract_evidence(
     runtime: Runtime[MiaContext],
 ) -> dict[str, Any]:
     work = RunWorkspace(state, runtime.context)
+    if (
+        state.get("reuse_prior_work")
+        and state.get("evidence_artifact_id")
+        and not state.get("refresh_requested", False)
+    ):
+        prior_id = work.state_id("evidence_artifact_id")
+        package = work.load(prior_id, ProductKnowledgePackage)
+        evidence_id = work.put_model(
+            "evidence/product-knowledge.json",
+            package,
+            derived_from=(prior_id,),
+        )
+        source_urls = tuple(dict.fromkeys(item.final_url for item in package.acquired_sources))
+        fingerprint = sha256_json(
+            {
+                "sources": [item.content_sha256 for item in package.acquired_sources],
+                "evidence": [item.id for item in package.evidence],
+            }
+        )
+        work.event(
+            "product.work_reused",
+            f"Reused {len(package.evidence)} persisted evidence records without crawling again.",
+            metadata={
+                "seededFromRunId": state.get("seeded_from_run_id"),
+                "priorEvidenceArtifactId": prior_id,
+                "evidenceArtifactId": evidence_id,
+            },
+        )
+        snapshot = update_product_snapshot(
+            work,
+            ProductWorkStage.EVIDENCE,
+            template_keys=state.get("target_submodels", ()),
+            evidence_artifact_id=evidence_id,
+            reviewed_mapping_artifact_id=state.get("reviewed_mapping_artifact_id") or None,
+            source_fingerprint=fingerprint,
+            evidence_fingerprint=fingerprint,
+        )
+        return {
+            "evidence_artifact_id": evidence_id,
+            "known_source_urls": source_urls,
+            "product_name": package.product_name,
+            "source_fingerprint": fingerprint,
+            "evidence_fingerprint": fingerprint,
+            "product_snapshot_version": snapshot.version,
+        }
+
     total_started = perf_counter()
     crawl_started = perf_counter()
     incoming = await work.ctx.web_tool.extract(state["product_url"])
@@ -201,15 +325,51 @@ async def extract_evidence(
     product = work.ctx.catalogue.get_product(work.product_id, user_id=work.user_id)
     if product is None:
         raise KeyError(work.product_id)
+    identifiers = discover_product_identifiers(
+        package,
+        manufacturer=manufacturer or product.manufacturer,
+    )
+    possible_duplicate_ids: list[str] = []
+    for identifier in identifiers:
+        try:
+            work.ctx.catalogue.register_product_identifier(
+                identifier,
+                user_id=work.user_id,
+                run_id=work.run_id,
+            )
+        except ProductIdentifierConflict as error:
+            possible_duplicate_ids.append(error.existing_product_id)
+    manufacturer_product_id = next(
+        (
+            item.value
+            for item in identifiers
+            if item.scheme in {"manufacturer_part_number", "manufacturer_article_number"}
+            and item.role.value == "identity"
+        ),
+        None,
+    )
     work.ctx.catalogue.update_product(
         product.model_copy(
             update={
                 "name": package.product_name,
                 "manufacturer": manufacturer or product.manufacturer,
+                "manufacturer_product_id": (
+                    product.manufacturer_product_id or manufacturer_product_id
+                ),
                 "image_url": image_url or product.image_url,
             }
-        )
+        ),
+        run_id=work.run_id,
     )
+    if possible_duplicate_ids:
+        work.event(
+            "product.identity_match_detected",
+            "A strong product identity already belongs to another durable product record.",
+            metadata={
+                "possibleDuplicateProductIds": list(dict.fromkeys(possible_duplicate_ids)),
+                "automaticMerge": False,
+            },
+        )
     fingerprint = sha256_json(
         {
             "sources": [item.content_sha256 for item in package.acquired_sources],
@@ -241,6 +401,7 @@ async def extract_evidence(
             "iteration": 0,
             "nextSourceIndex": 0,
             "phase": "queued",
+            "sourceGeneration": int(state.get("source_generation", 1)),
         },
     )
     job_artifact_id = work.put_model(
@@ -253,6 +414,14 @@ async def extract_evidence(
         "Queued durable deep research without blocking initial mapping.",
         metadata={"jobId": job.id, "artifactId": job_artifact_id},
     )
+    snapshot = update_product_snapshot(
+        work,
+        ProductWorkStage.EVIDENCE,
+        template_keys=state.get("target_submodels", ()),
+        evidence_artifact_id=evidence_id,
+        source_fingerprint=fingerprint,
+        evidence_fingerprint=fingerprint,
+    )
     return {
         "evidence_artifact_id": evidence_id,
         "product_name": package.product_name,
@@ -260,7 +429,9 @@ async def extract_evidence(
         "image_url": image_url or "",
         "known_source_urls": source_urls,
         "source_fingerprint": fingerprint,
+        "evidence_fingerprint": fingerprint,
         "background_job_id": job.id,
+        "product_snapshot_version": snapshot.version,
     }
 
 
