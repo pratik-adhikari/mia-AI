@@ -1021,6 +1021,8 @@ class Mia:
         )
         if run is None or not self.context.catalogue.run_is_current_generation(run.id):
             return
+        if run.status not in {RunStatus.RUNNING, RunStatus.AWAITING_HUMAN}:
+            return
         if self.context.catalogue.get_thread(run.thread_id, user_id=user_id) is None:
             return
         detail = str(error) or type(error).__name__
@@ -1046,6 +1048,8 @@ class Mia:
             else self._latest_active_run(thread_id, user_id=user_id)
         )
         if run is None or not self.context.catalogue.run_is_current_generation(run.id):
+            return
+        if run.status not in {RunStatus.RUNNING, RunStatus.AWAITING_HUMAN}:
             return
         if self.context.catalogue.get_thread(run.thread_id, user_id=user_id) is None:
             return
