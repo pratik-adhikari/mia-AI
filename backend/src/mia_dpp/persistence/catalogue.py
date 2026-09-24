@@ -1557,6 +1557,10 @@ class ProductCatalogue:
         user_id: str = LOCAL_USER_ID,
         db: _Connection | None = None,
     ) -> MappingKnowledgeEntry:
+        binding_identity = "|".join(
+            f"{'/'.join(binding.template_path)}:{binding.instance_key}"
+            for binding in mapping.target.list_instance_bindings
+        )
         identity = "\0".join(
             (
                 user_id,
@@ -1564,6 +1568,8 @@ class ProductCatalogue:
                 domain or "",
                 mapping.target.template_key,
                 "/".join(mapping.target.template_path),
+                mapping.target.semantic_id.primary_value,
+                binding_identity,
             )
         )
         entry_id = "knowledge-" + hashlib.sha256(identity.encode()).hexdigest()[:24]
@@ -1593,9 +1599,16 @@ class ProductCatalogue:
             scope=MappingKnowledgeScope.USER,
             owner_id=user_id,
             source_field=mapping.source_field,
+            source_context_path=(
+                mapping.target.list_instance_bindings[-1].source_context_path
+                if mapping.target.list_instance_bindings
+                else ()
+            ),
             example_values=values,
             target_template=mapping.target.template_key,
             target_path=mapping.target.template_path,
+            target_instance_path=mapping.target.instance_path,
+            list_instance_bindings=mapping.target.list_instance_bindings,
             semantic_id=mapping.target.semantic_id.primary_value,
             manufacturer=manufacturer,
             domain=domain,
