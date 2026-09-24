@@ -428,11 +428,11 @@ def detect_open_property_conflicts(
                     )
                 )
 
-    by_instance_path: dict[tuple[str, ...], list[OpenPropertyProposal]] = defaultdict(list)
+    by_projection: dict[tuple[object, ...], list[OpenPropertyProposal]] = defaultdict(list)
     for item in mapped:
         assert item.target is not None
-        by_instance_path[item.target.instance_path].append(item)
-    for instance_path, items in by_instance_path.items():
+        by_projection[item.target.projection_identity].append(item)
+    for projection_identity, items in by_projection.items():
         distinct_semantic_ids = {
             item.semantic_slot.semantic_id
             for item in items
@@ -459,7 +459,11 @@ def detect_open_property_conflicts(
                         kind=OpenPropertyConflictKind.ID_SHORT_COLLISION,
                         left_evidence_id=left.evidence_id,
                         right_evidence_id=right.evidence_id,
-                        id_short=instance_path[-1],
+                        id_short=(
+                            items[0].target.id_short
+                            if items[0].target is not None
+                            else None
+                        ),
                         reason=(
                             "Different semantic slots sanitize to the same wildcard "
                             "instance path/idShort."
@@ -479,12 +483,12 @@ def detect_open_property_conflicts(
         }
         if len(contexts) <= 1:
             continue
-        instance_paths = {
-            item.target.instance_path
+        projection_identities = {
+            item.target.projection_identity
             for item in items
             if item.target is not None
         }
-        if len(instance_paths) != 1:
+        if len(projection_identities) != 1:
             continue
         for index, left in enumerate(items):
             for right in items[index + 1 :]:
