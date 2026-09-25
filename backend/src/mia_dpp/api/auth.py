@@ -5,7 +5,6 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Annotated
 
 import httpx
-
 from clerk_backend_api import Clerk
 from clerk_backend_api.security.types import AuthenticateRequestOptions
 from fastapi import Depends, HTTPException, Request
@@ -72,7 +71,9 @@ async def authenticated_user_name(request: Request) -> str:
 
     first = profile.get("first_name")
     last = profile.get("last_name")
-    full = " ".join(part for part in (first, last) if isinstance(part, str) and part.strip()).strip()
+    full = " ".join(
+        part for part in (first, last) if isinstance(part, str) and part.strip()
+    ).strip()
     if full:
         return full
     username = profile.get("username")

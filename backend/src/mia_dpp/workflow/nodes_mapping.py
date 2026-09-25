@@ -10,13 +10,26 @@ if TYPE_CHECKING:
     from langgraph.runtime import Runtime
 
 from mia_dpp.aas.requirements import build_template_index
-from mia_dpp.canonical import sha256_json
 from mia_dpp.agent.models import AgentReviewRequest, AgentValueRequest
+from mia_dpp.canonical import sha256_json
 from mia_dpp.domain.evidence import ProductKnowledgePackage
-from mia_dpp.domain.mappings import CoverageStatus, MappingResult, SemanticReviewItem
+from mia_dpp.domain.mappings import (
+    CoverageStatus,
+    EvidenceOutcomeStatus,
+    MappingResult,
+    MappingStatus,
+    SemanticReviewItem,
+)
 from mia_dpp.domain.product import BackgroundJobStatus, RunStatus
 from mia_dpp.domain.product_work import ProductWorkStage
 from mia_dpp.domain.targets import RequirementKind, TemplateIndex
+from mia_dpp.semantic.decision_policy import DecisionPolicyReport
+from mia_dpp.semantic.idta_routing import IdtaRoutingReport
+from mia_dpp.semantic.jev_mapping import (
+    map_jev_routes,
+    map_new_jev_evidence,
+    require_review_for_projection_collisions,
+)
 from mia_dpp.services.deep_research import merge_mapping_results
 from mia_dpp.services.evidence_conflicts import (
     detect_review_conflicts,
@@ -97,7 +110,9 @@ async def deterministic_mapping(
     )
     mapping_input_fingerprint = model_fingerprint(
         {
-            "evidenceFingerprint": state.get("evidence_fingerprint") or state.get("source_fingerprint"),
+            "evidenceFingerprint": (
+                state.get("evidence_fingerprint") or state.get("source_fingerprint")
+            ),
             "targetFingerprint": state.get("target_fingerprint"),
             "deterministic": result.model_dump(mode="json", by_alias=True),
         }
@@ -134,7 +149,11 @@ async def semantic_mapping(
         evidence_fingerprint=state.get("evidence_fingerprint") or state.get("source_fingerprint"),
         target_fingerprint=state.get("target_fingerprint"),
     )
-    if state.get("reuse_prior_work") and reusable_mapping_id and reuse_status is not ReviewReuseStatus.STALE:
+    if (
+        state.get("reuse_prior_work")
+        and reusable_mapping_id
+        and reuse_status is not ReviewReuseStatus.STALE
+    ):
         try:
             reused = work.load(str(reusable_mapping_id), MappingResult)
             work.ctx.mapping_review.validate_complete_accounting(package, reused)
@@ -160,9 +179,15 @@ async def semantic_mapping(
             work.event(
                 "mapping.history_reused",
                 (
-                    f"Reused {len(reused.mapped)} human-reviewed mappings without semantic remapping."
+                    (
+                        f"Reused {len(reused.mapped)} human-reviewed mappings "
+                        "without semantic remapping."
+                    )
                     if not reviews
-                    else f"Reused {len(reused.mapped)} prior mappings and reopened them for confirmation."
+                    else (
+                        f"Reused {len(reused.mapped)} prior mappings and reopened "
+                        "them for confirmation."
+                    )
                 ),
                 metadata={
                     "seededFromRunId": state.get("seeded_from_run_id"),
@@ -187,9 +212,78 @@ async def semantic_mapping(
                 "product_snapshot_version": snapshot.version,
             }
 
+    if work.ctx.jev_mapping_enabled:
+        routing = work.load_state("jev_idta_routing_artifact_id", IdtaRoutingReport)
+        policy = work.load_state("jev_decision_policy_artifact_id", DecisionPolicyReport)
+        result, reviews = map_jev_routes(
+            package, index, routing, policy, work.ctx.templates
+        )
+        work.ctx.mapping_review.validate_complete_accounting(package, result)
+        mapping_id = work.put_model(
+            "mapping/jev-fixed-targets.json",
+            result,
+            derived_from=(
+                work.state_id("evidence_artifact_id"),
+                work.state_id("targets_artifact_id"),
+                work.state_id("jev_decision_policy_artifact_id"),
+            ),
+        )
+        review_id = work.put_json(
+            "mapping/review-items.json",
+            [item.model_dump(mode="json", by_alias=True) for item in reviews],
+            derived_from=(mapping_id,),
+        )
+        cycle_id = work.ctx.mapping_review.cycle_id(package, index, result)
+        work.event(
+            "mapping.jev_completed",
+            (
+                f"Jev routed {len(result.mapped)} facts to fixed targets; "
+                f"{len(reviews)} require review and {len(result.unmatched_evidence_ids)} "
+                "remain source-backed and unmapped."
+            ),
+            metadata={
+                "mapped": len(result.mapped),
+                "review": len(reviews),
+                "unmapped": len(result.unmatched_evidence_ids),
+                "reviewPriorities": {
+                    priority: sum(
+                        item.review_priority == priority
+                        for item in (*result.mapped, *result.ambiguous)
+                    )
+                    for priority in ("auto", "optional", "confirm", "alarm")
+                },
+            },
+        )
+        snapshot = update_product_snapshot(
+            work,
+            ProductWorkStage.HUMAN_REVIEW if reviews else ProductWorkStage.MAPPING,
+            semantic_mapping_artifact_id=mapping_id,
+            semantic_mapper_fingerprint=model_fingerprint(
+                {
+                    "model": "jev-idta",
+                    "policy": policy.settings.model_dump(mode="json", by_alias=True),
+                }
+            ),
+            mapping_cycle_id=cycle_id,
+            human_review_pending=bool(reviews),
+        )
+        return {
+            "semantic_mapping_artifact_id": mapping_id,
+            "review_items_artifact_id": review_id,
+            "mapping_cycle_id": cycle_id,
+            "review_required": bool(reviews),
+            "semantic_mapper_fingerprint": snapshot.semantic_mapper_fingerprint or "",
+            "product_snapshot_version": snapshot.version,
+        }
+
     mapper = work.ctx.semantic_mapper
     if mapper is None:
         raise RuntimeError("semantic mapping requires a configured model")
+    work.event(
+        "mapping.semantic.started",
+        f"Mapping {len(package.evidence)} source facts against the selected IDTA templates.",
+        metadata={"evidenceCount": len(package.evidence), "activityKey": "semantic-mapping"},
+    )
     product = work.ctx.catalogue.get_product(work.product_id, user_id=work.user_id)
     domain = (urlsplit(product.canonical_url).hostname or "") if product else None
     knowledge = tuple(
@@ -246,6 +340,7 @@ async def semantic_mapping(
             "semanticModelRequests": semantic_run.metrics.model_requests,
             "durationMs": semantic_duration_ms,
             "evidenceCount": len(package.evidence),
+            "activityKey": "semantic-mapping",
         },
     )
     mapper_fingerprint = semantic_mapper_fingerprint(mapper)
@@ -321,6 +416,7 @@ async def human_review(
             decision=decision.decision,
             thread_id=state["thread_id"],
             corrected_requirement_id=decision.corrected_requirement_id,
+            corrected_semantic_id=decision.corrected_semantic_id,
             corrected_value=decision.corrected_value,
             comment=decision.comment,
             actor_name=request.actor_name,
@@ -356,6 +452,8 @@ async def human_review(
                 user_id=work.user_id,
                 run_id=work.run_id,
             )
+
+    work.ctx.mapping_review.validate_projection_uniqueness(result)
 
     evidence_id = work.put_model(
         "evidence/product-knowledge-reviewed.json",
@@ -411,7 +509,9 @@ async def human_review(
         evidence_artifact_id=evidence_id,
         reviewed_mapping_artifact_id=mapping_id,
         review_fingerprint=review_fingerprint,
-        reviewed_evidence_fingerprint=state.get("evidence_fingerprint") or state.get("source_fingerprint"),
+        reviewed_evidence_fingerprint=(
+            state.get("evidence_fingerprint") or state.get("source_fingerprint")
+        ),
         reviewed_target_fingerprint=state.get("target_fingerprint"),
         reviewed_mapping_input_fingerprint=state.get("mapping_input_fingerprint"),
         mapping_cycle_id=state["mapping_cycle_id"],
@@ -476,18 +576,34 @@ async def integrate_background_research(
     state: MiaWorkflowState,
     runtime: Runtime[MiaContext],
 ) -> dict[str, Any]:
-    """Adopt completed research artifacts without waiting for the background worker."""
+    """Integrate the next mapped batch; crawling and mapping continue during review."""
 
     job_id = state.get("background_job_id")
     if not job_id:
         return {}
     work = RunWorkspace(state, runtime.context)
     job = work.ctx.catalogue.get_background_job(job_id, user_id=work.user_id)
-    if job is None or job.status is not BackgroundJobStatus.COMPLETED:
+    if job is None:
+        return {}
+    integrated_iteration = int(state.get("integrated_research_iteration", 0))
+    if (
+        job.status in {BackgroundJobStatus.QUEUED, BackgroundJobStatus.RUNNING}
+        and int(job.metadata.get("iteration", 0)) <= integrated_iteration
+    ):
+        # The worker maps later batches independently; foreground review must not wait for it.
+        return {}
+    if job.status not in {
+        BackgroundJobStatus.COMPLETED,
+        BackgroundJobStatus.QUEUED,
+        BackgroundJobStatus.RUNNING,
+    }:
         return {}
     evidence_artifact = job.metadata.get("researchEvidenceArtifactId")
     if not isinstance(evidence_artifact, str):
         return {}
+    iteration = int(job.metadata.get("iteration", 0))
+    if iteration <= integrated_iteration:
+        return {"integrated_research_iteration": integrated_iteration}
     existing_package = work.load_state("evidence_artifact_id", ProductKnowledgePackage)
     research_package = work.load(evidence_artifact, ProductKnowledgePackage)
     merged_package = merge_packages(existing_package, research_package, preserve_existing=True)
@@ -501,6 +617,7 @@ async def integrate_background_research(
         )
         return {
             "background_job_id": job.id,
+            "integrated_research_iteration": iteration,
             "product_snapshot_version": snapshot.version,
         }
 
@@ -508,29 +625,38 @@ async def integrate_background_research(
         "semantic_mapping_artifact_id"
     )
     current_mapping = work.load(current_mapping_id, MappingResult)
-    incremental_mapping_id = job.metadata.get("newMappingArtifactId")
+    index = work.load_state("targets_artifact_id", TemplateIndex)
+    # The worker maps every source batch and stores a cumulative mapping artifact. Use it so
+    # batches accumulated while the user is reviewing are not lost behind the latest batch.
+    incremental_mapping_id = job.metadata.get("integratedMappingArtifactId") or job.metadata.get(
+        "newMappingArtifactId"
+    )
     if isinstance(incremental_mapping_id, str):
         incremental_mapping = work.load(incremental_mapping_id, MappingResult)
     else:
-        mapper = work.ctx.semantic_mapper
-        if mapper is None:
-            return {}
-        index = work.load_state("targets_artifact_id", TemplateIndex)
-        incremental = merged_package.model_copy(
-            update={
-                "evidence": tuple(item for item in merged_package.evidence if item.id in new_ids)
-            }
+        incremental_mapping = await _map_research_evidence(
+            work, merged_package, index, new_ids
         )
-        deterministic = await DeterministicWebsiteMapper(work.ctx.templates, index).propose(
-            incremental.evidence
+    merged_mapping = merge_mapping_results(current_mapping, incremental_mapping)
+    missing_ids = {item.id for item in merged_package.evidence} - {
+        item.evidence_id for item in merged_mapping.outcomes
+    }
+    if missing_ids:
+        work.event(
+            "research.mapping_gap.started",
+            f"Mapping {len(missing_ids)} research facts deferred before targets were ready.",
+            metadata={"evidenceCount": len(missing_ids), "activityKey": job.id},
         )
-        semantic = await mapper.map(incremental, index, deterministic)
-        incremental_mapping = work.ctx.mapping_review.apply_semantic_run(
-            incremental,
-            deterministic,
-            index,
-            semantic,
+        repaired = await _map_research_evidence(work, merged_package, index, missing_ids)
+        incremental_mapping = merge_mapping_results(incremental_mapping, repaired)
+        merged_mapping = merge_mapping_results(merged_mapping, repaired)
+        work.event(
+            "research.mapping_gap.completed",
+            f"Mapped {len(missing_ids)} previously deferred research facts.",
+            metadata={"evidenceCount": len(missing_ids), "activityKey": job.id},
         )
+    if work.ctx.jev_mapping_enabled:
+        merged_mapping = require_review_for_projection_collisions(merged_mapping)
     conflicts = detect_review_conflicts(
         existing_package,
         research_package,
@@ -538,7 +664,6 @@ async def integrate_background_research(
         incremental_mapping,
         index,
     )
-    merged_mapping = merge_mapping_results(current_mapping, incremental_mapping)
     merged_mapping = require_review_for_conflicts(merged_mapping, index, conflicts)
     merged_package = mark_conflicting_evidence(merged_package, conflicts)
 
@@ -555,7 +680,7 @@ async def integrate_background_research(
     conflict_artifact_id = ""
     conflict_requirement_ids: tuple[str, ...] = ()
     review_items_id = ""
-    mapping_cycle_id = state.get("mapping_cycle_id", "")
+    mapping_cycle_id = work.ctx.mapping_review.cycle_id(merged_package, index, merged_mapping)
     if conflicts:
         conflict_requirement_ids = tuple(dict.fromkeys(item.requirement_id for item in conflicts))
         conflict_artifact_id = work.put_json(
@@ -563,58 +688,87 @@ async def integrate_background_research(
             [item.model_dump(mode="json", by_alias=True) for item in conflicts],
             derived_from=(merged_evidence_id, merged_mapping_id),
         )
-        mapping_cycle_id = work.ctx.mapping_review.cycle_id(
-            merged_package,
-            index,
-            merged_mapping,
-        )
-        all_reviews = work.ctx.mapping_review.complete_review(
-            merged_package,
-            merged_mapping,
-            index,
-        )
+
+    # Each newly collected batch becomes an explicit review round. Existing
+    # accepted mappings are retained and are not asked again unless conflicted.
+    review_evidence_ids = set(new_ids)
+    for conflict in conflicts:
+        review_evidence_ids.update((conflict.existing_evidence_id, conflict.incoming_evidence_id))
+    all_reviews = work.ctx.mapping_review.complete_review(merged_package, merged_mapping, index)
+    if work.ctx.jev_mapping_enabled:
         focused_reviews = tuple(
-            item for item in all_reviews if item.requirement_id in set(conflict_requirement_ids)
+            item.model_copy(update={
+                "status": EvidenceOutcomeStatus.UNCERTAIN,
+                "review_priority": item.mapping.review_priority
+                if item.mapping.review_priority in {"confirm", "alarm"} else "alarm",
+            })
+            for item in all_reviews
+            if item.evidence_id in review_evidence_ids
+            and item.mapping is not None
+            and item.mapping.status is MappingStatus.REVIEW
         )
+    else:
+        focused_reviews = tuple(
+            item for item in all_reviews if item.evidence_id in review_evidence_ids
+        )
+    if not state.get("reviewed_mapping_artifact_id") and state.get("review_items_artifact_id"):
+        try:
+            prior_reviews = tuple(
+                SemanticReviewItem.model_validate(item)
+                for item in work.load_json("review_items_artifact_id")
+            )
+            existing_ids = {item.evidence_id for item in focused_reviews}
+            focused_reviews = tuple(
+                item for item in prior_reviews if item.evidence_id not in existing_ids
+            ) + focused_reviews
+        except (KeyError, TypeError, ValueError):
+            pass
+    review_required = bool(focused_reviews)
+    if review_required:
         review_items_id = work.put_json(
-            "mapping/review-items-conflicts.json",
+            "mapping/review-items-research.json",
             [item.model_dump(mode="json", by_alias=True) for item in focused_reviews],
-            derived_from=(merged_mapping_id, conflict_artifact_id),
+            derived_from=(
+                merged_mapping_id,
+                *((conflict_artifact_id,) if conflict_artifact_id else ()),
+            ),
         )
 
     work.event(
         "research.integrated",
         (
             f"Integrated {len(new_ids)} new background evidence records; "
-            f"{len(conflicts)} reviewed-value conflicts require confirmation."
-            if conflicts
-            else f"Integrated {len(new_ids)} new background evidence records without replacing review state."
+            f"{len(focused_reviews)} facts require confirmation."
+            if review_required
+            else (
+                f"Integrated {len(new_ids)} new background evidence records "
+                "without replacing review state."
+            )
         ),
         metadata={
             "jobId": job.id,
             "evidenceAdded": len(new_ids),
             "conflicts": len(conflicts),
+            "reviewItems": len(focused_reviews),
             "conflictingRequirementIds": list(conflict_requirement_ids),
         },
     )
     merged_fingerprint = sha256_json(
         {
-            "sources": [
-                item.content_sha256 for item in merged_package.acquired_sources
-            ],
+            "sources": [item.content_sha256 for item in merged_package.acquired_sources],
             "evidence": [item.id for item in merged_package.evidence],
         }
     )
     snapshot = update_product_snapshot(
         work,
-        ProductWorkStage.HUMAN_REVIEW if conflicts else ProductWorkStage.MAPPING,
+        ProductWorkStage.HUMAN_REVIEW if review_required else ProductWorkStage.MAPPING,
         evidence_artifact_id=merged_evidence_id,
-        reviewed_mapping_artifact_id=(None if conflicts else merged_mapping_id),
+        reviewed_mapping_artifact_id=(None if review_required else merged_mapping_id),
         semantic_mapping_artifact_id=merged_mapping_id,
         source_fingerprint=merged_fingerprint,
         evidence_fingerprint=merged_fingerprint,
         mapping_cycle_id=mapping_cycle_id or None,
-        human_review_pending=bool(conflicts),
+        human_review_pending=review_required,
         conflicting_requirement_ids=conflict_requirement_ids,
         conflict_artifact_id=conflict_artifact_id or None,
         last_integrated_research_job_id=job.id,
@@ -635,7 +789,8 @@ async def integrate_background_research(
     }
     update["semantic_mapping_artifact_id"] = merged_mapping_id
     update["product_snapshot_version"] = snapshot.version
-    if conflicts:
+    update["integrated_research_iteration"] = iteration
+    if review_required:
         update.update(
             {
                 "reviewed_mapping_artifact_id": "",
@@ -649,6 +804,54 @@ async def integrate_background_research(
     elif state.get("reviewed_mapping_artifact_id"):
         update["reviewed_mapping_artifact_id"] = merged_mapping_id
     return update
+
+
+async def _map_research_evidence(
+    work: RunWorkspace,
+    package: ProductKnowledgePackage,
+    index: TemplateIndex,
+    evidence_ids: set[str],
+) -> MappingResult:
+    """Use the configured mapper for deferred batches with full source context."""
+
+    incremental = package.model_copy(
+        update={"evidence": tuple(item for item in package.evidence if item.id in evidence_ids)}
+    )
+    if work.ctx.jev_mapping_enabled:
+        if work.ctx.jev_decider is None:
+            raise RuntimeError("Jev mapping requires a configured Jev decider")
+        result, _, routing, policy = await map_new_jev_evidence(
+            package=package,
+            evidence_ids=evidence_ids,
+            index=index,
+            templates=work.ctx.templates,
+            decider=work.ctx.jev_decider,
+            scopes=work.ctx.jev_routing_scopes,
+            max_concurrency=work.ctx.jev_routing_max_concurrency,
+            settings=work.ctx.jev_decision_policy,
+        )
+        routing_id = work.put_model(
+            "semantic/research-deferred-jev-routing.json",
+            routing,
+            derived_from=(work.state_id("evidence_artifact_id"),),
+        )
+        work.put_model(
+            "semantic/research-deferred-jev-policy.json", policy,
+            derived_from=(routing_id,),
+        )
+        return result
+    mapper = work.ctx.semantic_mapper
+    if mapper is None:
+        raise RuntimeError(
+            "background evidence remains unmapped and no semantic mapper is configured"
+        )
+    deterministic = await DeterministicWebsiteMapper(work.ctx.templates, index).propose(
+        incremental.evidence
+    )
+    semantic = await mapper.map(incremental, index, deterministic)
+    return work.ctx.mapping_review.apply_semantic_run(
+        incremental, deterministic, index, semantic
+    )
 
 
 async def human_value(
@@ -737,7 +940,9 @@ async def human_value(
         evidence_artifact_id=evidence_id,
         reviewed_mapping_artifact_id=reviewed_id,
         review_fingerprint=review_fingerprint,
-        reviewed_evidence_fingerprint=state.get("evidence_fingerprint") or state.get("source_fingerprint"),
+        reviewed_evidence_fingerprint=(
+            state.get("evidence_fingerprint") or state.get("source_fingerprint")
+        ),
         reviewed_target_fingerprint=state.get("target_fingerprint"),
         reviewed_mapping_input_fingerprint=state.get("mapping_input_fingerprint"),
         unresolved_required_ids=tuple(item for item in missing if item != requirement_id),

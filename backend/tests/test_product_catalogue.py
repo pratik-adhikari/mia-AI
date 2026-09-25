@@ -1,10 +1,11 @@
-import pytest
 """Durable product identity/history behavior independent of the agent runtime."""
 
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from threading import Event
+
+import pytest
 
 from mia_dpp.domain.product import (
     BackgroundJobStatus,
@@ -165,23 +166,36 @@ def test_latest_completed_background_job_uses_stored_completion_time(tmp_path: P
     assert catalogue.latest_completed_background_job(product.id, user_id="user-a") is None
 
     first = catalogue.create_background_job(
-        user_id="user-a", thread_id=run.thread_id, product_id=product.id,
-        run_id=run.id, job_type="first", metadata={"sourceGeneration": 1},
+        user_id="user-a",
+        thread_id=run.thread_id,
+        product_id=product.id,
+        run_id=run.id,
+        job_type="first",
+        metadata={"sourceGeneration": 1},
     )
     second = catalogue.create_background_job(
-        user_id="user-a", thread_id=run.thread_id, product_id=product.id,
-        run_id=run.id, job_type="second", metadata={"sourceGeneration": 2},
+        user_id="user-a",
+        thread_id=run.thread_id,
+        product_id=product.id,
+        run_id=run.id,
+        job_type="second",
+        metadata={"sourceGeneration": 2},
     )
     for job in (first, second):
         catalogue.claim_background_job(job.id, user_id="user-a")
         catalogue.finish_background_job(
-            job.id, user_id="user-a", status=BackgroundJobStatus.COMPLETED,
+            job.id,
+            user_id="user-a",
+            status=BackgroundJobStatus.COMPLETED,
         )
 
     assert catalogue.latest_completed_background_job(product.id, user_id="user-a").id == second.id
-    assert catalogue.latest_completed_background_job(
-        product.id, user_id="user-a", source_generation=1
-    ).id == first.id
+    assert (
+        catalogue.latest_completed_background_job(
+            product.id, user_id="user-a", source_generation=1
+        ).id
+        == first.id
+    )
 
 
 def test_deleted_chat_is_hidden_but_product_history_remains_reusable(tmp_path: Path) -> None:
@@ -320,7 +334,6 @@ def test_mapping_knowledge_is_private_to_the_reviewing_user(tmp_path: Path) -> N
     assert catalogue.list_mapping_knowledge(user_id="user-b") == ()
 
 
-
 def test_stale_snapshot_write_cannot_overwrite_newer_product_state(tmp_path: Path) -> None:
     catalogue = ProductCatalogue(tmp_path / "catalogue.sqlite3")
     catalogue.get_or_create_thread("thread-lock", "user-a")
@@ -353,7 +366,6 @@ def test_stale_snapshot_write_cannot_overwrite_newer_product_state(tmp_path: Pat
     assert history[-1] == newer
 
 
-
 def test_dpp_with_dummy_values_is_saved_as_provisional(tmp_path: Path) -> None:
     catalogue = ProductCatalogue(tmp_path / "catalogue.sqlite3")
     catalogue.get_or_create_thread("thread-provisional", "user-a")
@@ -376,7 +388,6 @@ def test_dpp_with_dummy_values_is_saved_as_provisional(tmp_path: Path) -> None:
     assert version.release_status is DppReleaseStatus.PROVISIONAL
     assert version.dummy_mapping_ids == ("mapping-dummy",)
     assert catalogue.latest_successful_dpp(product.id, user_id="user-a") == version
-
 
 
 def test_same_product_cannot_have_two_active_runs_for_one_user(tmp_path: Path) -> None:
@@ -431,7 +442,6 @@ def test_deleted_active_chat_no_longer_blocks_new_product_work(tmp_path: Path) -
     assert replacement.thread_id == "thread-after-delete"
 
 
-
 def test_artifact_access_is_scoped_to_the_producing_thread_owner(tmp_path: Path) -> None:
     from mia_dpp.storage.models import StoredArtifact
 
@@ -460,7 +470,6 @@ def test_artifact_access_is_scoped_to_the_producing_thread_owner(tmp_path: Path)
 
     assert catalogue.get_artifact(artifact.id, user_id="user-a") == artifact
     assert catalogue.get_artifact(artifact.id, user_id="user-b") is None
-
 
 
 @pytest.mark.parametrize("mutation", ("snapshot", "finish", "dpp", "artifact"))
@@ -521,9 +530,7 @@ def test_recovery_wins_lock_before_stale_authoritative_mutation(
         if mutation == "snapshot":
             assert initial_snapshot is not None
             return catalogue.save_product_work_snapshot(
-                initial_snapshot.model_copy(
-                    update={"workflow_stage": ProductWorkStage.MAPPING}
-                ),
+                initial_snapshot.model_copy(update={"workflow_stage": ProductWorkStage.MAPPING}),
                 expected_version=initial_snapshot.version,
             )
         if mutation == "finish":
@@ -560,10 +567,13 @@ def test_recovery_wins_lock_before_stale_authoritative_mutation(
     assert catalogue.get_run(replacement.id).status is RunStatus.RUNNING
     if mutation == "snapshot":
         assert initial_snapshot is not None
-        assert catalogue.get_product_work_snapshot(
-            product.id,
-            user_id="user-a",
-        ) == initial_snapshot
+        assert (
+            catalogue.get_product_work_snapshot(
+                product.id,
+                user_id="user-a",
+            )
+            == initial_snapshot
+        )
     elif mutation == "dpp":
         assert catalogue.list_dpp_versions(product.id, user_id="user-a") == ()
     elif mutation == "artifact":
@@ -617,7 +627,6 @@ def test_recovery_supersedes_and_requeues_background_research(tmp_path: Path) ->
     assert successor.status is BackgroundJobStatus.QUEUED
     assert successor.metadata["sourceGeneration"] == 3
     assert successor.metadata["supersededJobId"] == job.id
-
 
 
 def test_stale_snapshot_write_commits_before_recovery_when_it_holds_lock_first(
@@ -688,7 +697,6 @@ def test_stale_snapshot_write_commits_before_recovery_when_it_holds_lock_first(
     assert written.version == 2
     assert catalogue.get_product_work_snapshot(product.id, user_id="user-a") == written
     assert catalogue.get_run(replacement.id).status is RunStatus.RUNNING
-
 
 
 def test_completed_research_is_not_requeued_during_recovery(tmp_path: Path) -> None:

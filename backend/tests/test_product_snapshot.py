@@ -25,9 +25,10 @@ class FixtureMapper:
 
 
 def test_semantic_mapper_fingerprint_identifies_mapper_implementation() -> None:
-    assert semantic_mapper_fingerprint(FixtureMapper()) == semantic_mapper_fingerprint(FixtureMapper())
+    assert semantic_mapper_fingerprint(FixtureMapper()) == semantic_mapper_fingerprint(
+        FixtureMapper()
+    )
     assert semantic_mapper_fingerprint(None) is None
-
 
 
 def test_workflow_snapshot_update_rejects_stale_graph_state(tmp_path) -> None:
@@ -78,18 +79,14 @@ def test_workflow_snapshot_update_rejects_stale_graph_state(tmp_path) -> None:
     assert catalogue.get_product_work_snapshot(product.id, user_id="user-a") == newer
 
 
-
 def test_recovered_generation_fences_old_snapshot_and_run_mutations(tmp_path) -> None:
     from datetime import UTC, datetime, timedelta
-    from types import SimpleNamespace
 
     import pytest
 
     from mia_dpp.domain.product import RunStatus
     from mia_dpp.domain.product_work import ProductWorkSnapshot, ProductWorkStage
     from mia_dpp.persistence.catalogue import ProductCatalogue
-    from mia_dpp.workflow.product_snapshot import update_product_snapshot
-    from mia_dpp.workflow.workspace import RunWorkspace
 
     catalogue = ProductCatalogue(tmp_path / "catalogue.sqlite3")
     catalogue.get_or_create_thread("thread-fence", "user-a")
@@ -124,9 +121,7 @@ def test_recovered_generation_fences_old_snapshot_and_run_mutations(tmp_path) ->
         refresh_requested=False,
         require_expired_lease=True,
     )
-    stale_snapshot = first.model_copy(
-        update={"workflow_stage": ProductWorkStage.MAPPING}
-    )
+    stale_snapshot = first.model_copy(update={"workflow_stage": ProductWorkStage.MAPPING})
 
     with pytest.raises(RuntimeError, match="workflow generation"):
         catalogue.save_product_work_snapshot(
@@ -138,7 +133,6 @@ def test_recovered_generation_fences_old_snapshot_and_run_mutations(tmp_path) ->
 
     assert catalogue.get_run(replacement.id).status is RunStatus.RUNNING
     assert catalogue.get_product_work_snapshot(product.id, user_id="user-a") == first
-
 
 
 def test_stale_workspace_cannot_start_after_generation_advances(tmp_path) -> None:

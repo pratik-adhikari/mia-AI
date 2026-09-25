@@ -59,7 +59,9 @@ def discover_product_identifiers(
             continue
         seen.add(identity)
         digest = hashlib.sha256(
-            "\0".join((package.product_id, scheme, namespace or "", normalized, role.value)).encode()
+            "\0".join(
+                (package.product_id, scheme, namespace or "", normalized, role.value)
+            ).encode()
         ).hexdigest()[:24]
         found.append(
             ProductIdentifier(

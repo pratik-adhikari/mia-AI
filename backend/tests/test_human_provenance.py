@@ -26,7 +26,8 @@ def _inventory():
 def test_dummy_value_keeps_explicit_human_provenance() -> None:
     repository, index = _inventory()
     requirement = next(
-        item for item in index.requirements
+        item
+        for item in index.requirements
         if item.required and item.semantic_id is not None and not item.wildcard
     )
     package = ProductKnowledgePackage(
@@ -54,7 +55,6 @@ def test_dummy_value_keeps_explicit_human_provenance() -> None:
     assert evidence.predicate == "human.dummy"
     assert mapping.human_actor_name == "Pratik"
     assert mapping.human_value_kind == "dummy"
-
 
 
 def test_human_audit_records_before_and_after_values_and_targets() -> None:
@@ -148,7 +148,6 @@ def test_human_audit_records_before_and_after_values_and_targets() -> None:
     assert records[0].final_target_path == requirement.template_path
 
 
-
 def test_stale_generation_cannot_persist_human_audit_or_trusted_mapping(tmp_path) -> None:
     from datetime import timedelta
     from pathlib import Path
@@ -169,25 +168,27 @@ def test_stale_generation_cannot_persist_human_audit_or_trusted_mapping(tmp_path
 
     repository, index = _inventory()
     requirement = next(
-        item
-        for item in index.requirements
-        if item.semantic_id is not None and not item.wildcard
+        item for item in index.requirements if item.semantic_id is not None and not item.wildcard
     )
     package = ProductKnowledgePackage(
         product_id=product.id,
         product_name="Human fence fixture",
         evidence=(),
     )
-    mapping = MappingReviewService(repository).record_human_value(
-        package,
-        MappingResult(),
-        index,
-        requirement_id=requirement.id,
-        value="IP67",
-        thread_id=run.thread_id,
-        actor_name="Pratik",
-        use_dummy=False,
-    )[1].mapped[-1]
+    mapping = (
+        MappingReviewService(repository)
+        .record_human_value(
+            package,
+            MappingResult(),
+            index,
+            requirement_id=requirement.id,
+            value="IP67",
+            thread_id=run.thread_id,
+            actor_name="Pratik",
+            use_dummy=False,
+        )[1]
+        .mapped[-1]
+    )
 
     expired = run.model_copy(
         update={"execution_lease_expires_at": datetime.now(UTC) - timedelta(seconds=1)}

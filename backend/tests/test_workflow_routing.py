@@ -24,11 +24,11 @@ def test_gaps_research_then_fall_back_to_human_input() -> None:
     assert after_research({"research_found_source": False}) == "human"
 
 
-
 def test_reuse_mode_does_not_change_completed_dpp_short_circuit() -> None:
     assert after_product_lookup({"cache_hit": True, "reuse_mode": "reuse_completed_dpp"}) == "reuse"
-    assert after_product_lookup({"cache_hit": False, "reuse_mode": "continue_saved_work"}) == "extract"
-
+    assert (
+        after_product_lookup({"cache_hit": False, "reuse_mode": "continue_saved_work"}) == "extract"
+    )
 
 
 def test_background_integration_reopens_review_only_when_new_conflicts_exist() -> None:

@@ -22,6 +22,7 @@ class MappingStatus(StrEnum):
 class MappingOrigin(StrEnum):
     DETERMINISTIC = "deterministic"
     SEMANTIC_AGENT = "semantic_agent"
+    SEMANTIC_ENGINE = "semantic_engine"
     HUMAN = "human"
 
 
@@ -39,19 +40,30 @@ class EvidenceOutcome(WireModel):
     evidence_id: str = Field(min_length=1)
     status: EvidenceOutcomeStatus
     requirement_id: str | None = None
+    direct_target: bool = False
     alternative_requirement_ids: tuple[str, ...] = ()
     reason: str = Field(min_length=1, max_length=600)
     mapping_origin: MappingOrigin
 
     @model_validator(mode="after")
     def target_matches_status(self) -> EvidenceOutcome:
-        if self.status is EvidenceOutcomeStatus.MAPPED and self.requirement_id is None:
-            raise ValueError("mapped evidence requires a requirement")
+        if (
+            self.status is EvidenceOutcomeStatus.MAPPED
+            and self.requirement_id is None
+            and not self.direct_target
+        ):
+            raise ValueError("mapped evidence requires a requirement or direct target")
+        if self.requirement_id is not None and self.direct_target:
+            raise ValueError("evidence outcome cannot be both requirement and direct target")
         if self.status in {
             EvidenceOutcomeStatus.UNMAPPED,
             EvidenceOutcomeStatus.IRRELEVANT,
             EvidenceOutcomeStatus.REJECTED,
-        } and (self.requirement_id is not None or self.alternative_requirement_ids):
+        } and (
+            self.requirement_id is not None
+            or self.direct_target
+            or self.alternative_requirement_ids
+        ):
             raise ValueError("unmapped, irrelevant, or rejected evidence cannot have targets")
         return self
 
@@ -206,6 +218,21 @@ class CoverageReport(WireModel):
         return self
 
 
+class ListInstanceBinding(WireModel):
+    """Bind one [] template segment to a stable instance identity."""
+
+    template_path: tuple[str, ...] = Field(min_length=1)
+    instance_key: str = Field(pattern=r"^list-instance-[0-9a-f]{24}$")
+    source_context_path: tuple[str, ...] = ()
+    label: str | None = Field(default=None, max_length=200)
+
+    @model_validator(mode="after")
+    def path_is_a_list_prototype(self) -> ListInstanceBinding:
+        if self.template_path[-1] != "[]":
+            raise ValueError("list-instance binding path must end with []")
+        return self
+
+
 class MappingTarget(WireModel):
     template_key: str
     template_release: str
@@ -213,6 +240,27 @@ class MappingTarget(WireModel):
     instance_path: tuple[str, ...] = Field(min_length=1)
     id_short: str = Field(min_length=1)
     semantic_id: SemanticReference
+    list_instance_bindings: tuple[ListInstanceBinding, ...] = ()
+
+    @model_validator(mode="after")
+    def list_bindings_match_target_path(self) -> MappingTarget:
+        paths = [item.template_path for item in self.list_instance_bindings]
+        if len(paths) != len(set(paths)):
+            raise ValueError("mapping target cannot bind the same list path twice")
+        for binding in self.list_instance_bindings:
+            prefix = self.template_path[: len(binding.template_path)]
+            if prefix != binding.template_path:
+                raise ValueError("list-instance binding must identify a [] in template_path")
+        return self
+
+    @property
+    def projection_identity(self) -> tuple[object, ...]:
+        """Identity used to distinguish repeated list instances during projection."""
+
+        bindings = tuple(
+            (item.template_path, item.instance_key) for item in self.list_instance_bindings
+        )
+        return self.instance_path, bindings
 
 
 class FieldMapping(WireModel):
@@ -227,6 +275,7 @@ class FieldMapping(WireModel):
     reasoning: str
     status: MappingStatus
     mapping_origin: MappingOrigin = MappingOrigin.DETERMINISTIC
+    review_priority: Literal["auto", "optional", "confirm", "alarm"] | None = None
     human_reviewed: bool = False
     human_actor_name: str | None = Field(default=None, max_length=200)
     human_value_kind: Literal["verified", "dummy"] | None = None
@@ -281,12 +330,15 @@ class TextMappingProposal(WireModel):
 
 
 class SemanticReviewItem(WireModel):
-    """One row in the complete consolidated mapping review."""
+    """One trusted review row for either a fixed requirement or verified direct target."""
 
     id: str = Field(pattern=r"^review-[0-9a-f]{24}$")
     evidence_id: str = Field(min_length=1)
     status: EvidenceOutcomeStatus
     requirement_id: str | None = Field(default=None, pattern=r"^req-[0-9a-f]{24}$")
     alternative_requirement_ids: tuple[str, ...] = ()
+    target_kind: Literal["requirement", "direct"] = "requirement"
+    alternative_targets: tuple[MappingTarget, ...] = ()
+    review_priority: Literal["optional", "confirm", "alarm"] | None = None
     reason: str = Field(min_length=1, max_length=600)
     mapping: FieldMapping | None = None

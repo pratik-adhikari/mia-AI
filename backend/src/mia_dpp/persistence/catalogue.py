@@ -15,7 +15,6 @@ from typing import Any, Protocol, TypeVar, cast
 from pydantic import BaseModel
 
 from mia_dpp.domain.mappings import FieldMapping
-from mia_dpp.domain.product_work import HumanReviewRecord, ProductWorkSnapshot
 from mia_dpp.domain.product import (
     BackgroundJob,
     BackgroundJobStatus,
@@ -31,6 +30,7 @@ from mia_dpp.domain.product import (
     RunStatus,
     ThreadRecord,
 )
+from mia_dpp.domain.product_work import HumanReviewRecord, ProductWorkSnapshot
 from mia_dpp.storage.models import StoredArtifact
 from mia_dpp.tools.mapping.models import (
     MappingKnowledgeEntry,
@@ -42,11 +42,11 @@ from mia_dpp.workflow.identity import canonical_product_url
 ModelT = TypeVar("ModelT", bound=BaseModel)
 
 
-class ProductSnapshotConflict(RuntimeError):
+class ProductSnapshotConflictError(RuntimeError):
     """Raised when another workflow updated the product snapshot first."""
 
 
-class ActiveProductRunExists(RuntimeError):
+class ActiveProductRunExistsError(RuntimeError):
     """Raised when the user already has live work for the same product."""
 
     def __init__(self, run: ProductRun) -> None:
@@ -56,12 +56,18 @@ class ActiveProductRunExists(RuntimeError):
         self.run = run
 
 
-class ProductIdentifierConflict(RuntimeError):
+class ProductIdentifierConflictError(RuntimeError):
     """Raised when a unique identity key already belongs to another product."""
 
     def __init__(self, existing_product_id: str) -> None:
         super().__init__(f"identifier already belongs to product {existing_product_id}")
         self.existing_product_id = existing_product_id
+
+
+# Keep the earlier names available for callers that persisted or imported them.
+ProductSnapshotConflict = ProductSnapshotConflictError
+ActiveProductRunExists = ActiveProductRunExistsError
+ProductIdentifierConflict = ProductIdentifierConflictError
 
 
 SCHEMA = """
@@ -320,12 +326,11 @@ class ProductCatalogue:
         user_id: str,
     ) -> ProductIdentifier:
         if identifier.role is ProductIdentifierRole.INSTANCE:
-            owner_scoped_id = "product-instance-" + hashlib.sha256(
-                f"{user_id}\0{identifier.id}".encode()
-            ).hexdigest()[:24]
-            owned = identifier.model_copy(
-                update={"id": owner_scoped_id, "owner_user_id": user_id}
+            owner_scoped_id = (
+                "product-instance-"
+                + hashlib.sha256(f"{user_id}\0{identifier.id}".encode()).hexdigest()[:24]
             )
+            owned = identifier.model_copy(update={"id": owner_scoped_id, "owner_user_id": user_id})
             db.execute(
                 "INSERT INTO product_instance_identifiers("
                 "id,user_id,product_id,payload,created_at"
@@ -372,9 +377,8 @@ class ProductCatalogue:
                 ),
             )
         except Exception as error:
-            if (
-                identifier.role is ProductIdentifierRole.IDENTITY
-                and self._is_unique_violation(error)
+            if identifier.role is ProductIdentifierRole.IDENTITY and self._is_unique_violation(
+                error
             ):
                 existing = db.execute(
                     "SELECT product_id FROM product_identifiers "
@@ -698,9 +702,7 @@ class ProductCatalogue:
         if thread.pending_refresh_requested:
             return thread
         now = _now()
-        updated = thread.model_copy(
-            update={"pending_refresh_requested": True, "updated_at": now}
-        )
+        updated = thread.model_copy(update={"pending_refresh_requested": True, "updated_at": now})
         self._execute(
             "UPDATE threads SET payload=?,updated_at=? WHERE id=? AND user_id=?",
             (updated.model_dump_json(), now.isoformat(), thread_id, user_id),
@@ -788,8 +790,7 @@ class ProductCatalogue:
                 }
             )
             db.execute(
-                "UPDATE threads SET payload=?,updated_at=? "
-                "WHERE id=? AND user_id=?",
+                "UPDATE threads SET payload=?,updated_at=? WHERE id=? AND user_id=?",
                 (
                     advanced.model_dump_json(),
                     now.isoformat(),
@@ -1010,7 +1011,9 @@ class ProductCatalogue:
             "WHERE runs.status IN (?,?)",
             (RunStatus.RUNNING.value, RunStatus.AWAITING_HUMAN.value),
         )
-        return tuple((ProductRun.model_validate_json(payload), str(user_id)) for payload, user_id in rows)
+        return tuple(
+            (ProductRun.model_validate_json(payload), str(user_id)) for payload, user_id in rows
+        )
 
     def interrupt_unresumable_run(
         self, observed: ProductRun, *, reason: str, allow_live_lease: bool = False
@@ -1036,10 +1039,15 @@ class ProductCatalogue:
             current = ProductRun.model_validate_json(row[0])
             thread = ThreadRecord.model_validate_json(row[1])
             if current != observed or current.status not in {
-                RunStatus.RUNNING, RunStatus.AWAITING_HUMAN,
+                RunStatus.RUNNING,
+                RunStatus.AWAITING_HUMAN,
             }:
                 return None
-            if current.status is RunStatus.RUNNING and self.run_lease_is_live(current, now=now) and not allow_live_lease:
+            if (
+                current.status is RunStatus.RUNNING
+                and self.run_lease_is_live(current, now=now)
+                and not allow_live_lease
+            ):
                 return None
             other = db.execute(
                 "SELECT id FROM runs WHERE thread_id=? AND id<>? AND status IN (?,?) LIMIT 1",
@@ -1047,22 +1055,31 @@ class ProductCatalogue:
             ).fetchone()
             if other is not None:
                 return None
-            interrupted = current.model_copy(update={
-                "status": RunStatus.INCOMPLETE,
-                "finished_at": now,
-                "error": reason,
-                "execution_lease_token": None,
-                "execution_lease_expires_at": None,
-            })
+            interrupted = current.model_copy(
+                update={
+                    "status": RunStatus.INCOMPLETE,
+                    "finished_at": now,
+                    "error": reason,
+                    "execution_lease_token": None,
+                    "execution_lease_expires_at": None,
+                }
+            )
             db.execute(
                 "UPDATE runs SET status=?,payload=? WHERE id=? AND status=?",
-                (interrupted.status.value, interrupted.model_dump_json(), current.id, current.status.value),
+                (
+                    interrupted.status.value,
+                    interrupted.model_dump_json(),
+                    current.id,
+                    current.status.value,
+                ),
             )
-            advanced = thread.model_copy(update={
-                "workflow_generation": thread.workflow_generation + 1,
-                "updated_at": now,
-                "pending_refresh_requested": False,
-            })
+            advanced = thread.model_copy(
+                update={
+                    "workflow_generation": thread.workflow_generation + 1,
+                    "updated_at": now,
+                    "pending_refresh_requested": False,
+                }
+            )
             db.execute(
                 "UPDATE threads SET payload=?,updated_at=? WHERE id=?",
                 (advanced.model_dump_json(), now.isoformat(), thread.id),
@@ -1560,7 +1577,7 @@ class ProductCatalogue:
                 user_id=user_id,
             )
         with self._connect() as db:
-            run, thread = self._lock_current_run(db, run_id)
+            _, thread = self._lock_current_run(db, run_id)
             if thread.user_id != user_id:
                 raise PermissionError("mapping review does not belong to this user")
             return self._upsert_mapping_knowledge(
@@ -1623,6 +1640,10 @@ class ProductCatalogue:
         user_id: str = LOCAL_USER_ID,
         db: _Connection | None = None,
     ) -> MappingKnowledgeEntry:
+        binding_identity = "|".join(
+            f"{'/'.join(binding.template_path)}:{binding.instance_key}"
+            for binding in mapping.target.list_instance_bindings
+        )
         identity = "\0".join(
             (
                 user_id,
@@ -1630,6 +1651,8 @@ class ProductCatalogue:
                 domain or "",
                 mapping.target.template_key,
                 "/".join(mapping.target.template_path),
+                mapping.target.semantic_id.primary_value,
+                binding_identity,
             )
         )
         entry_id = "knowledge-" + hashlib.sha256(identity.encode()).hexdigest()[:24]
@@ -1659,9 +1682,16 @@ class ProductCatalogue:
             scope=MappingKnowledgeScope.USER,
             owner_id=user_id,
             source_field=mapping.source_field,
+            source_context_path=(
+                mapping.target.list_instance_bindings[-1].source_context_path
+                if mapping.target.list_instance_bindings
+                else ()
+            ),
             example_values=values,
             target_template=mapping.target.template_key,
             target_path=mapping.target.template_path,
+            target_instance_path=mapping.target.instance_path,
+            list_instance_bindings=mapping.target.list_instance_bindings,
             semantic_id=mapping.target.semantic_id.primary_value,
             manufacturer=manufacturer,
             domain=domain,
@@ -1893,7 +1923,7 @@ class ProductCatalogue:
         )
 
     def next_queued_background_job(self) -> BackgroundJob | None:
-        """Return the oldest queued worker job for an atomic worker claim."""
+        """Return the oldest queued worker job, independent of review state."""
 
         return self._one(
             BackgroundJob,

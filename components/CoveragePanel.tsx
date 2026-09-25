@@ -1,45 +1,87 @@
 "use client";
 
 import { useState } from "react";
-import type { CoverageReport, EvidenceRecord, MappingResult, Requirement, RequirementCoverage } from "@/lib/types";
+import type { CoverageReport, EvidenceRecord, FieldMapping, MappingResult, Requirement, RequirementCoverage, RequirementInventory } from "@/lib/types";
 
-type FactFilter = "attention" | "unresolved" | "review" | "resolved" | "all";
-type RequirementFilter = "missing" | "candidate" | "satisfied" | "all";
+type Filter = "all" | "missing" | "candidate" | "satisfied";
 
-export function CoveragePanel({ report, evidence, mappingResult }: { report: CoverageReport | null; evidence: EvidenceRecord[]; mappingResult: MappingResult | null }) {
-  const [factFilter, setFactFilter] = useState<FactFilter>("attention");
-  const [requirementFilter, setRequirementFilter] = useState<RequirementFilter>("missing");
-  if (!report) return <p className="mx-auto max-w-sm pt-20 text-center text-[13px] leading-relaxed text-muted">Import a product website to inspect source facts and target coverage.</p>;
-  const mappings = [...(mappingResult?.mapped ?? []), ...(mappingResult?.ambiguous ?? [])];
-  const mappingByEvidence = new Map(mappings.map((item) => [item.evidenceId, item]));
-  const statusOf = (id: string): "unresolved" | "review" | "resolved" => {
-    const mapping = mappingByEvidence.get(id);
-    if (!mapping) return "unresolved";
-    return mapping.status === "review" || mappingResult?.ambiguous.some((item) => item.evidenceId === id) ? "review" : "resolved";
-  };
-  const visibleFacts = evidence.filter((item) => { const status = statusOf(item.id); return factFilter === "all" || factFilter === status || (factFilter === "attention" && status !== "resolved"); });
-  const factCounts = evidence.reduce((counts, item) => ({ ...counts, [statusOf(item.id)]: counts[statusOf(item.id)] + 1 }), { unresolved: 0, review: 0, resolved: 0 });
-  const coverageByRequirement = new Map(report.coverage.map((item) => [item.requirementId, item]));
+function key(template: string, path: string[]) {
+  return [template, ...path].join("\0");
+}
+
+function status(mappings: FieldMapping[], coverage?: RequirementCoverage) {
+  if (mappings.some((item) => item.status === "auto" || item.status === "approved")) return "satisfied";
+  if (mappings.length) return "candidate";
+  if (coverage?.status === "satisfied") return "candidate";
+  return coverage?.status ?? "missing";
+}
+
+export function CoveragePanel({ report, inventory, evidence, mappingResult }: {
+  report: CoverageReport | null;
+  inventory: RequirementInventory | null;
+  evidence: EvidenceRecord[];
+  mappingResult: MappingResult | null;
+}) {
+  const [filter, setFilter] = useState<Filter>("all");
+  const templates = report?.inventory ?? inventory;
+  if (!templates) return <p className="mx-auto max-w-sm pt-20 text-center text-[13px] leading-relaxed text-muted">Import a product website to inspect the official template fields.</p>;
+
+  const coverageById = new Map(report?.coverage.map((item) => [item.requirementId, item]) ?? []);
   const evidenceById = new Map(evidence.map((item) => [item.id, item]));
-  return <div className="space-y-7">
-    <section>
-      <div className="flex items-baseline justify-between"><div><p className="text-[10px] font-semibold uppercase tracking-wider text-muted">Source Facts</p><h2 className="mt-1 text-xl font-semibold text-ink">What MIA found</h2></div><span className="font-mono text-sm text-muted">{evidence.length}</span></div>
-      <p className="mt-2 text-[12px] text-muted">{factCounts.resolved} resolved · {factCounts.review} review · {factCounts.unresolved} unresolved</p>
-      <FilterBar values={["attention", "unresolved", "review", "resolved", "all"]} active={factFilter} onChange={(value) => setFactFilter(value as FactFilter)} />
-      <div className="mt-3 space-y-2">
-        {visibleFacts.map((fact) => { const status = statusOf(fact.id); const mapping = mappingByEvidence.get(fact.id); return <article key={fact.id} className="rounded-xl border border-hairline bg-paper p-4 shadow-sm"><div className="flex items-start justify-between gap-3"><div><p className="text-[13px] font-semibold text-ink">{fact.sourceLabel ?? fact.predicate}</p><p className="mt-1 text-[13px] text-muted">{displayValue(fact.value)}{fact.unit ? ` ${fact.unit}` : ""}</p></div><StatusPill value={status} /></div><p className="mt-2 truncate font-mono text-[10px] text-muted">{fact.sourceUri}</p>{mapping && <p className="mt-2 text-[11px] text-muted">Current mapping: <span className="font-mono text-signal">{mapping.target.idShort}</span></p>}</article>; })}
-        {visibleFacts.length === 0 && <p className="rounded-xl border border-dashed border-hairline p-6 text-center text-[12px] text-muted">No source facts match this filter.</p>}
+  const mappingsByTarget = new Map<string, FieldMapping[]>();
+  for (const mapping of [...(mappingResult?.mapped ?? []), ...(mappingResult?.ambiguous ?? [])]) {
+    const target = key(mapping.target.templateKey, mapping.target.templatePath);
+    mappingsByTarget.set(target, [...(mappingsByTarget.get(target) ?? []), mapping]);
+  }
+  const valuesFor = (requirement: Requirement) => mappingsByTarget.get(key(requirement.templateKey, requirement.templatePath)) ?? [];
+  const statusFor = (requirement: Requirement) => status(valuesFor(requirement), coverageById.get(requirement.id));
+
+  return <div className="space-y-4">
+    <div>
+      <p className="text-[10px] font-semibold uppercase tracking-wider text-muted">Official IDTA templates</p>
+      <h2 className="mt-1 text-xl font-semibold text-ink">Template</h2>
+      <p className="mt-2 text-[12px] leading-relaxed text-muted">Every actionable end field and structure in the enabled templates. Values come from source evidence; review candidates are not final DPP values.</p>
+      <p className="mt-2 font-mono text-[11px] text-muted">{templates.requirements.length} template endpoints · {templates.requirements.filter((item) => statusFor(item) === "satisfied").length} mapped</p>
+      <div className="mt-3 flex flex-wrap gap-1.5">
+        {(["all", "missing", "candidate", "satisfied"] as const).map((value) => <button key={value} onClick={() => setFilter(value)} className={`rounded-full px-3 py-1 text-[11px] capitalize ${filter === value ? "bg-ink text-white" : "border border-hairline bg-paper text-muted"}`}>{value === "satisfied" ? "Mapped" : value === "candidate" ? "Needs review" : value}</button>)}
       </div>
-    </section>
-    <section>
-      <p className="text-[10px] font-semibold uppercase tracking-wider text-muted">Submodels</p><p className="mt-1 text-[12px] text-muted">Open a template to inspect its fixed requirements.</p>
-      <FilterBar values={["missing", "candidate", "satisfied", "all"]} active={requirementFilter} onChange={(value) => setRequirementFilter(value as RequirementFilter)} />
-      <div className="mt-3 space-y-2">{report.inventory.selectedTemplates.map((template) => { const requirements = report.inventory.requirements.filter((item) => item.templateKey === template.key && item.kind === "value" && !item.wildcard); const satisfied = requirements.filter((item) => coverageByRequirement.get(item.id)?.status === "satisfied").length; const visible = requirements.filter((item) => { const status = coverageByRequirement.get(item.id)?.status; if (requirementFilter === "all") return true; if (requirementFilter === "candidate") return status === "candidate" || status === "ambiguous"; return status === requirementFilter; }); return <details key={`${template.key}-${template.release}`} className="rounded-xl border border-hairline bg-paper"><summary className="cursor-pointer list-none px-4 py-3"><div className="flex justify-between gap-3"><span className="text-[13px] font-semibold">{template.family}</span><span className="font-mono text-[11px] text-muted">{satisfied} / {requirements.length}</span></div></summary><div className="space-y-2 border-t border-hairline p-3">{visible.map((requirement) => { const coverage = coverageByRequirement.get(requirement.id); return coverage ? <RequirementCard key={requirement.id} requirement={requirement} coverage={coverage} evidenceById={evidenceById} /> : null; })}{visible.length === 0 && <p className="p-3 text-[12px] text-muted">No requirements match this filter.</p>}</div></details>; })}</div>
-    </section>
+    </div>
+    {templates.selectedTemplates.map((template) => {
+      const requirements = templates.requirements.filter((item) => item.templateKey === template.key);
+      const visible = requirements.filter((item) => filter === "all" || statusFor(item) === filter || (filter === "candidate" && coverageById.get(item.id)?.status === "ambiguous"));
+      const mapped = requirements.filter((item) => statusFor(item) === "satisfied").length;
+      return <details key={`${template.key}-${template.release}`} open className="rounded-xl border border-hairline bg-paper">
+        <summary className="cursor-pointer px-4 py-3"><span className="flex justify-between gap-3"><span className="text-[13px] font-semibold">{template.family} <span className="font-mono text-[10px] text-muted">v{template.release}</span></span><span className="font-mono text-[11px] text-muted">{mapped} / {requirements.length} mapped</span></span></summary>
+        <div className="space-y-2 border-t border-hairline p-3">
+          {visible.map((requirement) => <RequirementCard key={requirement.id} requirement={requirement} coverage={coverageById.get(requirement.id)} mappings={valuesFor(requirement)} evidenceById={evidenceById} />)}
+          {visible.length === 0 && <p className="p-3 text-[12px] text-muted">No template endpoints match this filter.</p>}
+        </div>
+      </details>;
+    })}
   </div>;
 }
 
-function FilterBar({ values, active, onChange }: { values: string[]; active: string; onChange: (value: string) => void }) { return <div className="mt-3 flex flex-wrap gap-1.5">{values.map((value) => <button key={value} onClick={() => onChange(value)} className={`rounded-full px-3 py-1 text-[11px] capitalize ${active === value ? "bg-ink text-white" : "border border-hairline bg-paper text-muted"}`}>{value === "attention" ? "Unresolved + review" : value}</button>)}</div>; }
-function StatusPill({ value }: { value: string }) { return <span className={`rounded-full px-2 py-0.5 font-mono text-[10px] uppercase ${value === "resolved" || value === "satisfied" ? "bg-ok/10 text-ok" : value === "review" || value === "candidate" || value === "ambiguous" ? "bg-warn/10 text-warn" : "bg-mist text-muted"}`}>{value}</span>; }
-function RequirementCard({ requirement, coverage, evidenceById }: { requirement: Requirement; coverage: RequirementCoverage; evidenceById: Map<string, EvidenceRecord> }) { const ids = coverage.status === "satisfied" ? coverage.supportingEvidenceIds : coverage.candidateEvidenceIds; return <article className="rounded-lg bg-mist/60 p-3"><div className="flex justify-between gap-3"><div><p className="font-mono text-[12px] font-semibold">{requirement.idShort ?? requirement.templatePath.at(-1)}</p><p className="mt-1 font-mono text-[10px] text-muted">{requirement.templatePath.join(" / ")}</p></div><StatusPill value={coverage.status} /></div>{ids.map((id) => { const item = evidenceById.get(id); return item ? <p key={id} className="mt-2 text-[11px] text-muted">{item.sourceLabel ?? item.predicate}: {displayValue(item.value)}</p> : null; })}<p className="mt-2 text-[11px] text-muted">{coverage.explanation}</p></article>; }
-function displayValue(value: unknown): string { return typeof value === "string" ? value : JSON.stringify(value); }
+function RequirementCard({ requirement, coverage, mappings, evidenceById }: {
+  requirement: Requirement;
+  coverage?: RequirementCoverage;
+  mappings: FieldMapping[];
+  evidenceById: Map<string, EvidenceRecord>;
+}) {
+  const state = status(mappings, coverage);
+  const mapped = state === "satisfied";
+  const sourceIds = coverage?.status === "satisfied" ? coverage.supportingEvidenceIds : coverage?.candidateEvidenceIds ?? [];
+  return <article className="rounded-lg bg-mist/60 p-3">
+    <div className="flex items-start justify-between gap-3">
+      <div className="min-w-0">
+        <p className={`font-mono text-[12px] font-semibold ${mapped ? "text-ok" : "text-ink"}`}>{requirement.idShort ?? requirement.templatePath.at(-1)}</p>
+        <p className={`mt-1 break-words font-mono text-[10px] ${mapped ? "text-ok" : "text-muted"}`}>{requirement.templatePath.join(" / ")}</p>
+      </div>
+      <span className={`shrink-0 rounded-full px-2 py-0.5 font-mono text-[10px] uppercase ${mapped ? "bg-ok/10 text-ok" : state === "candidate" || state === "ambiguous" ? "bg-yellow-100 text-yellow-800" : "bg-paper text-muted"}`}>{mapped ? "✓ Mapped" : state === "candidate" || state === "ambiguous" ? "Review" : "Empty"}</span>
+    </div>
+    <p className="mt-2 text-[11px] leading-relaxed text-ink">{requirement.description || "The official template does not provide a description for this endpoint."}</p>
+    <p className="mt-2 text-[10px] text-muted">{requirement.kind === "structural" ? "Structure" : requirement.modelType}{requirement.valueType ? ` · ${requirement.valueType}` : ""}{requirement.unit ? ` · ${requirement.unit}` : ""}{requirement.allowedValues.length ? ` · Allowed: ${requirement.allowedValues.join(", ")}` : ""} · {requirement.required ? "Required" : requirement.conditional ? "Required when parent exists" : "Optional"}{requirement.wildcard ? " · Open/repeated target" : ""}</p>
+    {mappings.length ? <div className="mt-3 space-y-1.5 border-t border-hairline pt-2">{mappings.map((mapping) => <div key={mapping.id} className="text-[11px]"><span className="text-muted">{mapping.status === "auto" || mapping.status === "approved" ? "Mapped value" : "Proposed value"}: </span><strong className={mapping.status === "auto" || mapping.status === "approved" ? "text-ok" : "text-yellow-800"}>{mapping.sourceValue}</strong><span className="ml-1 text-muted">from {mapping.sourceField}</span></div>)}</div>
+      : sourceIds.length ? <div className="mt-3 space-y-1 border-t border-hairline pt-2">{sourceIds.map((id) => { const item = evidenceById.get(id); return item ? <p key={id} className="text-[11px] text-muted">Candidate evidence: {item.sourceLabel ?? item.predicate} = {String(item.value)}{item.unit ? ` ${item.unit}` : ""}</p> : null; })}</div>
+      : <p className="mt-3 text-[11px] text-muted">No source-backed value assigned.</p>}
+  </article>;
+}

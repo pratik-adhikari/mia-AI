@@ -30,7 +30,6 @@ def _artifact(
     return artifact
 
 
-
 def test_reuse_service_prefers_snapshot_before_legacy_artifact_scan(tmp_path: Path) -> None:
     catalogue = ProductCatalogue(tmp_path / "catalogue.sqlite3")
     catalogue.get_or_create_thread("thread-reuse", "user-a")
@@ -84,7 +83,6 @@ def test_refresh_never_silently_reuses_saved_work(tmp_path: Path) -> None:
     )
 
     assert decision.mode is ReuseMode.REFRESH_SOURCES
-
 
 
 def test_newer_failed_snapshot_wins_over_older_deployable_dpp(tmp_path: Path) -> None:
@@ -227,7 +225,6 @@ def test_completed_research_after_dpp_prevents_stale_cache_reuse(tmp_path: Path)
     assert decision.evidence_artifact_id == "evidence-seed"
 
 
-
 def test_missing_snapshot_artifact_falls_back_instead_of_crashing_reuse(tmp_path: Path) -> None:
     catalogue = ProductCatalogue(tmp_path / "catalogue.sqlite3")
     catalogue.get_or_create_thread("thread-missing-artifact", "user-a")
@@ -261,7 +258,6 @@ def test_missing_snapshot_artifact_falls_back_instead_of_crashing_reuse(tmp_path
 
     assert decision.mode is ReuseMode.FRESH
     assert decision.evidence_artifact_id is None
-
 
 
 def test_missing_underlying_artifact_bytes_fall_back_to_fresh_work(tmp_path: Path) -> None:
@@ -307,7 +303,6 @@ def test_missing_underlying_artifact_bytes_fall_back_to_fresh_work(tmp_path: Pat
     )
 
     assert decision.mode is ReuseMode.FRESH
-
 
 
 def test_late_research_from_older_source_generation_is_ignored(tmp_path: Path) -> None:

@@ -141,6 +141,7 @@ async def test_graph_review_resume_build_and_reuse_are_one_durable_workflow(tmp_
     mapper = _SemanticMapper()
     settings = Settings(
         _env_file=None,
+        openrouter_api_key=None,
         MIA_CATALOGUE_PATH=tmp_path / "catalogue.sqlite3",
         MIA_THREAD_STORE_PATH=tmp_path / "checkpoints.sqlite3",
         MIA_WORKSPACE_ROOT=tmp_path / "artifacts",

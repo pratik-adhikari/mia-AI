@@ -25,7 +25,18 @@ from mia_dpp.workflow.nodes_product import (
     resolve_product,
     reuse_existing_dpp,
 )
+from mia_dpp.workflow.nodes_promotion import promote_semantic_mapping
 from mia_dpp.workflow.nodes_research import research
+from mia_dpp.workflow.nodes_semantic import (
+    analyze_eclass_shadow,
+    analyze_jev_shadow,
+    build_semantic_context,
+    normalize_evidence,
+    shadow_eclass_resolution,
+    shadow_jev_idta_routing,
+    shadow_jev_semantic_grouping,
+    shadow_open_property_proposals,
+)
 from mia_dpp.workflow.routing import (
     BACKGROUND_INTEGRATION_ROUTES,
     DISCOVERY_ROUTES,
@@ -72,9 +83,18 @@ def _build_evidence_stage(context: MiaContext | None) -> Any:
         stage,
         (
             extract_evidence,
+            normalize_evidence,
+            build_semantic_context,
+            shadow_jev_idta_routing,
+            analyze_jev_shadow,
+            shadow_jev_semantic_grouping,
+            shadow_eclass_resolution,
+            analyze_eclass_shadow,
+            shadow_open_property_proposals,
             build_targets,
             deterministic_mapping,
             semantic_mapping,
+            promote_semantic_mapping,
             human_review,
             integrate_background_research,
             coverage,
@@ -84,10 +104,23 @@ def _build_evidence_stage(context: MiaContext | None) -> Any:
         context,
     )
     stage.add_edge(START, "extract_evidence")
-    stage.add_edge("extract_evidence", "build_targets")
+    stage.add_edge("extract_evidence", "normalize_evidence")
+    stage.add_edge("normalize_evidence", "build_semantic_context")
+    stage.add_edge("build_semantic_context", "shadow_jev_idta_routing")
+    stage.add_edge("shadow_jev_idta_routing", "analyze_jev_shadow")
+    stage.add_edge("analyze_jev_shadow", "shadow_jev_semantic_grouping")
+    stage.add_edge("shadow_jev_semantic_grouping", "shadow_eclass_resolution")
+    stage.add_edge("shadow_eclass_resolution", "analyze_eclass_shadow")
+    stage.add_edge("analyze_eclass_shadow", "shadow_open_property_proposals")
+    stage.add_edge("shadow_open_property_proposals", "build_targets")
     stage.add_edge("build_targets", "deterministic_mapping")
     stage.add_edge("deterministic_mapping", "semantic_mapping")
-    stage.add_conditional_edges("semantic_mapping", after_semantic_mapping, SEMANTIC_ROUTES)
+    stage.add_edge("semantic_mapping", "promote_semantic_mapping")
+    stage.add_conditional_edges(
+        "promote_semantic_mapping",
+        after_semantic_mapping,
+        SEMANTIC_ROUTES,
+    )
     stage.add_edge("human_review", "integrate_background_research")
     stage.add_conditional_edges(
         "integrate_background_research",

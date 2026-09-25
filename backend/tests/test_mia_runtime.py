@@ -7,25 +7,32 @@ from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from typing import Any
 
+import httpx
 import pytest
 
 from mia_dpp.agent.models import AgentRequest, AgentResponse, AgentStatus
+from mia_dpp.agents.conversation import ConversationAction, ConversationTurn
 from mia_dpp.domain.product import RunStatus
 from mia_dpp.mia import Mia
 from mia_dpp.persistence.catalogue import ProductCatalogue
+from mia_dpp.services.product_query import WorkStatusView
 
 
 class _Store:
     def list_events(self, thread_id: str, *, user_id: str):
         return ()
 
+    def list_artifacts(self, thread_id: str, *, user_id: str):
+        return ()
+
 
 class _ResponseView:
     def build(self, state: dict[str, Any], *, trace_offset: int = 0) -> AgentResponse:
+        status = AgentStatus(state.get("status", AgentStatus.AWAITING_REVIEW.value))
         return AgentResponse(
             thread_id=str(state["thread_id"]),
             reply="Waiting for the pending review.",
-            status=AgentStatus.AWAITING_REVIEW,
+            status=status,
             decision_summary="Review remains pending.",
         )
 
@@ -97,10 +104,14 @@ def test_local_restart_closes_only_unresumable_runs(tmp_path) -> None:
         async def aget_state(self, config, *, subgraphs=False):
             assert subgraphs is True
             thread_id = config["configurable"]["thread_id"]
-            return _Snapshot(
-                {"run_id": runs["valid-review"].id},
-                interrupted=True,
-            ) if "thread-valid-review" in thread_id else _Snapshot({})
+            return (
+                _Snapshot(
+                    {"run_id": runs["valid-review"].id},
+                    interrupted=True,
+                )
+                if "thread-valid-review" in thread_id
+                else _Snapshot({})
+            )
 
     mia = _mia(catalogue, Graph())
     mia.settings.local_mode = True
@@ -114,8 +125,14 @@ def test_local_restart_closes_only_unresumable_runs(tmp_path) -> None:
         catalogue.assert_run_generation(expired.id)
     assert catalogue.get_run(runs["valid-review"].id).status is RunStatus.AWAITING_HUMAN
     assert catalogue.get_run(runs["live"].id).status is RunStatus.RUNNING
-    assert asyncio.run(mia.thread_state("thread-expired", user_id="user-a")).status is AgentStatus.FAILED
-    assert asyncio.run(mia.thread_state("thread-missing-review", user_id="user-a")).status is AgentStatus.FAILED
+    assert (
+        asyncio.run(mia.thread_state("thread-expired", user_id="user-a")).status
+        is AgentStatus.FAILED
+    )
+    assert (
+        asyncio.run(mia.thread_state("thread-missing-review", user_id="user-a")).status
+        is AgentStatus.FAILED
+    )
     assert asyncio.run(mia.reconcile_local_stale_runs()) == ()
 
 
@@ -136,7 +153,11 @@ def test_local_restart_checks_agent_server_before_closing_a_live_lease(tmp_path)
 
     class Runs:
         async def list(self, thread_id, *, status, limit):
-            return [{"status": "running"}] if thread_id == active_thread and status == "running" else []
+            return (
+                [{"status": "running"}]
+                if thread_id == active_thread and status == "running"
+                else []
+            )
 
     mia._agent_client = SimpleNamespace(runs=Runs())
     changed = asyncio.run(mia.reconcile_local_stale_runs())
@@ -210,7 +231,6 @@ def test_message_during_interrupt_is_persisted_without_advancing_graph(tmp_path)
     assert all(item.run_id == run.id for item in messages)
 
 
-
 def test_refresh_restarts_active_product_in_same_chat(tmp_path) -> None:
     catalogue = ProductCatalogue(tmp_path / "catalogue.sqlite3")
     product, _ = catalogue.get_or_create_product("https://example.com/refresh-same-chat")
@@ -224,7 +244,8 @@ def test_refresh_restarts_active_product_in_same_chat(tmp_path) -> None:
     )
 
     class Graph:
-        invocations: list[dict[str, Any]] = []
+        def __init__(self) -> None:
+            self.invocations: list[dict[str, Any]] = []
 
         async def aget_state(self, config, *, subgraphs=False):
             return _Snapshot(
@@ -267,10 +288,13 @@ def test_refresh_restarts_active_product_in_same_chat(tmp_path) -> None:
     assert replacement.id != run.id
     assert replacement.thread_id == "thread-refresh-same-chat"
     assert replacement.refresh_requested is True
-    assert catalogue.get_thread(
-        "thread-refresh-same-chat",
-        user_id="local-development",
-    ).workflow_generation == 1
+    assert (
+        catalogue.get_thread(
+            "thread-refresh-same-chat",
+            user_id="local-development",
+        ).workflow_generation
+        == 1
+    )
     assert graph.invocations[-1]["refresh_requested"] is True
 
 
@@ -309,10 +333,13 @@ def test_live_running_run_is_joined_without_restart(tmp_path) -> None:
 
     assert response.thread_id == "thread-live"
     assert catalogue.get_run(run.id).status is RunStatus.RUNNING
-    assert catalogue.get_thread(
-        "thread-live",
-        user_id="local-development",
-    ).workflow_generation == 0
+    assert (
+        catalogue.get_thread(
+            "thread-live",
+            user_id="local-development",
+        ).workflow_generation
+        == 0
+    )
     assert graph.invoked is False
 
 
@@ -367,10 +394,13 @@ def test_zombie_running_run_restarts_from_saved_work_in_same_chat(tmp_path) -> N
     assert replacement is not None
     assert replacement.id != run.id
     assert replacement.refresh_requested is False
-    assert catalogue.get_thread(
-        "thread-zombie",
-        user_id="local-development",
-    ).workflow_generation == 1
+    assert (
+        catalogue.get_thread(
+            "thread-zombie",
+            user_id="local-development",
+        ).workflow_generation
+        == 1
+    )
 
 
 def test_awaiting_human_run_is_not_restarted_as_zombie(tmp_path) -> None:
@@ -409,12 +439,14 @@ def test_awaiting_human_run_is_not_restarted_as_zombie(tmp_path) -> None:
 
     assert response.thread_id == "thread-waiting-human"
     assert catalogue.get_run(run.id).status is RunStatus.AWAITING_HUMAN
-    assert catalogue.get_thread(
-        "thread-waiting-human",
-        user_id="local-development",
-    ).workflow_generation == 0
+    assert (
+        catalogue.get_thread(
+            "thread-waiting-human",
+            user_id="local-development",
+        ).workflow_generation
+        == 0
+    )
     assert graph.invoked is False
-
 
 
 def test_refresh_during_live_run_is_queued_without_terminating_executor(tmp_path) -> None:
@@ -460,7 +492,6 @@ def test_refresh_during_live_run_is_queued_without_terminating_executor(tmp_path
     assert graph.invoked is False
 
 
-
 def test_stale_executor_failure_does_not_fail_replacement_run(tmp_path) -> None:
     catalogue = ProductCatalogue(tmp_path / "catalogue.sqlite3")
     product, _ = catalogue.get_or_create_product("https://example.com/fenced-failure")
@@ -494,7 +525,6 @@ def test_stale_executor_failure_does_not_fail_replacement_run(tmp_path) -> None:
     assert catalogue.get_run(replacement.id).status is RunStatus.RUNNING
 
 
-
 def test_initial_message_unknown_failure_never_fails_replacement_run(tmp_path) -> None:
     catalogue = ProductCatalogue(tmp_path / "catalogue.sqlite3")
     product, _ = catalogue.get_or_create_product("https://example.com/initial-fence")
@@ -506,9 +536,7 @@ def test_initial_message_unknown_failure_never_fails_replacement_run(tmp_path) -
         async def ainvoke(self, update, **kwargs):
             old = catalogue.start_run(product.id, "thread-initial-fence")
             expired = old.model_copy(
-                update={
-                    "execution_lease_expires_at": datetime.now(UTC) - timedelta(seconds=1)
-                }
+                update={"execution_lease_expires_at": datetime.now(UTC) - timedelta(seconds=1)}
             )
             catalogue._execute(
                 "UPDATE runs SET payload=? WHERE id=?",
@@ -542,3 +570,218 @@ def test_initial_message_unknown_failure_never_fails_replacement_run(tmp_path) -
     assert replacement.status is RunStatus.RUNNING
     messages = catalogue.list_messages("thread-initial-fence")
     assert messages[0].run_id is None
+
+
+def test_general_chat_reply_is_checkpoint_independent(tmp_path) -> None:
+    catalogue = ProductCatalogue(tmp_path / "catalogue.sqlite3")
+    catalogue.get_or_create_thread("thread-general-chat", "local-development")
+
+    class Graph:
+        async def aget_state(self, config, *, subgraphs=False):
+            raise AssertionError("general chat must not depend on checkpoint state")
+
+        async def ainvoke(self, update, **kwargs):
+            raise AssertionError("general chat must not execute the workflow")
+
+    class Conversation:
+        async def run(self, message, *, thread_id, user_id, recent_messages=()):
+            assert message == "What are you doing right now?"
+            assert thread_id == "thread-general-chat"
+            assert recent_messages == ()
+            return ConversationTurn(
+                action=ConversationAction.REPLY,
+                reply="There is no active product workflow yet.",
+                decision_summary="Answered from durable work status.",
+            )
+
+    class Query:
+        def work_status(self, thread_id, *, user_id):
+            return WorkStatusView(thread_id=thread_id)
+
+    mia = _mia(catalogue, Graph())
+    mia.conversation = Conversation()
+    mia.query = Query()
+
+    response = asyncio.run(
+        mia.message(
+            AgentRequest(
+                thread_id="thread-general-chat",
+                message="What are you doing right now?",
+            )
+        )
+    )
+
+    assert response.reply == "There is no active product workflow yet."
+    assert response.status is AgentStatus.AWAITING_INPUT
+    assert [message.role.value for message in catalogue.list_messages("thread-general-chat")] == [
+        "user",
+        "assistant",
+    ]
+
+
+def test_conversational_url_question_does_not_create_product(tmp_path) -> None:
+    catalogue = ProductCatalogue(tmp_path / "catalogue.sqlite3")
+    catalogue.get_or_create_thread("thread-url-question", "local-development")
+
+    class Graph:
+        async def aget_state(self, config, *, subgraphs=False):
+            raise AssertionError("read-only URL question must not touch checkpoints")
+
+    class Conversation:
+        async def run(self, message, *, thread_id, user_id, recent_messages=()):
+            assert "https://example.com/product" in message
+            return ConversationTurn(
+                action=ConversationAction.REPLY,
+                reply="I have not imported that URL in this conversation.",
+                decision_summary="Answered without mutating product state.",
+            )
+
+    class Query:
+        def work_status(self, thread_id, *, user_id):
+            return WorkStatusView(thread_id=thread_id)
+
+    mia = _mia(catalogue, Graph())
+    mia.conversation = Conversation()
+    mia.query = Query()
+
+    response = asyncio.run(
+        mia.message(
+            AgentRequest(
+                thread_id="thread-url-question",
+                message=(
+                    "Have we already imported https://example.com/product, "
+                    "or is it only mentioned here?"
+                ),
+            )
+        )
+    )
+
+    assert response.status is AgentStatus.AWAITING_INPUT
+    assert catalogue.list_products() == ()
+
+
+def test_transient_network_failure_is_recoverable_incomplete_run(tmp_path) -> None:
+    catalogue = ProductCatalogue(tmp_path / "catalogue.sqlite3")
+    product, _ = catalogue.get_or_create_product("https://example.com/transient")
+    run = catalogue.start_run(product.id, "thread-transient")
+
+    class Graph:
+        async def aget_state(self, config, *, subgraphs=False):
+            return _Snapshot(
+                {
+                    "thread_id": "thread-transient",
+                    "product_id": product.id,
+                    "run_id": run.id,
+                    "product_url": product.canonical_url,
+                    "status": "running",
+                }
+            )
+
+        async def ainvoke(self, update, **kwargs):
+            request = httpx.Request("GET", product.canonical_url)
+            raise httpx.ConnectError("temporary upstream outage", request=request)
+
+    mia = _mia(catalogue, Graph())
+    with pytest.raises(httpx.ConnectError):
+        asyncio.run(
+            mia.message(
+                AgentRequest(
+                    thread_id="thread-transient",
+                    message="Continue the product workflow",
+                )
+            )
+        )
+
+    persisted = catalogue.get_run(run.id)
+    assert persisted is not None
+    assert persisted.status is RunStatus.INCOMPLETE
+    event = catalogue.list_events(run.id)[-1]
+    assert event.event_type == "workflow.retryable_failure"
+    assert event.metadata["retryable"] is True
+
+
+def test_retry_work_creates_new_fenced_generation_from_incomplete_attempt(tmp_path) -> None:
+    catalogue = ProductCatalogue(tmp_path / "catalogue.sqlite3")
+    product, _ = catalogue.get_or_create_product("https://example.com/retry")
+    failed = catalogue.start_run(product.id, "thread-retry")
+    catalogue.finish_run(
+        failed.id,
+        RunStatus.INCOMPLETE,
+        error="temporary upstream outage",
+    )
+
+    class Graph:
+        result: dict[str, Any] | None = None
+
+        async def ainvoke(self, update, **kwargs):
+            self.result = {
+                **update,
+                "thread_id": "thread-retry",
+                "product_id": product.id,
+                "run_id": update["run_id"],
+                "product_url": product.canonical_url,
+                "status": "running",
+                "reply": "Recovered product work.",
+                "decision_summary": "Recovered product work.",
+            }
+            return self.result
+
+        async def aget_state(self, config, *, subgraphs=False):
+            assert subgraphs is True
+            return _Snapshot(self.result or {})
+
+    graph = Graph()
+    mia = _mia(catalogue, graph)
+    response = asyncio.run(mia.retry_work("thread-retry"))
+
+    replacement = catalogue.latest_active_run(product.id)
+    assert replacement is not None
+    assert replacement.id != failed.id
+    assert replacement.workflow_generation == 1
+    assert catalogue.get_run(failed.id).status is RunStatus.INCOMPLETE
+    assert (
+        catalogue.get_thread(
+            "thread-retry",
+            user_id="local-development",
+        ).workflow_generation
+        == 1
+    )
+    assert graph.result is not None
+    assert graph.result["reuse_mode"] == "continue_saved_work"
+    assert response.thread_id == "thread-retry"
+
+
+def test_explicit_retry_can_supersede_stuck_running_generation(tmp_path) -> None:
+    catalogue = ProductCatalogue(tmp_path / "catalogue.sqlite3")
+    product, _ = catalogue.get_or_create_product("https://example.com/stuck-running")
+    running = catalogue.start_run(product.id, "thread-stuck-running")
+
+    class Graph:
+        result: dict[str, Any] | None = None
+
+        async def ainvoke(self, update, **kwargs):
+            self.result = {
+                **update,
+                "thread_id": "thread-stuck-running",
+                "product_id": product.id,
+                "run_id": update["run_id"],
+                "product_url": product.canonical_url,
+                "status": "running",
+                "reply": "Replaced the stuck execution.",
+                "decision_summary": "Started a new fenced workflow generation.",
+            }
+            return self.result
+
+        async def aget_state(self, config, *, subgraphs=False):
+            assert subgraphs is True
+            return _Snapshot(self.result or {})
+
+    mia = _mia(catalogue, Graph())
+    response = asyncio.run(mia.retry_work("thread-stuck-running"))
+
+    replacement = catalogue.latest_active_run(product.id)
+    assert replacement is not None
+    assert replacement.id != running.id
+    assert replacement.workflow_generation == 1
+    assert catalogue.get_run(running.id).status is RunStatus.INCOMPLETE
+    assert response.thread_id == "thread-stuck-running"

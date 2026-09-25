@@ -43,7 +43,6 @@ def test_vercel_blob_reads_private_artifacts_with_private_access() -> None:
     assert client.calls == [(artifact.storage_uri, "private")]
 
 
-
 def test_vercel_exists_returns_false_only_for_not_found() -> None:
     class NotFoundError(RuntimeError):
         status_code = 404

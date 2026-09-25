@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from mia_dpp.aas.templates import OfficialTemplateRepository
 from mia_dpp.agents.discovery.models import DiscoveryAgent
 from mia_dpp.agents.research.models import ResearchAgent
 from mia_dpp.persistence.catalogue import ProductCatalogue
+from mia_dpp.semantic.decision_policy import DecisionPolicySettings
+from mia_dpp.semantic.eclass import EclassPropertyProvider
+from mia_dpp.semantic.jev import JevDecisionClient
+from mia_dpp.semantic.models import ContextScope
 from mia_dpp.storage.base import ArtifactStore
 from mia_dpp.tools.mapping.models import SemanticMapper
 from mia_dpp.tools.mapping.review import MappingReviewService
@@ -26,3 +30,25 @@ class MiaContext:
     search: SearchProvider
     research_agent: ResearchAgent
     semantic_mapper: SemanticMapper | None = None
+    jev_decider: JevDecisionClient | None = None
+    jev_mapping_enabled: bool = False
+    jev_routing_scopes: tuple[ContextScope, ...] = (
+        ContextScope.PROPERTY,
+        ContextScope.SIBLINGS,
+        ContextScope.FULL_PRODUCT,
+    )
+    jev_routing_max_concurrency: int = 8
+    jev_decision_policy: DecisionPolicySettings = field(default_factory=DecisionPolicySettings)
+    jev_grouping_scopes: tuple[ContextScope, ...] = (
+        ContextScope.SIBLINGS,
+        ContextScope.FULL_PRODUCT,
+    )
+    jev_grouping_max_groups: int = 200
+    eclass_shadow_enabled: bool = False
+    eclass_provider: EclassPropertyProvider | None = None
+    eclass_resolution_scopes: tuple[ContextScope, ...] = (
+        ContextScope.SIBLINGS,
+        ContextScope.FULL_PRODUCT,
+    )
+    eclass_candidate_limit: int = 12
+    semantic_promotion_enabled: bool = False

@@ -58,24 +58,20 @@ class ProductReuseService:
             user_id=user_id,
             source_generation=current_source_generation,
         )
-        research_unintegrated = (
-            pending_research is not None
-            and (
-                snapshot is None
-                or snapshot.last_integrated_research_job_id != pending_research.id
-            )
-        )
-        if research_unintegrated:
+        if pending_research is not None and (
+            snapshot is None or snapshot.last_integrated_research_job_id != pending_research.id
+        ):
             evidence_id = snapshot_evidence_id or pending_research.metadata.get(
                 "seedEvidenceArtifactId"
             )
-            if (
-                isinstance(evidence_id, str)
-                and self._artifact_available(evidence_id, user_id=user_id)
+            if isinstance(evidence_id, str) and self._artifact_available(
+                evidence_id, user_id=user_id
             ):
                 return ReuseDecision(
                     mode=ReuseMode.CONTINUE_SAVED_WORK,
-                    reason="Completed background research is newer than the integrated product state.",
+                    reason=(
+                        "Completed background research is newer than the integrated product state."
+                    ),
                     seeded_from_run_id=(
                         snapshot.run_id if snapshot is not None else pending_research.run_id
                     ),
@@ -85,9 +81,8 @@ class ProductReuseService:
                 )
 
         completed = self._catalogue.latest_successful_dpp(product_id, user_id=user_id)
-        if (
-            completed is not None
-            and not self._artifact_available(completed.dpp_artifact_id, user_id=user_id)
+        if completed is not None and not self._artifact_available(
+            completed.dpp_artifact_id, user_id=user_id
         ):
             completed = None
         if snapshot is not None and snapshot_evidence_id:

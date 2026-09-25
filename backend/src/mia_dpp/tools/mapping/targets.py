@@ -1,7 +1,7 @@
 """Construct typed mapping targets from authoritative template metadata."""
 
 from mia_dpp.aas.templates import resolve_element
-from mia_dpp.domain.mappings import MappingTarget
+from mia_dpp.domain.mappings import ListInstanceBinding, MappingTarget
 from mia_dpp.domain.targets import ReferenceKey, SemanticReference, SubmodelTemplate
 from mia_dpp.errors import MappingError
 
@@ -9,6 +9,15 @@ NAMEPLATE_ROOT = "Nameplate"
 ARBITRARY_PROPERTY_PATH = (
     NAMEPLATE_ROOT,
     "AssetSpecificProperties",
+    "ArbitraryProperty",
+)
+TECHNICAL_PROPERTY_AREA_LIST_PATH = (
+    "TechnicalData",
+    "TechnicalPropertyAreas",
+    "[]",
+)
+TECHNICAL_DATA_ARBITRARY_PROPERTY_PATH = (
+    *TECHNICAL_PROPERTY_AREA_LIST_PATH,
     "ArbitraryProperty",
 )
 
@@ -26,6 +35,7 @@ def mapping_target(
     *,
     id_short: str | None = None,
     semantic_id: str | None = None,
+    list_instance_bindings: tuple[ListInstanceBinding, ...] = (),
 ) -> MappingTarget:
     """Construct a mapping target from authoritative template metadata.
 
@@ -56,4 +66,5 @@ def mapping_target(
         instance_path=instance_path,
         id_short=target_id_short,
         semantic_id=reference,
+        list_instance_bindings=list_instance_bindings,
     )

@@ -1,9 +1,18 @@
 import { auth } from "@clerk/nextjs/server";
 import { NextResponse } from "next/server";
+import { Agent, fetch as undiciFetch } from "undici";
 import { start } from "workflow/api";
 
 import { AUTHENTICATION_ENABLED } from "@/lib/server-config";
 import { runDeepResearch } from "@/workflows/deep-research";
+
+const backendTimeoutMs = Number(
+  process.env.MIA_BACKEND_RESPONSE_TIMEOUT_MS ?? 900_000,
+);
+const backendDispatcher = new Agent({
+  headersTimeout: backendTimeoutMs,
+  bodyTimeout: backendTimeoutMs,
+});
 
 function backendOrigin(request: Request): URL {
   const configured =
@@ -35,7 +44,7 @@ export async function POST(request: Request) {
   const authorization =
     incomingAuthorization ?? (token ? `Bearer ${token}` : null);
   const backend = backendOrigin(request);
-  const response = await fetch(new URL("/api/agent/messages", backend), {
+  const response = await undiciFetch(new URL("/api/agent/messages", backend), {
     method: "POST",
     headers: {
       "Content-Type": request.headers.get("content-type") ?? "application/json",
@@ -43,6 +52,7 @@ export async function POST(request: Request) {
     },
     body: await request.text(),
     cache: "no-store",
+    dispatcher: backendDispatcher,
   });
 
   const raw = await response.text();

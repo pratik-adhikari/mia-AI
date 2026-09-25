@@ -254,7 +254,7 @@ class AasValidator:
                     )
                 ]
             if index < len(target.instance_path[1:]) - 1:
-                current = _children(matches[0])
+                current = [child for match in matches for child in _children(match)]
         return []
 
 

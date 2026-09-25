@@ -1,21 +1,30 @@
 "use client";
 
 import { useState } from "react";
+import { JevDecisionTrail } from "@/components/JevDecisionTrail";
+import { SourceVerificationLink } from "@/components/SourceVerificationLink";
 import type {
   AgentReviewDecision,
   EvidenceRecord,
   FieldMapping,
+  JevPolicyDecision,
+  JevRoutingTrace,
   Requirement,
   SemanticReviewItem,
 } from "@/lib/types";
 
 export function MappingRow({
   mapping: m,
+  evidence,
   elements,
   onDecide,
   onCorrect,
+  jevTraces,
+  jevPolicy,
+  threadId,
 }: {
   mapping: FieldMapping;
+  evidence?: EvidenceRecord;
   elements: Requirement[];
   onDecide: (id: string, status: "approved" | "rejected", comment?: string) => void;
   onCorrect: (
@@ -24,44 +33,58 @@ export function MappingRow({
     correctedValue?: string,
     comment?: string
   ) => void;
+  jevTraces?: JevRoutingTrace[];
+  jevPolicy?: JevPolicyDecision;
+  threadId: string | null;
 }) {
   const [editing, setEditing] = useState(false);
   const [targetPath, setTargetPath] = useState(elements[0]?.id ?? "");
   const [correctedValue, setCorrectedValue] = useState(m.sourceValue);
   const [comment, setComment] = useState("");
-  const basis = m.assessment.basis[0].toUpperCase() + m.assessment.basis.slice(1);
+  const attention = m.status === "review" || m.reviewPriority === "confirm" || m.reviewPriority === "alarm"
+    ? "review"
+    : m.reviewPriority === "optional" ? "check" : "clear";
 
   const tone =
     m.status === "rejected"
       ? "opacity-45"
       : m.status === "review"
-      ? "border-warn/35"
+      ? "border-red-300"
       : "border-hairline";
 
   return (
-    <div className={`rounded-xl border bg-paper p-4 transition-all duration-300 shadow-sm hover:shadow-md hover:-translate-y-0.5 ${tone}`}>
+    <div className={`rounded-xl border bg-paper p-4 shadow-sm ${tone}`}>
       <div className="flex items-start justify-between gap-3">
-        <div className="min-w-0 flex-1">
-          <p className="truncate font-mono text-[13px]">
-            <span className="text-muted">{m.sourceField}</span>
-            <span className="text-hairline"> &rarr; </span>
-            <span className="text-signal">{m.target.idShort}</span>
-          </p>
-          <p className="mt-1 truncate text-[14px]">{m.sourceValue}</p>
-        </div>
-        <span className={`shrink-0 rounded-full px-2 py-0.5 font-mono text-[11px] ${m.assessment.reviewRequired ? "bg-warn/10 text-warn" : "bg-signal/10 text-signal"}`}>
-          {basis}
+        <p className="text-[10px] font-semibold uppercase tracking-wide text-muted">Source fact → template field</p>
+        <span className={`shrink-0 rounded-full px-2 py-0.5 font-mono text-[11px] uppercase ${attention === "review" ? "bg-red-50 text-red-700" : attention === "check" ? "bg-yellow-100 text-yellow-800" : "bg-ok/10 text-ok"}`}>
+          {attention}
         </span>
       </div>
+      <div className="mt-2 grid gap-2 lg:grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] lg:items-stretch">
+        <div className="min-w-0 rounded-lg bg-mist/70 p-3">
+          <p className="text-[10px] font-medium uppercase tracking-wide text-muted">Evidence</p>
+          <p className="mt-1 break-words text-[13px] font-semibold text-ink">{m.sourceField}</p>
+          <p className="mt-1 break-words font-mono text-[13px] text-ink">{m.sourceValue}</p>
+          {evidence?.contextPath.length ? <p className="mt-1 break-words text-[10px] text-muted">{evidence.contextPath.join(" / ")}</p> : null}
+        </div>
+        <span className="hidden self-center text-muted lg:block" aria-hidden="true">→</span>
+        <div className={`min-w-0 rounded-lg border p-3 ${attention === "clear" ? "border-ok/20 bg-ok/5" : attention === "check" ? "border-yellow-200 bg-yellow-50" : "border-red-200 bg-red-50/40"}`}>
+          <p className="text-[10px] font-medium uppercase tracking-wide text-muted">Selected template field</p>
+          <p className={`mt-1 break-words text-[13px] font-semibold ${attention === "clear" ? "text-ok" : attention === "check" ? "text-yellow-800" : "text-red-700"}`}>{m.target.idShort ?? m.target.templatePath.at(-1) ?? "Unknown target"}</p>
+          <p className="mt-1 break-words text-[10px] text-muted">{m.target.templatePath.join(" / ")}</p>
+        </div>
+      </div>
 
-      <p className="mt-2 text-[12px] leading-relaxed text-muted">
-        {m.reasoning}
-      </p>
+      <div className="mt-2"><SourceVerificationLink threadId={threadId} evidenceId={m.evidenceId} /></div>
 
       <p className="mt-2 inline-block rounded-full bg-mist px-2 py-0.5 font-mono text-[10px] text-muted">
         {m.mappingOrigin === "semantic_agent"
           ? "AI-assisted proposal"
-          : m.mappingOrigin === "human"
+          : m.mappingOrigin === "semantic_engine"
+            ? m.target.templatePath.includes("ArbitraryProperty")
+              ? "Jev + verified ECLASS"
+              : "Jev"
+            : m.mappingOrigin === "human"
             ? "Human supplied/corrected"
             : "Deterministic mapping"}
         {m.humanReviewed ? " · reviewed" : ""}
@@ -82,12 +105,18 @@ export function MappingRow({
         </div>
       )}
 
+      <JevDecisionTrail traces={jevTraces} policy={jevPolicy} />
+
       <details className="mt-2.5 rounded-lg border border-hairline bg-mist/60 px-3 py-2">
         <summary className="cursor-pointer text-[12px] font-medium text-ink">
-          Why this mapping?
+          Mapping conclusion
         </summary>
         <div className="mt-2 space-y-2">
-          <p className="text-[11px] leading-relaxed text-muted">{m.assessment.reason}</p>
+          <p className="text-[11px] leading-relaxed text-muted">Target: {m.target.templatePath.join(" / ")}</p>
+          <p className="text-[11px] leading-relaxed text-muted">Review: {attention}</p>
+          {m.mappingOrigin !== "semantic_engine" && (
+            <p className="text-[11px] leading-relaxed text-muted">{m.assessment.reason}</p>
+          )}
           {m.assessment.uncertainties.length > 0 && (
             <div className="border-t border-hairline pt-2">
               <p className="text-[11px] font-medium text-ink">Requires review because</p>
@@ -208,17 +237,34 @@ export function MappingReviewRow({
   targets,
   decision,
   onChange,
+  jevTraces,
+  jevPolicy,
+  threadId,
 }: {
   item: SemanticReviewItem;
   evidence: EvidenceRecord;
   targets: Requirement[];
   decision?: AgentReviewDecision;
   onChange: (decision: AgentReviewDecision) => void;
+  jevTraces?: JevRoutingTrace[];
+  jevPolicy?: JevPolicyDecision;
+  threadId: string | null;
 }) {
   const [comment, setComment] = useState(decision?.comment ?? "");
-  const currentTarget = item.requirementId ?? item.alternativeRequirementIds[0] ?? "";
+  const currentTarget = item.mapping
+    ? item.targetKind === "direct"
+      ? item.mapping.target.semanticId.keys[0]?.value ?? ""
+      : targets.find((candidate) =>
+          candidate.templateKey === item.mapping?.target.templateKey &&
+          candidate.templateRelease === item.mapping?.target.templateRelease &&
+          JSON.stringify(candidate.templatePath) === JSON.stringify(item.mapping?.target.templatePath)
+        )?.id ?? ""
+    : "";
   const action = decision?.decision ?? "";
-  const target = decision?.correctedRequirementId ?? currentTarget;
+  const target =
+    item.targetKind === "direct"
+      ? decision?.correctedSemanticId ?? currentTarget
+      : decision?.correctedRequirementId ?? currentTarget;
   const value = decision?.correctedValue ?? String(evidence.value);
   const origin = item.mapping?.mappingOrigin ?? "semantic_agent";
 
@@ -227,36 +273,78 @@ export function MappingReviewRow({
       reviewId: item.id,
       decision: decision?.decision ?? "keep",
       correctedRequirementId: decision?.correctedRequirementId ?? null,
+      correctedSemanticId: decision?.correctedSemanticId ?? null,
       correctedValue: decision?.correctedValue ?? null,
       comment: comment.trim() || null,
       ...next,
     });
 
   return (
-    <article className={`rounded-xl border bg-paper p-4 shadow-sm ${item.status === "uncertain" ? "border-warn/40" : "border-hairline"}`}>
+    <article className={`rounded-xl border bg-paper p-4 shadow-sm ${item.status === "uncertain" ? "border-red-300" : "border-hairline"}`}>
       <div className="flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <p className="font-mono text-[13px] text-ink">{evidence.sourceLabel ?? evidence.predicate}</p>
-          <p className="mt-1 text-[14px] text-ink">{String(evidence.value)}{evidence.unit ? ` ${evidence.unit}` : ""}</p>
-          {evidence.contextPath.length > 0 && <p className="mt-1 font-mono text-[10px] text-muted">{evidence.contextPath.join(" / ")}</p>}
-        </div>
-        <span className={`rounded-full px-2 py-0.5 font-mono text-[10px] uppercase ${item.status === "uncertain" ? "bg-warn/10 text-warn" : "bg-mist text-muted"}`}>{item.status}</span>
+        <p className="text-[10px] font-semibold uppercase tracking-wide text-muted">Source fact → proposed template field</p>
+        <span className="rounded-full bg-red-50 px-2 py-0.5 font-mono text-[10px] uppercase text-red-700" title={item.reviewPriority === "alarm" ? "Strong disagreement between context scopes" : "Human decision required"}>Review</span>
       </div>
-      <p className="mt-2 text-[12px] leading-relaxed text-muted">{item.reason}</p>
-      <p className="mt-2 font-mono text-[10px] text-muted">Origin: {origin}{item.mapping ? ` · ${item.mapping.target.idShort}` : " · no target"}</p>
-      {item.alternativeRequirementIds.length > 0 && <p className="mt-1 text-[11px] text-muted">Alternatives: {item.alternativeRequirementIds.join(", ")}</p>}
+      <div className="mt-2 grid gap-2 lg:grid-cols-2">
+        <div className="min-w-0 rounded-lg bg-mist/70 p-3">
+          <p className="text-[10px] font-medium uppercase tracking-wide text-muted">Evidence</p>
+          <p className="mt-1 break-words text-[13px] font-semibold text-ink">{evidence.sourceLabel ?? evidence.predicate}</p>
+          <p className="mt-1 break-words font-mono text-[13px] text-ink">{String(evidence.value)}{evidence.unit ? ` ${evidence.unit}` : ""}</p>
+          {evidence.contextPath.length > 0 && <p className="mt-1 break-words text-[10px] text-muted">{evidence.contextPath.join(" / ")}</p>}
+        </div>
+        <div className="min-w-0 rounded-lg border border-red-200 bg-red-50/40 p-3">
+          <p className="text-[10px] font-medium uppercase tracking-wide text-muted">Proposed template field</p>
+          <p className="mt-1 break-words text-[13px] font-semibold text-red-700">{item.mapping?.target.idShort ?? "No target selected"}</p>
+          {item.mapping && <p className="mt-1 break-words text-[10px] text-muted">{item.mapping.target.templatePath.join(" / ")}</p>}
+        </div>
+      </div>
+      <div className="mt-2"><SourceVerificationLink threadId={threadId} evidenceId={evidence.id} /></div>
+      <JevDecisionTrail traces={jevTraces} policy={jevPolicy} />
+      <details className="mt-2 text-[11px] text-muted">
+        <summary className="cursor-pointer">Review conclusion</summary>
+        <p className="mt-1">Target: {item.mapping?.target.templatePath.join(" / ") ?? "No target selected"}</p>
+        <p className="mt-1">Review: {item.reviewPriority ?? "required"}</p>
+        {origin !== "semantic_engine" && <p className="mt-1">{item.reason}</p>}
+      </details>
+      <p className="mt-2 font-mono text-[10px] text-muted">Source: {origin === "semantic_engine" ? "Jev" : origin === "semantic_agent" ? "Earlier LLM proposal" : origin}</p>
+      {item.alternativeRequirementIds.length > 0 && (
+        <p className="mt-1 text-[11px] text-muted">
+          Alternatives: {item.alternativeRequirementIds.join(", ")}
+        </p>
+      )}
+      {item.targetKind === "direct" && item.alternativeTargets.length > 0 && (
+        <p className="mt-1 text-[11px] text-muted">
+          Verified ECLASS alternatives:{" "}
+          {item.alternativeTargets
+            .map(
+              (candidate) =>
+                `${candidate.idShort} [${candidate.semanticId.keys[0]?.value ?? "unknown"}]`
+            )
+            .join(", ")}
+        </p>
+      )}
 
       <div className="mt-3 grid gap-2 sm:grid-cols-2">
         <label className="text-[11px] text-muted">
           Decision
           <select
             value={action}
-            onChange={(event) => update({ decision: event.target.value as AgentReviewDecision["decision"] })}
+            onChange={(event) => {
+              const nextDecision = event.target.value as AgentReviewDecision["decision"];
+              update({
+                decision: nextDecision,
+                ...(nextDecision === "change_target" && currentTarget
+                  ? item.targetKind === "direct"
+                    ? { correctedSemanticId: currentTarget }
+                    : { correctedRequirementId: currentTarget }
+                  : {}),
+              });
+            }}
             className="mt-1 w-full rounded-lg border border-hairline bg-paper px-3 py-2 text-[12px] text-ink"
           >
-            {item.status === "uncertain" && <option value="">Choose…</option>}
-            <option value="keep">Keep current result</option>
-            <option value="change_target">Change target/value</option>
+            {!decision && <option value="">{item.mapping ? "Choose target…" : "Choose a disposition…"}</option>}
+            {item.mapping && item.status !== "uncertain" && item.targetKind !== "direct" && <option value="keep">Confirm proposed target</option>}
+            <option value="change_target">{item.mapping ? "Confirm or change target/value" : "Select an official target"}</option>
             <option value="unmapped">Mark unmapped</option>
             <option value="irrelevant">Mark irrelevant</option>
             <option value="reject">Reject invalid evidence</option>
@@ -275,14 +363,37 @@ export function MappingReviewRow({
       {action === "change_target" && (
         <div className="mt-2 grid gap-2 sm:grid-cols-2">
           <label className="text-[11px] text-muted">
-            Official target
+            {item.targetKind === "direct" ? "Verified ECLASS concept" : "Official target"}
             <select
               value={target}
-              onChange={(event) => update({ correctedRequirementId: event.target.value })}
+              onChange={(event) =>
+                item.targetKind === "direct"
+                  ? update({
+                      correctedSemanticId: event.target.value,
+                      correctedRequirementId: null,
+                    })
+                  : update({
+                      correctedRequirementId: event.target.value,
+                      correctedSemanticId: null,
+                    })
+              }
               className="mt-1 w-full rounded-lg border border-hairline bg-paper px-3 py-2 font-mono text-[11px] text-ink"
             >
               <option value="">Choose target…</option>
-              {targets.map((requirement) => <option key={requirement.id} value={requirement.id}>{requirement.templatePath.join(" / ")}</option>)}
+              {item.targetKind === "direct"
+                ? item.alternativeTargets.map((candidate) => {
+                    const semanticId = candidate.semanticId.keys[0]?.value ?? "";
+                    return (
+                      <option key={semanticId} value={semanticId}>
+                        {candidate.idShort} · {semanticId}
+                      </option>
+                    );
+                  })
+                : targets.map((requirement) => (
+                    <option key={requirement.id} value={requirement.id}>
+                      {requirement.templatePath.join(" / ")}
+                    </option>
+                  ))}
             </select>
           </label>
           <label className="text-[11px] text-muted">

@@ -7,6 +7,7 @@ import logging
 import uuid
 from collections.abc import AsyncIterator, Mapping
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, cast
 
 import httpx
@@ -23,6 +24,10 @@ from mia_dpp.agent.models import (
     AgentStatus,
     AgentValueRequest,
 )
+from mia_dpp.agents.conversation import (
+    ConversationAction,
+    PydanticConversationSupervisor,
+)
 from mia_dpp.agents.discovery import PydanticDiscoveryAgent
 from mia_dpp.agents.research import DeterministicResearchAgent, PydanticResearchAgent
 from mia_dpp.agents.semantic_mapping import PydanticBatchSemanticMapper
@@ -32,14 +37,20 @@ from mia_dpp.config import Settings
 from mia_dpp.domain.product import BackgroundJob, MessageRole, ProductRun, RunStatus
 from mia_dpp.integrations.crawl4ai import Crawl4AIPageLoader
 from mia_dpp.integrations.ddgs import DdgsSearchProvider
-from mia_dpp.persistence.catalogue import ActiveProductRunExists, LOCAL_USER_ID
+from mia_dpp.persistence.catalogue import LOCAL_USER_ID, ActiveProductRunExists
 from mia_dpp.persistence.workspace import WorkspaceView
 from mia_dpp.runtime.checkpoints import open_checkpointer
 from mia_dpp.runtime.factory import create_artifact_store, create_catalogue
+from mia_dpp.semantic.decision_policy import DecisionPolicySettings
+from mia_dpp.semantic.eclass import EclassJsonV2Provider, EclassPropertyProvider
+from mia_dpp.semantic.eclass_xml import EclassXmlZipProvider
+from mia_dpp.semantic.jev import OpenRouterJevClient
 from mia_dpp.services.deep_research import DeepResearchService
+from mia_dpp.services.product_query import ProductQueryService
 from mia_dpp.tools.mapping.models import SemanticMapper
 from mia_dpp.tools.mapping.review import MappingReviewService
-from mia_dpp.tools.search import SearchProvider
+from mia_dpp.tools.search import SearchProvider, SearchUnavailableError
+from mia_dpp.tools.web.models import PageLoadError
 from mia_dpp.tools.web.tool import WebExtractionTool
 from mia_dpp.workflow.context import MiaContext
 from mia_dpp.workflow.graph import create_graph
@@ -66,6 +77,7 @@ class Mia:
         search_provider: SearchProvider | None = None,
         web_tool: WebExtractionTool | None = None,
         semantic_mapper: SemanticMapper | None = None,
+        eclass_provider: EclassPropertyProvider | None = None,
     ) -> None:
         self.settings = settings or Settings()
         self.templates = OfficialTemplateRepository(self.settings.standards_root)
@@ -92,6 +104,62 @@ class Mia:
         semantic = semantic_mapper or (
             PydanticBatchSemanticMapper(agent_model) if agent_model is not None else None
         )
+        jev_decider: OpenRouterJevClient | None = None
+        if self.settings.jev_mapping_enabled and not self.settings.jev_shadow_enabled:
+            raise ValueError("MIA_JEV_MAPPING_ENABLED requires MIA_JEV_SHADOW_ENABLED")
+        if self.settings.jev_shadow_enabled:
+            if self.settings.openrouter_api_key is None:
+                raise ValueError("MIA_JEV_SHADOW_ENABLED requires OPENROUTER_API_KEY")
+            jev_decider = OpenRouterJevClient(
+                api_key=self.settings.openrouter_api_key.get_secret_value(),
+                model=self.settings.jev_model,
+                max_concurrency=self.settings.jev_max_concurrency,
+            )
+        if self.settings.semantic_promotion_enabled and not self.settings.eclass_shadow_enabled:
+            raise ValueError("MIA_SEMANTIC_PROMOTION_ENABLED requires MIA_ECLASS_SHADOW_ENABLED")
+
+        resolved_eclass_provider = eclass_provider
+        if self.settings.eclass_shadow_enabled:
+            if jev_decider is None:
+                raise ValueError("MIA_ECLASS_SHADOW_ENABLED requires MIA_JEV_SHADOW_ENABLED")
+            if resolved_eclass_provider is None:
+                if self.settings.eclass_provider_mode == "local":
+                    if not self.settings.eclass_xml_dictionary_zips:
+                        raise ValueError(
+                            "MIA_ECLASS_PROVIDER=local requires "
+                            "MIA_ECLASS_XML_DICTIONARY_ZIPS"
+                        )
+                    if self.settings.eclass_certificate_file is not None:
+                        raise ValueError(
+                            "Configure local ECLASS XML ZIPs or an ECLASS certificate, not both"
+                        )
+                    dictionary_zips = tuple(
+                        Path(item.strip())
+                        for item in self.settings.eclass_xml_dictionary_zips.split(",")
+                        if item.strip()
+                    )
+                    resolved_eclass_provider = EclassXmlZipProvider(
+                        dictionary_zips,
+                        language=self.settings.eclass_xml_language,
+                    )
+                elif self.settings.eclass_xml_dictionary_zips:
+                    raise ValueError(
+                        "Local ECLASS XML ZIPs are configured but "
+                        "MIA_ECLASS_PROVIDER is not set to 'local'"
+                    )
+                elif self.settings.eclass_certificate_file is None:
+                    raise ValueError(
+                        "MIA_ECLASS_SHADOW_ENABLED requires local ECLASS XML ZIPs or "
+                        "MIA_ECLASS_CERTIFICATE_FILE"
+                    )
+                else:
+                    resolved_eclass_provider = EclassJsonV2Provider(
+                        certificate_file=self.settings.eclass_certificate_file,
+                        key_file=self.settings.eclass_key_file,
+                        base_url=self.settings.eclass_json_base_url,
+                        search_parameter=self.settings.eclass_search_parameter,
+                    )
+
         discovery = PydanticDiscoveryAgent(agent_model, search) if agent_model is not None else None
         research = (
             PydanticResearchAgent(agent_model, search)
@@ -108,8 +176,34 @@ class Mia:
             search=search,
             research_agent=research,
             semantic_mapper=semantic,
+            jev_decider=jev_decider,
+            jev_mapping_enabled=self.settings.jev_mapping_enabled,
+            jev_routing_max_concurrency=self.settings.jev_max_concurrency,
+            jev_decision_policy=DecisionPolicySettings(
+                auto_min_selected_probability=(self.settings.jev_auto_min_selected_probability),
+                auto_min_margin=self.settings.jev_auto_min_margin,
+                auto_max_runner_up_ratio=self.settings.jev_auto_max_runner_up_ratio,
+                auto_max_normalized_entropy=self.settings.jev_auto_max_entropy,
+                optional_min_selected_probability=(
+                    self.settings.jev_optional_min_selected_probability
+                ),
+                optional_min_margin=self.settings.jev_optional_min_margin,
+                optional_max_runner_up_ratio=(self.settings.jev_optional_max_runner_up_ratio),
+                optional_max_normalized_entropy=(self.settings.jev_optional_max_entropy),
+            ),
+            jev_grouping_max_groups=self.settings.jev_grouping_max_groups,
+            eclass_shadow_enabled=self.settings.eclass_shadow_enabled,
+            eclass_provider=resolved_eclass_provider,
+            eclass_candidate_limit=self.settings.eclass_candidate_limit,
+            semantic_promotion_enabled=self.settings.semantic_promotion_enabled,
         )
         self.store = WorkspaceView(catalogue, artifacts)
+        self.query = ProductQueryService(catalogue, artifacts)
+        self.conversation = (
+            PydanticConversationSupervisor(agent_model, self.query)
+            if agent_model is not None
+            else None
+        )
         self.deep_research = DeepResearchService(self.context)
         self._response_view = AgentResponseView(self.context, self.store)
         self._graph: Any | None = None
@@ -137,13 +231,22 @@ class Mia:
                         ):
                             return None
                         allow_live_lease = True
-                        reason = "No active execution remained after restart; saved product work remains available."
+                        reason = (
+                            "No active execution remained after restart; saved product work "
+                            "remains available."
+                        )
                     else:
-                        reason = "Execution stopped and its lease expired; saved product work remains available."
+                        reason = (
+                            "Execution stopped and its lease expired; saved product work "
+                            "remains available."
+                        )
                 elif run.status is RunStatus.AWAITING_HUMAN:
                     if await self._has_review_checkpoint(run, user_id=user_id):
                         return None
-                    reason = "The pending review checkpoint is unavailable; saved product work remains available."
+                    reason = (
+                        "The pending review checkpoint is unavailable; saved product work "
+                        "remains available."
+                    )
                 else:
                     return None
                 return self.context.catalogue.interrupt_unresumable_run(
@@ -163,9 +266,7 @@ class Mia:
         thread_id = self._agent_server_thread_id(run.thread_id, user_id)
         try:
             for status in ("running", "pending"):
-                if await self._agent_server_client().runs.list(
-                    thread_id, status=status, limit=1
-                ):
+                if await self._agent_server_client().runs.list(thread_id, status=status, limit=1):
                     return True
         except httpx.HTTPStatusError as error:
             if error.response.status_code != 404:
@@ -178,24 +279,36 @@ class Mia:
             if snapshot is not None:
                 return self._snapshot_matches_review(snapshot, run.id)
         graph = await self._ensure_graph()
-        snapshot = await graph.aget_state(
-            self._config(run.thread_id, user_id), subgraphs=True
-        )
+        snapshot = await graph.aget_state(self._config(run.thread_id, user_id), subgraphs=True)
         return self._snapshot_matches_review(snapshot, run.id)
 
     @staticmethod
     def _snapshot_matches_review(snapshot: Any, run_id: str) -> bool:
         if Mia._snapshot_values(snapshot).get("run_id") != run_id:
             return False
-        interrupts = snapshot.get("interrupts", ()) if isinstance(snapshot, Mapping) else getattr(snapshot, "interrupts", ())
+        interrupts = (
+            snapshot.get("interrupts", ())
+            if isinstance(snapshot, Mapping)
+            else getattr(snapshot, "interrupts", ())
+        )
         if interrupts:
             return True
-        tasks = snapshot.get("tasks", ()) if isinstance(snapshot, Mapping) else getattr(snapshot, "tasks", ())
+        tasks = (
+            snapshot.get("tasks", ())
+            if isinstance(snapshot, Mapping)
+            else getattr(snapshot, "tasks", ())
+        )
         for task in tasks:
-            task_interrupts = task.get("interrupts", ()) if isinstance(task, Mapping) else getattr(task, "interrupts", ())
+            task_interrupts = (
+                task.get("interrupts", ())
+                if isinstance(task, Mapping)
+                else getattr(task, "interrupts", ())
+            )
             if task_interrupts:
                 return True
-            nested = task.get("state") if isinstance(task, Mapping) else getattr(task, "state", None)
+            nested = (
+                task.get("state") if isinstance(task, Mapping) else getattr(task, "state", None)
+            )
             if nested is not None and Mia._snapshot_matches_review(nested, run_id):
                 return True
         return False
@@ -207,23 +320,109 @@ class Mia:
         user_id: str = LOCAL_USER_ID,
     ) -> AgentResponse:
         requested_thread_id = request.thread_id
+        provisional_thread_id = requested_thread_id or f"thread-{uuid.uuid4().hex}"
+        provisional_existed = (
+            self.context.catalogue.get_thread(
+                provisional_thread_id,
+                user_id=user_id,
+            )
+            is not None
+        )
+        self.context.catalogue.get_or_create_thread(
+            provisional_thread_id,
+            user_id,
+            title=request.message[:120],
+        )
+
+        conversation = getattr(self, "conversation", None)
+        if conversation is not None and not request.refresh_requested:
+            recent_messages = tuple(
+                {
+                    "role": item.role.value,
+                    "content": item.content,
+                }
+                for item in self.context.catalogue.list_messages(
+                    provisional_thread_id,
+                    user_id=user_id,
+                )[-12:]
+            )
+            turn = await conversation.run(
+                request.message,
+                thread_id=provisional_thread_id,
+                user_id=user_id,
+                recent_messages=recent_messages,
+            )
+            if turn.action is ConversationAction.REPLY:
+                message = self.context.catalogue.add_message(
+                    provisional_thread_id,
+                    MessageRole.USER,
+                    request.message,
+                    user_id=user_id,
+                )
+                self._assign_message_to_latest_run(
+                    message.id,
+                    provisional_thread_id,
+                    user_id=user_id,
+                )
+                status_view = self.query.work_status(
+                    provisional_thread_id,
+                    user_id=user_id,
+                )
+                response = AgentResponse(
+                    thread_id=provisional_thread_id,
+                    reply=turn.reply,
+                    status=self._conversation_status(status_view.run_status),
+                    decision_summary=turn.decision_summary,
+                    trace_events=self.store.list_events(
+                        provisional_thread_id,
+                        user_id=user_id,
+                    )[-12:],
+                    artifact_count=len(
+                        self.store.list_artifacts(
+                            provisional_thread_id,
+                            user_id=user_id,
+                        )
+                    ),
+                )
+                self._record_assistant(response, user_id=user_id)
+                return response
+
+            if turn.action is ConversationAction.RETRY_WORK:
+                message = self.context.catalogue.add_message(
+                    provisional_thread_id,
+                    MessageRole.USER,
+                    request.message,
+                    user_id=user_id,
+                )
+                return await self.retry_work(
+                    provisional_thread_id,
+                    user_id=user_id,
+                    message_id=message.id,
+                )
+
         active_product_run: ProductRun | None = None
         redirected_to_active_thread = False
         direct_url = direct_product_url(request.message)
+        thread_id = provisional_thread_id
         if direct_url is not None:
             product, _ = self.context.catalogue.get_or_create_product(
                 direct_url,
                 user_id=user_id,
             )
-            active = self.context.catalogue.latest_active_run(product.id, user_id=user_id)
+            active = self.context.catalogue.latest_active_run(
+                product.id,
+                user_id=user_id,
+            )
             if active is not None:
                 active_product_run = active
-                redirected_to_active_thread = active.thread_id != requested_thread_id
+                redirected_to_active_thread = active.thread_id != provisional_thread_id
                 thread_id = active.thread_id
-            else:
-                thread_id = requested_thread_id or f"thread-{uuid.uuid4().hex}"
-        else:
-            thread_id = requested_thread_id or f"thread-{uuid.uuid4().hex}"
+
+        if thread_id != provisional_thread_id and not provisional_existed:
+            self.context.catalogue.delete_thread(
+                provisional_thread_id,
+                user_id=user_id,
+            )
 
         thread_exists = self.context.catalogue.get_thread(thread_id, user_id=user_id) is not None
         self.context.catalogue.get_or_create_thread(
@@ -231,6 +430,13 @@ class Mia:
             user_id,
             title=request.message[:120],
         )
+        message = self.context.catalogue.add_message(
+            thread_id,
+            MessageRole.USER,
+            request.message,
+            user_id=user_id,
+        )
+
         remote = self._use_agent_server
         snapshot: Any | None = None
         if remote:
@@ -251,12 +457,6 @@ class Mia:
             snapshot = await graph.aget_state(config, subgraphs=True)
         assert snapshot is not None
         trace_offset = len(self.store.list_events(thread_id, user_id=user_id))
-        message = self.context.catalogue.add_message(
-            thread_id,
-            MessageRole.USER,
-            request.message,
-            user_id=user_id,
-        )
         values = self._snapshot_values(snapshot)
 
         if active_product_run is not None:
@@ -472,7 +672,9 @@ class Mia:
                     user_id=user_id,
                     active_run=completed_run,
                     product_url=str(result_values["product_url"]),
-                    user_message="Refresh sources requested while previous product work was running.",
+                    user_message=(
+                        "Refresh sources requested while previous product work was running."
+                    ),
                     refresh_requested=True,
                     previous_values=result_values,
                     trace_offset=trace_offset,
@@ -527,20 +729,23 @@ class Mia:
         )
         if snapshot is None:
             graph = await self._ensure_graph()
-            snapshot = await graph.aget_state(
-                self._config(thread_id, user_id), subgraphs=True
-            )
+            snapshot = await graph.aget_state(self._config(thread_id, user_id), subgraphs=True)
         values = self._snapshot_values(snapshot)
         latest_run = self._latest_run(thread_id, user_id=user_id)
-        if latest_run is not None and latest_run.status is RunStatus.INCOMPLETE and (
-            not values or values.get("run_id") in {None, latest_run.id}
+        if (
+            latest_run is not None
+            and latest_run.status is RunStatus.INCOMPLETE
+            and (not values or values.get("run_id") in {None, latest_run.id})
         ):
-            return AgentResponse(
-                thread_id=thread_id,
-                reply="This workflow was interrupted. Continue saved work from Assets.",
-                status=AgentStatus.FAILED,
-                decision_summary="The previous execution stopped; durable product work remains available.",
+            values = dict(values)
+            values["thread_id"] = thread_id
+            values["user_id"] = user_id
+            values.setdefault("run_id", latest_run.id)
+            values.setdefault("product_id", latest_run.product_id)
+            values.setdefault(
+                "reply", "This workflow was interrupted. Durable product work remains available."
             )
+            values.setdefault("status", AgentStatus.FAILED.value)
         if not values:
             return AgentResponse(
                 thread_id=thread_id,
@@ -548,6 +753,9 @@ class Mia:
                 status=AgentStatus.AWAITING_INPUT,
                 decision_summary="Conversation exists but has no active workflow state.",
             )
+        values = dict(values)
+        values["thread_id"] = thread_id
+        values["user_id"] = user_id
         return self._response_view.build(values, trace_offset=0)
 
     async def close(self) -> None:
@@ -563,6 +771,55 @@ class Mia:
         """Run one durable worker invocation against catalogue-owned job state."""
 
         return await self.deep_research.run(job_id, user_id=user_id)
+
+    async def retry_work(
+        self,
+        thread_id: str,
+        *,
+        user_id: str = LOCAL_USER_ID,
+        message_id: str | None = None,
+    ) -> AgentResponse:
+        """Explicitly supersede a running/failed attempt with a new fenced generation."""
+
+        thread = self.context.catalogue.get_thread(thread_id, user_id=user_id)
+        if thread is None:
+            raise KeyError(thread_id)
+        run = self._latest_run(thread_id, user_id=user_id)
+        if run is None:
+            raise ValueError("this conversation has no product work to retry")
+        if run.status not in {
+            RunStatus.RUNNING,
+            RunStatus.INCOMPLETE,
+            RunStatus.FAILED,
+        }:
+            raise ValueError(f"run {run.id} is not retryable from status {run.status.value}")
+        product = self.context.catalogue.get_product(run.product_id, user_id=user_id)
+        if product is None:
+            raise KeyError(run.product_id)
+
+        retry_message = "Retry the interrupted product workflow."
+        if message_id is None:
+            user_message = self.context.catalogue.add_message(
+                thread_id,
+                MessageRole.USER,
+                retry_message,
+                run_id=run.id,
+                user_id=user_id,
+            )
+            message_id = user_message.id
+        return await self._restart_product_work_in_same_thread(
+            thread_id=thread_id,
+            user_id=user_id,
+            active_run=run,
+            product_url=product.canonical_url,
+            user_message=retry_message,
+            refresh_requested=False,
+            previous_values={},
+            trace_offset=len(self.store.list_events(thread_id, user_id=user_id)),
+            message_id=message_id,
+            reason="Recovered product work from the latest durable snapshot after failure.",
+            allow_terminal=True,
+        )
 
     async def _resume(
         self,
@@ -592,9 +849,7 @@ class Mia:
             if snapshot is not None:
                 snapshot_values = self._snapshot_values(snapshot)
                 failing_run_id = (
-                    str(snapshot_values["run_id"])
-                    if snapshot_values.get("run_id")
-                    else None
+                    str(snapshot_values["run_id"]) if snapshot_values.get("run_id") else None
                 )
                 result = await self._run_agent_server(
                     thread_id, user_id, command={"resume": payload}
@@ -608,9 +863,7 @@ class Mia:
                 )
                 snapshot_values = self._snapshot_values(local_snapshot)
                 failing_run_id = (
-                    str(snapshot_values["run_id"])
-                    if snapshot_values.get("run_id")
-                    else None
+                    str(snapshot_values["run_id"]) if snapshot_values.get("run_id") else None
                 )
                 result = await graph.ainvoke(
                     Command(resume=payload),
@@ -671,9 +924,7 @@ class Mia:
             expected_generation=thread.workflow_generation,
             reason=reason,
             refresh_requested=refresh_requested,
-            require_expired_lease=(
-                active_run.status is RunStatus.RUNNING and not allow_terminal
-            ),
+            require_expired_lease=(active_run.status is RunStatus.RUNNING and not allow_terminal),
             allow_terminal=allow_terminal,
         )
         update: dict[str, Any] = {
@@ -685,18 +936,12 @@ class Mia:
             "run_id": replacement.id,
             "workflow_generation": replacement.workflow_generation,
             "source_generation": (
-                (
-                    durable.source_generation + 1
-                    if refresh_requested
-                    else durable.source_generation
-                )
+                (durable.source_generation + 1 if refresh_requested else durable.source_generation)
                 if durable is not None
                 else 1
             ),
             "refresh_requested": refresh_requested,
-            "reuse_mode": (
-                "refresh_sources" if refresh_requested else "continue_saved_work"
-            ),
+            "reuse_mode": ("refresh_sources" if refresh_requested else "continue_saved_work"),
             "reuse_prior_work": bool(
                 not refresh_requested and durable is not None and durable.evidence_artifact_id
             ),
@@ -777,7 +1022,8 @@ class Mia:
         return self._agent_client
 
     def _agent_server_thread_id(self, thread_id: str, user_id: str) -> str:
-        # Workflow generations let one visible chat restart safely without reusing an old checkpoint.
+        # Workflow generations let one visible chat restart safely without reusing
+        # an old checkpoint.
         thread = self.context.catalogue.get_thread(thread_id, user_id=user_id)
         generation = thread.workflow_generation if thread is not None else 0
         return str(
@@ -1035,13 +1281,13 @@ class Mia:
                 "event": "run",
                 "data": {"runId": session.run_id, "status": session.status},
             }
-            for event in history:
-                yield event
+            for history_event in history:
+                yield history_event
             while session.status == "running":
-                event = await listener.get()
-                if event is None:
+                incoming_event = await listener.get()
+                if incoming_event is None:
                     break
-                yield event
+                yield incoming_event
         finally:
             session.listeners.discard(listener)
 
@@ -1051,7 +1297,9 @@ class Mia:
         result = dict(values) if isinstance(values, Mapping) else {}
         tasks = snapshot.get("tasks", ()) if isinstance(snapshot, Mapping) else snapshot.tasks
         for task in tasks:
-            interrupts = task.get("interrupts", ()) if isinstance(task, Mapping) else task.interrupts
+            interrupts = (
+                task.get("interrupts", ()) if isinstance(task, Mapping) else task.interrupts
+            )
             if not interrupts:
                 continue
             nested = task.get("state") if isinstance(task, Mapping) else task.state
@@ -1153,13 +1401,26 @@ class Mia:
         if self.context.catalogue.get_thread(run.thread_id, user_id=user_id) is None:
             return
         detail = str(error) or type(error).__name__
+        retryable = self._retryable_failure(error)
         self.context.catalogue.add_event(
             run.id,
-            "workflow.failed",
-            "Workflow execution failed.",
-            metadata={"error": detail, "errorType": type(error).__name__},
+            "workflow.retryable_failure" if retryable else "workflow.failed",
+            (
+                "Workflow execution stopped on a retryable external dependency failure."
+                if retryable
+                else "Workflow execution failed."
+            ),
+            metadata={
+                "error": detail,
+                "errorType": type(error).__name__,
+                "retryable": retryable,
+            },
         )
-        self.context.catalogue.finish_run(run.id, RunStatus.FAILED, error=detail)
+        self.context.catalogue.finish_run(
+            run.id,
+            RunStatus.INCOMPLETE if retryable else RunStatus.FAILED,
+            error=detail,
+        )
 
     def _record_rejected_input(
         self,
@@ -1186,6 +1447,31 @@ class Mia:
             "Rejected invalid human input without advancing the workflow.",
             metadata={"error": str(error)},
         )
+
+    @staticmethod
+    def _retryable_failure(error: Exception) -> bool:
+        return isinstance(
+            error,
+            (
+                httpx.HTTPError,
+                SearchUnavailableError,
+                PageLoadError,
+                TimeoutError,
+                ConnectionError,
+            ),
+        )
+
+    @staticmethod
+    def _conversation_status(run_status: RunStatus | None) -> AgentStatus:
+        if run_status is RunStatus.AWAITING_HUMAN:
+            return AgentStatus.AWAITING_REVIEW
+        if run_status is RunStatus.RUNNING:
+            return AgentStatus.RUNNING
+        if run_status in {RunStatus.COMPLETED, RunStatus.REUSED}:
+            return AgentStatus.COMPLETED
+        if run_status is RunStatus.FAILED:
+            return AgentStatus.FAILED
+        return AgentStatus.AWAITING_INPUT
 
     def _latest_active_run(self, thread_id: str, *, user_id: str) -> ProductRun | None:
         active = {RunStatus.RUNNING, RunStatus.AWAITING_HUMAN}
@@ -1216,11 +1502,8 @@ class Mia:
         return None
 
     def _config(self, thread_id: str, user_id: str) -> dict[str, dict[str, str]]:
-        # A new workflow generation creates a clean checkpoint namespace inside the same visible chat.
+        # A new workflow generation creates a clean checkpoint namespace inside
+        # the same visible chat.
         thread = self.context.catalogue.get_thread(thread_id, user_id=user_id)
         generation = thread.workflow_generation if thread is not None else 0
-        return {
-            "configurable": {
-                "thread_id": f"{user_id}:{thread_id}:generation:{generation}"
-            }
-        }
+        return {"configurable": {"thread_id": f"{user_id}:{thread_id}:generation:{generation}"}}

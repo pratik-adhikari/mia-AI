@@ -48,6 +48,8 @@ async def run_worker() -> None:
                 updated.metadata.get("processedSources", 0),
                 updated.metadata.get("totalSources", 0),
             )
+            if updated.metadata.get("mappingRefreshPending"):
+                await asyncio.sleep(poll_seconds)
     finally:
         await application.close()
 

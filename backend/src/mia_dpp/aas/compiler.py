@@ -11,6 +11,7 @@ from typing import Any, cast
 from aas_core3 import jsonization
 
 from mia_dpp.aas._structure import _children
+from mia_dpp.aas.identifiers import ID_SHORT_PATTERN, sanitize_id_short
 from mia_dpp.aas.models import AasArtifact
 from mia_dpp.aas.templates import OfficialTemplateRepository, resolve_element
 from mia_dpp.canonical import sha256_json
@@ -21,19 +22,10 @@ from mia_dpp.errors import CompilationError, MappingError
 
 _VALUE_MODEL_TYPES = {"Property", "MultiLanguageProperty", "Range", "File", "Blob"}
 _CONTAINER_MODEL_TYPES = {"SubmodelElementCollection", "SubmodelElementList", "Entity"}
-_ID_SHORT_PATTERN = re.compile(r"^[A-Za-z][A-Za-z0-9_]*$")
 
 
 def _reference_json(reference: SemanticReference) -> dict[str, Any]:
     return reference.model_dump(mode="json", by_alias=True)
-
-
-def _id_short(value: str, fallback: str = "Product") -> str:
-    cleaned = re.sub(r"[^A-Za-z0-9_]", "_", value.strip())
-    cleaned = re.sub(r"_+", "_", cleaned).strip("_")
-    if not cleaned or not cleaned[0].isalpha():
-        cleaned = f"{fallback}_{cleaned}" if cleaned else fallback
-    return cleaned[:128]
 
 
 def _child_key(model_type: str) -> str | None:
@@ -116,12 +108,16 @@ class AasCompiler:
         package: ProductKnowledgePackage,
         mappings: Sequence[FieldMapping],
         template: SubmodelTemplate,
+        *,
+        aas_id: str | None = None,
+        asset_id: str | None = None,
+        submodel_id: str | None = None,
     ) -> AasArtifact:
         """Build one stable AAS artifact from accepted mappings."""
 
-        paths = [item.target.instance_path for item in mappings]
-        if len(paths) != len(set(paths)):
-            raise MappingError("mapping instance paths must be unique")
+        identities = [item.target.projection_identity for item in mappings]
+        if len(identities) != len(set(identities)):
+            raise MappingError("mapping projection identities must be unique")
         evidence = {item.id: item for item in package.evidence}
         resolved: list[tuple[FieldMapping, str]] = []
         for approved in mappings:
@@ -141,17 +137,25 @@ class AasCompiler:
                 {
                     "evidence": approved.evidence_id,
                     "path": approved.target.instance_path,
+                    "listInstances": [
+                        {
+                            "path": binding.template_path,
+                            "key": binding.instance_key,
+                        }
+                        for binding in approved.target.list_instance_bindings
+                    ],
                     "value": value,
                 }
                 for approved, value in sorted(
-                    resolved, key=lambda item: item[0].target.instance_path
+                    resolved,
+                    key=lambda item: item[0].target.projection_identity,
                 )
             ],
         }
         suffix = sha256_json(stable_seed)[:32]
-        aas_id = f"urn:mia:aas:{suffix}"
-        asset_id = f"urn:mia:asset:{suffix}"
-        submodel_id = f"urn:mia:submodel:{template.release.key}:{suffix}"
+        aas_id = aas_id or f"urn:mia:aas:{suffix}"
+        asset_id = asset_id or f"urn:mia:asset:{suffix}"
+        submodel_id = submodel_id or f"urn:mia:submodel:{template.release.key}:{suffix}"
 
         raw_submodel = self._repository.raw_submodel(template.release.key)
         raw_elements = raw_submodel.get("submodelElements")
@@ -159,7 +163,7 @@ class AasCompiler:
             raise CompilationError("official template submodelElements is not a list")
         ordered_mappings = sorted(
             (approved for approved, _ in resolved),
-            key=lambda item: item.target.instance_path,
+            key=lambda item: item.target.projection_identity,
         )
         values = {approved.evidence_id: value for approved, value in resolved}
         projected = self._project_children(
@@ -181,7 +185,7 @@ class AasCompiler:
         }
         shell: dict[str, Any] = {
             "id": aas_id,
-            "idShort": _id_short(package.product_name),
+            "idShort": sanitize_id_short(package.product_name),
             "assetInformation": {
                 "assetKind": "Instance",
                 "globalAssetId": asset_id,
@@ -229,12 +233,36 @@ class AasCompiler:
             if target.id_short != official.id_short:
                 raise MappingError("fixed template target idShort cannot be changed")
         else:
-            if not _ID_SHORT_PATTERN.fullmatch(target.id_short):
+            if not ID_SHORT_PATTERN.fullmatch(target.id_short):
                 raise MappingError("wildcard target idShort is invalid")
             if target.instance_path[:-1] != target.template_path[:-1]:
                 raise MappingError("wildcard target parent path cannot be changed")
             if target.instance_path[-1] != target.id_short:
                 raise MappingError("wildcard instance path must end with its idShort")
+
+        for binding in target.list_instance_bindings:
+            if binding.template_path[-1] != "[]":
+                raise MappingError("list-instance binding must end at a [] prototype")
+            prototype = resolve_element(template, binding.template_path)
+            parent = resolve_element(template, binding.template_path[:-1])
+            if parent.model_type != "SubmodelElementList":
+                raise MappingError("list-instance binding parent is not a SubmodelElementList")
+            if prototype.path != binding.template_path:
+                raise MappingError("list-instance binding does not match official template")
+
+    @staticmethod
+    def _list_instance_key(
+        mapping: FieldMapping,
+        prototype_path: tuple[str, ...],
+    ) -> str | None:
+        matches = tuple(
+            binding.instance_key
+            for binding in mapping.target.list_instance_bindings
+            if binding.template_path == prototype_path
+        )
+        if len(matches) > 1:
+            raise MappingError("mapping has duplicate bindings for one list prototype")
+        return matches[0] if matches else None
 
     def _project_children(
         self,
@@ -274,6 +302,28 @@ class AasCompiler:
                 raise CompilationError(
                     f"target path {'/'.join(path)!r} crosses unsupported {model_type}"
                 )
+
+            if parent_model_type == "SubmodelElementList":
+                partitions: dict[str | None, list[FieldMapping]] = {}
+                for mapping in relevant:
+                    instance_key = self._list_instance_key(mapping, path)
+                    partitions.setdefault(instance_key, []).append(mapping)
+                for partition in partitions.values():
+                    descendants = self._project_children(
+                        _children(raw),
+                        parent_path=path,
+                        parent_model_type=model_type,
+                        mappings=partition,
+                        values=values,
+                    )
+                    if not descendants:
+                        continue
+                    instance = _metadata(raw)
+                    instance[key] = descendants
+                    instance.pop("idShort", None)
+                    projected.append(instance)
+                continue
+
             descendants = self._project_children(
                 _children(raw),
                 parent_path=path,
@@ -284,8 +334,6 @@ class AasCompiler:
             if descendants:
                 instance = _metadata(raw)
                 instance[key] = descendants
-                if parent_model_type == "SubmodelElementList":
-                    instance.pop("idShort", None)
                 projected.append(instance)
         return projected
 

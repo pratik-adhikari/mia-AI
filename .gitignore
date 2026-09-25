@@ -7,6 +7,8 @@ node_modules
 next-env.d.ts
 .env*
 .mia-data/
+.eclass-data/
+*assetXML*.zip
 
 backend/.venv/
 backend/.pytest_cache/

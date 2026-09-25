@@ -64,7 +64,15 @@ class WorkspaceView:
                     id=event.id,
                     thread_id=thread_id,
                     event_type=event.event_type,
-                    status=TraceStatus.COMPLETED,
+                    status=(
+                        TraceStatus.STARTED
+                        if event.event_type.endswith(".started")
+                        else (
+                            TraceStatus.FAILED
+                            if event.event_type.endswith(".failed")
+                            else TraceStatus.COMPLETED
+                        )
+                    ),
                     timestamp=event.timestamp,
                     summary=event.summary,
                     product_id=run.product_id if run else None,

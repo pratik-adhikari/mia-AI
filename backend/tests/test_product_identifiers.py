@@ -89,7 +89,6 @@ def test_same_strong_identity_on_two_products_is_flagged_not_merged(tmp_path: Pa
     assert catalogue.get_product(second.id, user_id="user-a") == second
 
 
-
 def test_instance_identifiers_are_private_to_the_account(tmp_path: Path) -> None:
     catalogue = ProductCatalogue(tmp_path / "catalogue.sqlite3")
     product, _ = catalogue.get_or_create_product(
@@ -114,7 +113,6 @@ def test_instance_identifiers_are_private_to_the_account(tmp_path: Path) -> None
     assert stored.owner_user_id == "user-a"
     assert stored in catalogue.list_product_identifiers(product.id, user_id="user-a")
     assert stored not in catalogue.list_product_identifiers(product.id, user_id="user-b")
-
 
 
 def test_two_users_can_store_same_private_serial_independently(tmp_path: Path) -> None:
@@ -144,7 +142,6 @@ def test_two_users_can_store_same_private_serial_independently(tmp_path: Path) -
     assert stored_b.owner_user_id == "user-b"
     assert stored_a in catalogue.list_product_identifiers(product.id, user_id="user-a")
     assert stored_b in catalogue.list_product_identifiers(product.id, user_id="user-b")
-
 
 
 def test_stale_generation_cannot_publish_product_metadata_or_identifiers(tmp_path: Path) -> None:

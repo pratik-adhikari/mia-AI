@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { UserButton } from "@clerk/nextjs";
@@ -14,13 +14,15 @@ import type {
   DppPackage,
   EvidenceRecord,
   FieldMapping,
+  JevPolicyDecision,
+  JevRoutingTrace,
   HumanRequest,
   MappingResult,
   Requirement,
+  RequirementInventory,
   SemanticReviewItem,
   ProductCandidate,
   WorkspaceArtifact,
-  MappingKnowledgeEntry,
   BackgroundJob,
   ThreadRecord,
   ProductDetail,
@@ -28,24 +30,19 @@ import type {
 import { CoveragePanel } from "@/components/CoveragePanel";
 import { EvidencePanel } from "@/components/EvidencePanel";
 import { MappingReviewRow, MappingRow } from "@/components/MappingRow";
+import { JevDecisionTrail } from "@/components/JevDecisionTrail";
+import { SourceVerificationLink } from "@/components/SourceVerificationLink";
 import { DppView } from "@/components/DppView";
-import { AgentActivity } from "@/components/AgentActivity";
 import { ChatMarkdown } from "@/components/ChatMarkdown";
 import { LiveActivity } from "@/components/LiveActivity";
 import { WorkspaceExplorer } from "@/components/WorkspaceExplorer";
-import { IntegrationGraph } from "@/components/IntegrationGraph";
 import { LiveGraphDebugPanel } from "@/components/LiveGraphDebugPanel";
 import { useAuthenticatedFetch } from "@/lib/use-authenticated-fetch";
 import { useAuthenticationEnabled } from "@/lib/app-providers";
+import { mergeReviewDecisions, reviewSubmissionIssue } from "@/lib/review-decisions";
 
 const API_URL = process.env.NEXT_PUBLIC_MIA_API_URL ?? "";
-type WorkspaceTab =
-  | "mappings"
-  | "evidence"
-  | "coverage"
-  | "process"
-  | "data"
-  | "graph";
+type WorkspaceTab = "mappings" | "evidence" | "coverage" | "data";
 
 const SAMPLES = [
   {
@@ -70,15 +67,19 @@ export default function Workspace() {
   const [threads, setThreads] = useState<ThreadRecord[]>([]);
   const [input, setInput] = useState("");
   const [websiteUrl, setWebsiteUrl] = useState("");
-  const [busy, setBusy] = useState(false);
+  const [pendingRequests, setPendingRequests] = useState(0);
+  const busy = pendingRequests > 0;
   const [mappings, setMappings] = useState<FieldMapping[]>([]);
   const [productName, setProductName] = useState("");
   const [dpp, setDpp] = useState<DppPackage | null>(null);
   const [evidence, setEvidence] = useState<EvidenceRecord[]>([]);
   const [mappingResult, setMappingResult] = useState<MappingResult | null>(null);
   const [coverageReport, setCoverageReport] = useState<CoverageReport | null>(null);
-  const [mappingKnowledge, setMappingKnowledge] = useState<MappingKnowledgeEntry[]>([]);
+  const [targetInventory, setTargetInventory] = useState<RequirementInventory | null>(null);
   const [threadId, setThreadId] = useState<string | null>(null);
+  const liveEvidenceCountRef = useRef(0);
+  const lastMappedArtifactRef = useRef<string | null>(null);
+  const lastResearchEvidenceArtifactRef = useRef<string | null>(null);
   const [agentStatus, setAgentStatus] = useState<AgentResponse["status"]>("completed");
   const [companyCandidates, setCompanyCandidates] = useState<CompanyCandidate[]>([]);
   const [productCandidates, setProductCandidates] = useState<ProductCandidate[]>([]);
@@ -86,7 +87,11 @@ export default function Workspace() {
   const [mappingCycleId, setMappingCycleId] = useState<string | null>(null);
   const [agentActivity, setAgentActivity] = useState<AgentTraceEvent[]>([]);
   const [artifacts, setArtifacts] = useState<WorkspaceArtifact[]>([]);
+  const [jevRoutingReports, setJevRoutingReports] = useState<Record<string, JevRoutingTrace[]>>({});
+  const [jevPolicyReports, setJevPolicyReports] = useState<Record<string, JevPolicyDecision[]>>({});
+  const loadedJevArtifacts = useRef(new Set<string>());
   const [backgroundJob, setBackgroundJob] = useState<BackgroundJob | null>(null);
+  const researchActive = backgroundJob?.status === "queued" || backgroundJob?.status === "running";
   const [workspaceError, setWorkspaceError] = useState<string | null>(null);
   const [restoredRunNotice, setRestoredRunNotice] = useState<string | null>(null);
   const [researchDispatchError, setResearchDispatchError] = useState<string | null>(null);
@@ -96,16 +101,81 @@ export default function Workspace() {
   const [reviewDecisions, setReviewDecisions] = useState<
     Record<string, AgentReviewDecision>
   >({});
+  const reviewRowsRef = useRef<SemanticReviewItem[]>([]);
+  const editedReviewEvidenceRef = useRef(new Set<string>());
+  const reviewContextRef = useRef<string | null>(null);
   const [tab, setTab] = useState<WorkspaceTab>("mappings");
+  const [mappingSearch, setMappingSearch] = useState("");
   const [debugPanelOpen, setDebugPanelOpen] = useState(false);
   const endRef = useRef<HTMLDivElement>(null);
   const restoredThreadRef = useRef<string | null>(null);
   const productActionRef = useRef<string | null>(null);
 
+  const jevTrails = useMemo(() => {
+    const result: Record<string, JevRoutingTrace[]> = {};
+    if (!threadId) return result;
+    for (const artifact of [...artifacts].sort((a, b) => a.createdAt.localeCompare(b.createdAt))) {
+      for (const trace of jevRoutingReports[`${threadId}:${artifact.id}`] ?? []) {
+        const previous = result[trace.focusEvidenceId] ?? [];
+        result[trace.focusEvidenceId] = [
+          ...previous.filter((item) => item.scope !== trace.scope),
+          trace,
+        ];
+      }
+    }
+    return result;
+  }, [artifacts, jevRoutingReports, threadId]);
+
+  const jevPolicies = useMemo(() => {
+    const result: Record<string, JevPolicyDecision> = {};
+    if (!threadId) return result;
+    for (const artifact of [...artifacts].sort((a, b) => a.createdAt.localeCompare(b.createdAt))) {
+      for (const decision of jevPolicyReports[`${threadId}:${artifact.id}`] ?? []) {
+        result[decision.evidenceId] = decision;
+      }
+    }
+    return result;
+  }, [artifacts, jevPolicyReports, threadId]);
+
+  useEffect(() => {
+    if (!threadId) return;
+    for (const artifact of artifacts) {
+      const path = artifact.relativePath;
+      const routing = path.endsWith("jev-idta-routing-shadow.json") ||
+        path.endsWith("research-jev-routing.json") ||
+        path.endsWith("research-deferred-jev-routing.json");
+      const policy = path.endsWith("jev-decision-policy.json") ||
+        path.endsWith("research-jev-policy.json") ||
+        path.endsWith("research-deferred-jev-policy.json");
+      const reportKey = `${threadId}:${artifact.id}`;
+      if ((!routing && !policy) || loadedJevArtifacts.current.has(reportKey)) continue;
+      loadedJevArtifacts.current.add(reportKey);
+      void authenticatedFetch(
+        `${API_URL}/api/workspaces/${encodeURIComponent(threadId)}/artifacts/${artifact.id}`
+      ).then(async (response) => {
+        if (!response.ok) throw new Error(`Jev artifact returned ${response.status}`);
+        return response.json();
+      }).then((report) => {
+        if (routing && Array.isArray(report.traces)) {
+          setJevRoutingReports((previous) => ({ ...previous, [reportKey]: report.traces }));
+        }
+        if (policy && Array.isArray(report.decisions)) {
+          setJevPolicyReports((previous) => ({ ...previous, [reportKey]: report.decisions }));
+        }
+      }).catch(() => {
+        loadedJevArtifacts.current.delete(reportKey);
+      });
+    }
+  }, [artifacts, authenticatedFetch, threadId]);
+
   const mergeActivity = useCallback((events: AgentTraceEvent[]) => {
     setAgentActivity((previous) => {
-      const known = new Set(previous.map((event) => event.id));
-      return [...previous, ...events.filter((event) => !known.has(event.id))];
+      const threadId = events[0]?.threadId;
+      const relevant = threadId
+        ? previous.filter((event) => event.threadId === threadId)
+        : previous;
+      const known = new Set(relevant.map((event) => event.id));
+      return [...relevant, ...events.filter((event) => !known.has(event.id))];
     });
   }, []);
 
@@ -140,32 +210,24 @@ export default function Workspace() {
     }
   }, [authenticatedFetch]);
 
-  const refreshBackgroundJobs = useCallback(async (activeThreadId: string) => {
-    const response = await authenticatedFetch(
-      `${API_URL}/api/threads/${encodeURIComponent(activeThreadId)}/background-jobs`
-    );
-    if (!response.ok) return;
-    const jobs = (await response.json()) as BackgroundJob[];
-    setBackgroundJob(jobs.at(-1) ?? null);
+  const refreshBackgroundJobs = useCallback(async (activeThreadId: string, publish = true) => {
+    try {
+      const response = await authenticatedFetch(
+        `${API_URL}/api/threads/${encodeURIComponent(activeThreadId)}/background-jobs`
+      );
+      if (!response.ok) return;
+      const jobs = (await response.json()) as BackgroundJob[];
+      const latest = jobs.at(-1) ?? null;
+      if (publish) setBackgroundJob(latest);
+      return latest;
+    } catch {
+      // The next poll can retry without losing the last visible job state.
+    }
   }, [authenticatedFetch]);
 
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, busy, agentActivity]);
-
-  useEffect(() => {
-    const load = async () => {
-      try {
-        const response = await authenticatedFetch(`${API_URL}/api/mapping-knowledge`);
-        if (response.ok) {
-          setMappingKnowledge((await response.json()) as MappingKnowledgeEntry[]);
-        }
-      } catch {
-        /* The empty state remains usable while the backend is unavailable. */
-      }
-    };
-    void load();
-  }, [authenticatedFetch]);
 
   useEffect(() => {
     const loadThreads = async () => {
@@ -208,17 +270,68 @@ export default function Workspace() {
   }, [searchParams, authenticatedFetch]);
 
   useEffect(() => {
-    const researchActive = backgroundJob?.status === "queued" || backgroundJob?.status === "running";
     if ((!busy && !researchActive) || !threadId) return;
     let cancelled = false;
+    let pollCount = 0;
+    let polling = false;
     const poll = async () => {
-      const [traceResponse] = await Promise.all([
-        authenticatedFetch(`${API_URL}/api/workspaces/${encodeURIComponent(threadId)}/trace`),
-        refreshArtifacts(threadId),
-        refreshBackgroundJobs(threadId),
-      ]);
-      if (!cancelled && traceResponse.ok) {
-        mergeActivity((await traceResponse.json()) as AgentTraceEvent[]);
+      if (polling) return;
+      polling = true;
+      try {
+        pollCount += 1;
+        const [traceResponse, , latestJob] = await Promise.all([
+          authenticatedFetch(`${API_URL}/api/workspaces/${encodeURIComponent(threadId)}/trace`),
+          refreshArtifacts(threadId),
+          refreshBackgroundJobs(threadId, false),
+        ]);
+        if (!cancelled && traceResponse.ok) {
+          mergeActivity((await traceResponse.json()) as AgentTraceEvent[]);
+        }
+        const mappedArtifact = latestJob?.metadata.integratedMappingArtifactId;
+        const evidenceArtifact = latestJob?.metadata.researchEvidenceArtifactId;
+        const mappingUpdated = typeof mappedArtifact === "string" &&
+          mappedArtifact !== lastMappedArtifactRef.current;
+        const evidenceUpdated = typeof evidenceArtifact === "string" &&
+          evidenceArtifact !== lastResearchEvidenceArtifactRef.current;
+        const jobFinished = latestJob?.status === "completed" ||
+          latestJob?.status === "failed" || latestJob?.status === "cancelled";
+        const needsProductRefresh = pollCount % 4 === 0 || mappingUpdated ||
+          evidenceUpdated || jobFinished;
+        let productRefreshed = !needsProductRefresh;
+        if (needsProductRefresh) {
+          try {
+            const stateResponse = await authenticatedFetch(
+              `${API_URL}/api/threads/${encodeURIComponent(threadId)}`,
+            );
+            if (stateResponse.ok && !cancelled) {
+              const state = (await stateResponse.json()) as AgentResponse;
+              if (
+                state.currentProduct &&
+                state.currentProduct.evidence.length >= liveEvidenceCountRef.current
+              ) {
+                liveEvidenceCountRef.current = state.currentProduct.evidence.length;
+                applyAgentResponse(state, true);
+                lastMappedArtifactRef.current = typeof mappedArtifact === "string"
+                  ? mappedArtifact : null;
+                lastResearchEvidenceArtifactRef.current = typeof evidenceArtifact === "string"
+                  ? evidenceArtifact : null;
+                productRefreshed = true;
+              }
+            }
+          } catch {
+            // Durable event and artifact polling continues if a checkpoint is temporarily busy.
+          }
+        }
+        if (!cancelled && latestJob !== undefined && (
+          productRefreshed || !jobFinished ||
+          latestJob?.status === "failed" || latestJob?.status === "cancelled"
+        )) {
+          setBackgroundJob(latestJob);
+        }
+      } catch {
+        // A transient poll failure must not stop later evidence and mapping updates.
+      } finally {
+        polling = false;
       }
     };
     void poll();
@@ -239,11 +352,17 @@ export default function Workspace() {
 
   function activeThread(): string {
     const active = threadId ?? `thread-${crypto.randomUUID()}`;
-    if (!threadId) setThreadId(active);
+    if (!threadId) {
+      liveEvidenceCountRef.current = 0;
+      setAgentActivity([]);
+      setThreadId(active);
+    }
     return active;
   }
 
   async function openThread(selectedThreadId: string) {
+    liveEvidenceCountRef.current = 0;
+    setAgentActivity([]);
     setThreadId(selectedThreadId);
     const [messagesResponse, stateResponse] = await Promise.all([
       authenticatedFetch(
@@ -256,6 +375,7 @@ export default function Workspace() {
     if (messagesResponse.ok) setMessages((await messagesResponse.json()) as ChatMessage[]);
     if (stateResponse.ok) {
       const state = (await stateResponse.json()) as AgentResponse;
+      setAgentActivity(state.traceEvents);
       applyAgentResponse(state);
       setRestoredRunNotice(state.status === "failed" ? state.reply : null);
     }
@@ -285,14 +405,13 @@ export default function Workspace() {
     options: { refreshRequested?: boolean } = {}
   ) {
     const t = text.trim();
-    if (!t || busy) return;
+    if (!t) return;
 
-    const next: ChatMessage[] = [...messages, { role: "user", content: t }];
-    setMessages(next);
+    setMessages((previous) => [...previous, { role: "user", content: t }]);
     setRestoredRunNotice(null);
     setInput("");
     const activeThreadId = activeThread();
-    setBusy(true);
+    setPendingRequests((count) => count + 1);
 
     try {
       const res = await authenticatedFetch("/agent/messages", {
@@ -330,7 +449,7 @@ export default function Workspace() {
         },
       ]);
     } finally {
-      setBusy(false);
+      setPendingRequests((count) => Math.max(0, count - 1));
     }
   }
 
@@ -338,7 +457,7 @@ export default function Workspace() {
     const url = websiteUrl.trim();
     if (!url || busy || semanticReview.length > 0) return;
     const activeThreadId = activeThread();
-    setBusy(true);
+    setPendingRequests((count) => count + 1);
     setMessages((previous) => [
       ...previous,
       { role: "user", content: `Import product website: ${url}` },
@@ -387,19 +506,45 @@ export default function Workspace() {
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : "unknown error";
+      let savedProduct: AgentResponse["currentProduct"] = null;
+      try {
+        const savedResponse = await authenticatedFetch(
+          `${API_URL}/api/threads/${encodeURIComponent(activeThreadId)}`,
+        );
+        if (savedResponse.ok) {
+          const saved = (await savedResponse.json()) as AgentResponse;
+          if (saved.currentProduct) {
+            savedProduct = saved.currentProduct;
+            applyAgentResponse(saved);
+          }
+        }
+      } catch {
+        // The original request error is still reported when saved state is unavailable.
+      }
       setMessages((previous) => [
         ...previous,
         {
           role: "assistant",
-          content: `The product website could not be imported: ${message}`,
+          content: savedProduct
+            ? `The request returned an error (${message}), but saved product work is shown on the right. ${savedProduct.evidence.length} source facts are available.`
+            : `The product website could not be imported: ${message}`,
         },
       ]);
     } finally {
-      setBusy(false);
+      setPendingRequests((count) => Math.max(0, count - 1));
     }
   }
 
-  function applyAgentResponse(data: AgentResponse) {
+  function applyAgentResponse(data: AgentResponse, liveProgress = false) {
+    const reviewContext = `${data.threadId}/${data.currentProduct?.productId ?? ""}`;
+    if (reviewContextRef.current !== reviewContext) {
+      reviewContextRef.current = reviewContext;
+      reviewRowsRef.current = [];
+      editedReviewEvidenceRef.current.clear();
+      lastMappedArtifactRef.current = null;
+      lastResearchEvidenceArtifactRef.current = null;
+      setReviewDecisions({});
+    }
     setThreadId(data.threadId);
     setAgentStatus(data.status);
     setCompanyCandidates(data.companyCandidates);
@@ -408,22 +553,26 @@ export default function Workspace() {
     setHumanRequest(data.pendingHumanRequest);
     mergeActivity(data.traceEvents);
     void refreshArtifacts(data.threadId);
-    void refreshBackgroundJobs(data.threadId);
+    if (!liveProgress) void refreshBackgroundJobs(data.threadId);
     setResearchDispatchError(data.researchDispatchError ?? null);
-    void refreshMappingKnowledge();
     const product = data.currentProduct;
-    if (product?.mappingResult && product.coverageReport) {
+    if (product) {
       applyWebsiteResult(
         product,
         product.pendingReviews,
-        data.status === "awaiting_review"
+        data.status === "awaiting_review",
+        liveProgress,
+      );
+      liveEvidenceCountRef.current = Math.max(
+        liveEvidenceCountRef.current,
+        product.evidence.length,
       );
     }
   }
 
   async function submitHumanValue(useDummy = false) {
     if (!threadId || !humanRequest?.requirementId || (!useDummy && !humanValue.trim()) || busy) return;
-    setBusy(true);
+    setPendingRequests((count) => count + 1);
     try {
       const response = await authenticatedFetch(`${API_URL}/api/agent/value`, {
         method: "POST",
@@ -455,21 +604,15 @@ export default function Workspace() {
         { role: "assistant", content: `The value could not be saved: ${message}` },
       ]);
     } finally {
-      setBusy(false);
-    }
-  }
-
-  async function refreshMappingKnowledge() {
-    const response = await authenticatedFetch(`${API_URL}/api/mapping-knowledge`);
-    if (response.ok) {
-      setMappingKnowledge((await response.json()) as MappingKnowledgeEntry[]);
+      setPendingRequests((count) => Math.max(0, count - 1));
     }
   }
 
   function applyWebsiteResult(
     product: NonNullable<AgentResponse["currentProduct"]>,
     reviewItems: SemanticReviewItem[],
-    awaitingReview: boolean
+    awaitingReview: boolean,
+    preserveTab = false,
   ) {
     const resolvedMappings = [
       ...(product.mappingResult?.mapped ?? []),
@@ -480,41 +623,37 @@ export default function Workspace() {
     const semantic = reviewItems
       .flatMap((item) => item.mapping ? [item.mapping] : [])
       .filter((mapping) => !resolvedIds.has(mapping.id));
+    const nextReviews = awaitingReview ? reviewItems : [];
     setProductName(product.productName || product.candidate?.name || "Website product");
     setMappingCycleId(product.mappingCycleId);
     setMappings([...resolvedMappings, ...semantic]);
-    setSemanticReview(awaitingReview ? reviewItems : []);
-    setReviewDecisions(
-      awaitingReview
-        ? Object.fromEntries(
-            reviewItems
-              .filter((item) => item.status !== "uncertain")
-              .map((item) => [item.id, { reviewId: item.id, decision: "keep" }])
-          )
-        : {}
-    );
+    const previousRows = reviewRowsRef.current;
+    reviewRowsRef.current = nextReviews;
+    setSemanticReview(nextReviews);
+    setReviewDecisions((previous) => mergeReviewDecisions(
+      previous,
+      previousRows,
+      nextReviews,
+      product.templateIndex,
+      editedReviewEvidenceRef.current,
+    ));
     setEvidence(product.evidence);
     setMappingResult(product.mappingResult);
     setCoverageReport(product.coverageReport);
+    setTargetInventory(product.templateIndex);
     setDpp(null);
-    setTab("mappings");
+    if (!preserveTab) setTab(product.mappingResult ? "mappings" : "evidence");
   }
 
   async function confirmSemanticReview() {
     if (!threadId || semanticReview.length === 0 || busy) return;
+    if (reviewSubmissionIssue(semanticReview, reviewDecisions, targetInventory, mappingResult)) return;
     const decisions = semanticReview.flatMap((item) => {
       const decision = reviewDecisions[item.id];
       return decision ? [decision] : [];
     });
-    const invalid =
-      decisions.length !== semanticReview.length ||
-      decisions.some(
-        (decision) =>
-          decision.decision === "change_target" && !decision.correctedRequirementId
-      );
-    if (invalid) return;
 
-    setBusy(true);
+    setPendingRequests((count) => count + 1);
     try {
       if (!currentProductId) throw new Error("No active product is available for review.");
       const response = await authenticatedFetch(`${API_URL}/api/agent/review`, {
@@ -545,7 +684,7 @@ export default function Workspace() {
         { role: "assistant", content: `The semantic review could not be saved: ${message}` },
       ]);
     } finally {
-      setBusy(false);
+      setPendingRequests((count) => Math.max(0, count - 1));
     }
   }
 
@@ -583,6 +722,7 @@ export default function Workspace() {
         instancePath: selected.templatePath,
         idShort: selected.idShort ?? selected.templatePath.at(-1) ?? "Target",
         semanticId: selected.semanticId!,
+        listInstanceBindings: [],
       },
       sourceValue: correctedValue?.trim() || mapping.sourceValue,
       status: "approved",
@@ -617,13 +757,6 @@ export default function Workspace() {
         m.status === "rejected" ? m : { ...m, status: "approved" }
       )
     );
-    setReviewDecisions((previous) => {
-      const next = { ...previous };
-      for (const item of semanticReview) {
-        next[item.id] = { reviewId: item.id, decision: "keep" };
-      }
-      return next;
-    });
   }
 
   async function generate(
@@ -663,17 +796,24 @@ export default function Workspace() {
   const ready = mappings.filter(
     (m) => m.status === "approved" || m.status === "auto"
   ).length;
-  const websiteAutoMapped =
-    mappingResult?.mapped.filter((mapping) => mapping.status === "auto")
+  const reviewIssue = semanticReview.length > 0
+    ? reviewSubmissionIssue(semanticReview, reviewDecisions, targetInventory, mappingResult)
+    : null;
+  const websiteClear =
+    mappingResult?.mapped.filter((mapping) =>
+      (mapping.status === "auto" || mapping.status === "approved") &&
+      mapping.reviewPriority !== "optional"
+    )
       .length ?? 0;
+  const websiteCheck = mappingResult?.mapped.filter(
+    (mapping) => mapping.reviewPriority === "optional"
+  ).length ?? 0;
   const websiteNeedsReview = mappingResult
-    ? mappingResult.ambiguous.length +
-      mappingResult.mapped.filter((mapping) => mapping.status === "review")
-        .length +
-      semanticReview.filter(
-        (item) =>
-          item.status === "uncertain" || item.mapping?.status === "review"
-      ).length
+    ? new Set([
+        ...mappingResult.ambiguous.map((mapping) => mapping.evidenceId),
+        ...mappingResult.mapped.filter((mapping) => mapping.status === "review").map((mapping) => mapping.evidenceId),
+        ...semanticReview.map((item) => item.evidenceId),
+      ]).size
     : 0;
   const gaps = coverageReport
     ? coverageReport.coverage.flatMap((item) => {
@@ -689,6 +829,30 @@ export default function Workspace() {
     coverageReport?.inventory.requirements.filter(
       (item) => item.kind === "value" && !item.wildcard && item.semanticId
     ) ?? [];
+  const mappingQuery = mappingSearch.trim().toLocaleLowerCase();
+  const matchesMappingQuery = (values: (string | null | undefined)[]) =>
+    !mappingQuery || values.some((value) => value?.toLocaleLowerCase().includes(mappingQuery));
+  const visibleReview = semanticReview.filter((item) => {
+    const record = evidence.find((candidate) => candidate.id === item.evidenceId);
+    return matchesMappingQuery([
+      record?.sourceLabel, record?.predicate, String(record?.value ?? ""),
+      record?.contextPath.join(" / "), item.mapping?.target.templatePath.join(" / "),
+    ]);
+  });
+  const visibleMappings = mappings.filter((mapping) =>
+    !semanticReview.some((item) => item.evidenceId === mapping.evidenceId) &&
+    matchesMappingQuery([
+      mapping.sourceField, mapping.sourceValue, mapping.target.idShort,
+      mapping.target.templatePath.join(" / "),
+    ])
+  );
+  const visibleUnmatched = evidence.filter((record) =>
+    mappingResult?.unmatchedEvidenceIds.includes(record.id) &&
+    matchesMappingQuery([
+      record.sourceLabel, record.predicate, String(record.value),
+      record.contextPath.join(" / "),
+    ])
+  );
 
   return (
     <div className="flex h-full flex-col bg-mist">
@@ -902,7 +1066,13 @@ export default function Workspace() {
                   </div>
                 </form>
               )}
-              {busy && <LiveActivity events={agentActivity} />}
+              {(busy || researchActive) && (
+                <LiveActivity
+                  events={agentActivity}
+                  backgroundJob={backgroundJob}
+                  reviewPending={agentStatus === "awaiting_review"}
+                />
+              )}
               <div ref={endRef} />
             </div>
           </div>
@@ -959,7 +1129,7 @@ export default function Workspace() {
               />
               <button
                 onClick={() => send(input)}
-                disabled={busy || !input.trim()}
+                disabled={!input.trim()}
                 className="mb-0.5 mr-0.5 grid h-10 w-10 shrink-0 place-items-center rounded-full bg-ink text-white transition-transform hover:scale-105 disabled:scale-100 disabled:opacity-25"
                 aria-label="Send message"
               >
@@ -986,9 +1156,7 @@ export default function Workspace() {
                   "mappings",
                   "evidence",
                   "coverage",
-                  "process",
                   "data",
-                  "graph",
                 ] as WorkspaceTab[]
               ).map((t) => (
                 <button
@@ -1004,16 +1172,9 @@ export default function Workspace() {
                       {evidence.length}
                     </span>
                   )}
-                  {t === "coverage" && coverageReport && (
+                  {t === "coverage" && (coverageReport || targetInventory) && (
                     <span className="ml-1.5 rounded-full bg-mist px-1.5 py-0.5 font-mono text-[10px] text-ink">
-                      {coverageReport.inventory.requirements.filter(
-                        (item) => item.kind === "value" && !item.wildcard
-                      ).length}
-                    </span>
-                  )}
-                  {t === "graph" && mappingKnowledge.length > 0 && (
-                    <span className="ml-1.5 rounded-full bg-mist px-1.5 py-0.5 font-mono text-[10px] text-ink">
-                      {mappingKnowledge.length}
+                      {(coverageReport?.inventory ?? targetInventory)?.requirements.length}
                     </span>
                   )}
                   {t === "data" && artifacts.length > 0 && (
@@ -1047,7 +1208,7 @@ export default function Workspace() {
                   Research dispatch failed · Retry
                 </button>
               )}
-              {tab === "mappings" && pending > 0 && (
+              {tab === "mappings" && pending > 0 && semanticReview.length === 0 && (
                 <button
                   onClick={approveAll}
                   className="rounded-full border border-hairline px-4 py-1.5 text-[12px] font-medium transition-all hover:bg-mist hover:shadow-sm"
@@ -1060,13 +1221,31 @@ export default function Workspace() {
 
           <div className="scroll-quiet min-h-0 flex-1 overflow-y-auto p-5">
             {tab === "mappings" ? (
-              mappings.length === 0 ? (
+              mappings.length === 0 && semanticReview.length === 0 && !mappingResult?.unmatchedEvidenceIds.length ? (
                 <Empty
                   title="No mappings yet"
                   body="Send a product description and the proposed mappings will appear here for your approval."
                 />
               ) : (
                 <div className="space-y-5">
+                  <div className="rounded-xl border border-hairline bg-paper p-4 shadow-sm">
+                    <div className="flex flex-wrap items-end justify-between gap-3">
+                      <div>
+                        <h2 className="text-[15px] font-semibold text-ink">Evidence mapped to template fields</h2>
+                        <p className="mt-1 text-[11px] text-muted">Search the source, value, hierarchy, or destination. Open a Jev decision to inspect its choices and exact context input.</p>
+                      </div>
+                      <label className="text-[11px] text-muted">
+                        Find a mapping
+                        <input
+                          type="search"
+                          value={mappingSearch}
+                          onChange={(event) => setMappingSearch(event.target.value)}
+                          placeholder="Property, value, template field…"
+                          className="mt-1 block w-full min-w-56 rounded-lg border border-hairline bg-paper px-3 py-2 text-[12px] text-ink focus:border-signal focus:outline-none"
+                        />
+                      </label>
+                    </div>
+                  </div>
                   <div className="flex flex-wrap gap-3">
                     {mappingResult ? (
                       <>
@@ -1076,14 +1255,19 @@ export default function Workspace() {
                           tone="plain"
                         />
                         <Stat
-                          label="Mapped automatically"
-                          value={websiteAutoMapped}
+                          label="Clear"
+                          value={websiteClear}
                           tone="ok"
                         />
                         <Stat
-                          label="Needs semantic reasoning/review"
-                          value={websiteNeedsReview}
+                          label="Check"
+                          value={websiteCheck}
                           tone="warn"
+                        />
+                        <Stat
+                          label="Review"
+                          value={websiteNeedsReview}
+                          tone="review"
                         />
                         <Stat
                           label="Currently unmatched"
@@ -1106,19 +1290,17 @@ export default function Workspace() {
                         Human semantic review required
                       </p>
                       <p className="mt-1.5 text-[12px] leading-relaxed text-muted">
-                        Every retained fact is shown below. Correct only what is
-                        wrong; unchanged rows are already set to keep. Uncertain
-                        rows require an explicit choice.
+                        Jev&apos;s verified targets are selected for review. Change any row before confirming;
+                        rows without a target need your disposition. No decision is submitted until you confirm.
                       </p>
                       <button
                         onClick={() => void confirmSemanticReview()}
-                        disabled={semanticReview.some(
-                          (item) => !reviewDecisions[item.id]
-                        )}
+                        disabled={Boolean(reviewIssue) || busy}
                         className="mt-3 rounded-full bg-ink px-4 py-1.5 text-[12px] font-medium text-white disabled:cursor-not-allowed disabled:opacity-30"
                       >
-                        Confirm mappings
+                        Confirm all selected decisions
                       </button>
+                      {reviewIssue && <p role="status" className="mt-2 text-[11px] text-red-700">{reviewIssue}</p>}
                     </div>
                   )}
 
@@ -1137,7 +1319,8 @@ export default function Workspace() {
                   )}
 
                   <div className="space-y-3">
-                    {semanticReview.length > 0 ? semanticReview.map((item) => {
+                    {visibleReview.length > 0 && <h3 className="text-[12px] font-semibold uppercase tracking-wide text-red-700">Needs a decision · {visibleReview.length}</h3>}
+                    {visibleReview.map((item) => {
                       const record = evidence.find((candidate) => candidate.id === item.evidenceId);
                       return record ? (
                         <MappingReviewRow
@@ -1146,18 +1329,53 @@ export default function Workspace() {
                           evidence={record}
                           targets={correctionTargets}
                           decision={reviewDecisions[item.id]}
-                          onChange={(decision) => setReviewDecisions((previous) => ({ ...previous, [item.id]: decision }))}
+                          onChange={(decision) => {
+                            editedReviewEvidenceRef.current.add(item.evidenceId);
+                            setReviewDecisions((previous) => ({ ...previous, [item.id]: decision }));
+                          }}
+                          jevTraces={jevTrails[item.evidenceId]}
+                          jevPolicy={jevPolicies[item.evidenceId]}
+                          threadId={threadId}
                         />
                       ) : null;
-                    }) : mappings.map((m) => (
+                    })}
+                    {visibleMappings.length > 0 && <h3 className="pt-2 text-[12px] font-semibold uppercase tracking-wide text-ink">Selected fields · {visibleMappings.length}</h3>}
+                    {visibleMappings.map((m) => (
                       <MappingRow
                         key={m.id}
                         mapping={m}
+                        evidence={evidence.find((record) => record.id === m.evidenceId)}
                         elements={correctionTargets}
                         onDecide={decide}
                         onCorrect={correct}
+                        jevTraces={jevTrails[m.evidenceId]}
+                        jevPolicy={jevPolicies[m.evidenceId]}
+                        threadId={threadId}
                       />
                     ))}
+                    {mappingResult && visibleUnmatched.length > 0 && (
+                      <details className="rounded-xl border border-hairline bg-paper p-4">
+                        <summary className="cursor-pointer text-[13px] font-medium text-ink">
+                          Unmapped source facts · {visibleUnmatched.length}{mappingQuery ? ` of ${mappingResult.unmatchedEvidenceIds.length}` : ""}
+                        </summary>
+                        <div className="mt-3 space-y-3">
+                          {visibleUnmatched.map((record) => (
+                            <div key={record.id} className="rounded-lg border border-hairline p-3">
+                              <p className="text-[12px] font-medium text-ink">{record.sourceLabel ?? record.predicate}</p>
+                              <p className="mt-1 text-[12px] text-muted">{String(record.value)}{record.unit ? ` ${record.unit}` : ""}</p>
+                              {record.contextPath.length > 0 && (
+                                <p className="mt-1 font-mono text-[10px] text-muted">{record.contextPath.join(" / ")}</p>
+                              )}
+                              <div className="mt-2"><SourceVerificationLink threadId={threadId} evidenceId={record.id} /></div>
+                              <JevDecisionTrail traces={jevTrails[record.id]} policy={jevPolicies[record.id]} />
+                            </div>
+                          ))}
+                        </div>
+                      </details>
+                    )}
+                    {mappingQuery && visibleReview.length === 0 && visibleMappings.length === 0 && visibleUnmatched.length === 0 && (
+                      <p className="rounded-xl border border-hairline bg-paper p-4 text-[12px] text-muted">No source fact or template field matches “{mappingSearch}”.</p>
+                    )}
                   </div>
 
                   {dpp && <DppView dpp={dpp} />}
@@ -1167,16 +1385,13 @@ export default function Workspace() {
               <EvidencePanel
                 evidence={evidence}
                 mappingResult={mappingResult}
+                threadId={threadId}
               />
             ) : tab === "coverage" ? (
-              <CoveragePanel report={coverageReport} evidence={evidence} mappingResult={mappingResult} />
-            ) : tab === "process" ? (
-              <AgentActivity events={agentActivity} />
+              <CoveragePanel report={coverageReport} inventory={targetInventory} evidence={evidence} mappingResult={mappingResult} />
             ) : tab === "data" ? (
               <WorkspaceExplorer apiUrl={API_URL} threadId={threadId} artifacts={artifacts} error={workspaceError} />
-            ) : (
-              <IntegrationGraph entries={mappingKnowledge} />
-            )}
+            ) : null}
           </div>
         </section>
       </div>
@@ -1193,10 +1408,8 @@ export default function Workspace() {
 }
 
 function tabLabel(tab: WorkspaceTab): string {
-  if (tab === "graph") return "Integration Graph";
-  if (tab === "process") return "Process";
   if (tab === "data") return "Workspace Data";
-  if (tab === "coverage") return "Coverage";
+  if (tab === "coverage") return "Template";
   if (tab === "evidence") return "Evidence";
   return "Mappings";
 }
@@ -1208,13 +1421,15 @@ function Stat({
 }: {
   label: string;
   value: number;
-  tone: "ok" | "warn" | "plain";
+  tone: "ok" | "warn" | "review" | "plain";
 }) {
   const cls =
     tone === "ok"
       ? "text-ok"
       : tone === "warn"
       ? "text-warn"
+      : tone === "review"
+      ? "text-red-700"
       : "text-muted";
   return (
     <div className="flex flex-col rounded-xl border border-hairline bg-paper px-4 py-2.5 shadow-sm">

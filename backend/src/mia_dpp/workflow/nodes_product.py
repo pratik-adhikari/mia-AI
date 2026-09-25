@@ -14,11 +14,11 @@ if TYPE_CHECKING:
 from mia_dpp.canonical import sha256_json
 from mia_dpp.domain.evidence import ExtractedAsset, ProductKnowledgePackage
 from mia_dpp.domain.product import RunStatus
-from mia_dpp.domain.product_work import ProductWorkSnapshot, ProductWorkStage, ReuseMode
+from mia_dpp.domain.product_work import ProductWorkStage, ReuseMode
+from mia_dpp.persistence.catalogue import ActiveProductRunExists, ProductIdentifierConflict
+from mia_dpp.services.product_identifiers import discover_product_identifiers
 from mia_dpp.services.product_reuse import ProductReuseService
 from mia_dpp.workflow.context import MiaContext
-from mia_dpp.services.product_identifiers import discover_product_identifiers
-from mia_dpp.persistence.catalogue import ActiveProductRunExists, ProductIdentifierConflict
 from mia_dpp.workflow.presentation import evidence_text, product_image_url
 from mia_dpp.workflow.product_snapshot import update_product_snapshot
 from mia_dpp.workflow.state import MiaWorkflowState, reset_product_state
@@ -66,9 +66,7 @@ async def resolve_product(
             "workflow_generation": active.workflow_generation,
             "source_generation": snapshot.source_generation if snapshot is not None else 0,
             "status": (
-                "awaiting_human"
-                if active.status is RunStatus.AWAITING_HUMAN
-                else "running"
+                "awaiting_human" if active.status is RunStatus.AWAITING_HUMAN else "running"
             ),
         }
 
@@ -227,14 +225,19 @@ async def extract_evidence(
 
     total_started = perf_counter()
     crawl_started = perf_counter()
+    work.event(
+        "crawl.seed.started",
+        "Loading and extracting the product page before mapping begins.",
+        metadata={"url": state["product_url"], "activityKey": "seed-crawl"},
+    )
     incoming = await work.ctx.web_tool.extract(state["product_url"])
     crawl_duration_ms = round((perf_counter() - crawl_started) * 1000, 2)
     incoming = incoming.model_copy(update={"product_id": work.product_id})
-    prior_id = state.get("evidence_artifact_id")
+    prior_artifact_id = state.get("evidence_artifact_id")
     package = (
         incoming
-        if not prior_id
-        else merge_packages(work.load(prior_id, ProductKnowledgePackage), incoming)
+        if not prior_artifact_id
+        else merge_packages(work.load(prior_artifact_id, ProductKnowledgePackage), incoming)
     )
 
     persist_started = perf_counter()
@@ -243,7 +246,7 @@ async def extract_evidence(
             f"sources/{source.id}.html",
             source.rendered_html.encode(),
             content_type="text/html; charset=utf-8",
-            derived_from=(prior_id,) if prior_id else (),
+            derived_from=(prior_artifact_id,) if prior_artifact_id else (),
         )
         for source in incoming.acquired_sources
     )
@@ -291,7 +294,7 @@ async def extract_evidence(
         derived_from=tuple(
             item
             for item in (
-                prior_id,
+                prior_artifact_id,
                 *raw_ids,
                 *markdown_ids,
                 *structured_ids,
@@ -309,6 +312,7 @@ async def extract_evidence(
             "sourceCount": len(incoming.acquired_sources),
             "evidenceCount": len(incoming.evidence),
             "deferredAssetCount": len(source_assets),
+            "activityKey": "seed-crawl",
         },
     )
 

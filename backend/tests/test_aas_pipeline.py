@@ -11,7 +11,17 @@ from mia_dpp.aas.build import build_dpp
 from mia_dpp.aas.templates import OfficialTemplateRepository
 from mia_dpp.domain.mappings import FieldMapping, MappingStatus, MappingTarget
 from mia_dpp.errors import MappingError
-from mia_dpp.tools.mapping.targets import external_reference
+from mia_dpp.semantic.open_property import technical_property_area_binding
+from mia_dpp.tools.mapping.confidence import (
+    MatchQuality,
+    ValueFormatQuality,
+    assess_mapping,
+)
+from mia_dpp.tools.mapping.targets import (
+    TECHNICAL_DATA_ARBITRARY_PROPERTY_PATH,
+    external_reference,
+    mapping_target,
+)
 from mia_dpp.tools.mapping.text_mapping import propose_text_mappings
 
 PRODUCT = (
@@ -125,3 +135,93 @@ def test_rejected_and_pending_mappings_do_not_enter_the_artifact() -> None:
     rendered = str(package.environment)
     assert mappings[0].source_value not in rendered
     assert mappings[1].source_value not in rendered
+
+
+def test_dpp_assembles_nameplate_and_technical_data_under_one_shell() -> None:
+    product_name, nameplate = accepted_mappings()
+    repository = OfficialTemplateRepository()
+    technical = repository.load("technical_data")
+    assessment = assess_mapping(
+        source_label=MatchQuality.EXACT,
+        value_format=ValueFormatQuality.VALID,
+        semantic_match=MatchQuality.EXACT,
+        destination_candidates=1,
+    )
+    general_values = {
+        "ManufacturerName": "AFRISO",
+        "ManufacturerProductDesignation": "RF100-16",
+        "ManufacturerArticleNumber": "63820",
+        "ManufacturerOrderCode": "PG16-ORDER",
+    }
+    technical_mappings = [
+        FieldMapping(
+            id=f"mapping-tech-{name}",
+            evidence_id=f"ev-tech-{name}",
+            source_field=name,
+            source_value=value,
+            target=mapping_target(
+                technical,
+                ("TechnicalData", "GeneralInformation", name),
+            ),
+            assessment=assessment,
+            reasoning="Technical Data fixture.",
+            status=MappingStatus.APPROVED,
+        )
+        for name, value in general_values.items()
+    ]
+    technical_mappings.append(
+        FieldMapping(
+            id="mapping-tech-rated-power",
+            evidence_id="ev-tech-rated-power",
+            source_field="Rated power",
+            source_value="500",
+            target=mapping_target(
+                technical,
+                TECHNICAL_DATA_ARBITRARY_PROPERTY_PATH,
+                id_short="RatedPower",
+                semantic_id="0173-1#02-POWER#001",
+                list_instance_bindings=(
+                    technical_property_area_binding(("Technical Specifications", "Motor A")),
+                ),
+            ),
+            assessment=assessment,
+            reasoning="Verified ECLASS Technical Property fixture.",
+            status=MappingStatus.APPROVED,
+        )
+    )
+
+    package = build_dpp(
+        product_name,
+        [*nameplate, *technical_mappings],
+        repository=repository,
+        now=datetime(2026, 1, 2, tzinfo=UTC),
+    )
+
+    environment = jsonization.environment_from_jsonable(package.environment)
+    assert list(verification.verify(environment)) == []
+    assert len(package.environment["assetAdministrationShells"]) == 1
+    assert len(package.environment["submodels"]) == 2
+    assert {item["idShort"] for item in package.environment["submodels"]} == {
+        "Nameplate",
+        "TechnicalData",
+    }
+    shell = package.environment["assetAdministrationShells"][0]
+    assert len(shell["submodels"]) == 2
+    assert len(package.submodels) == 2
+    assert {item.key for item in package.templates} == {
+        "digital_nameplate",
+        "technical_data",
+    }
+    assert len(package.validation_reports) == 2
+
+    technical_submodel = next(
+        item for item in package.environment["submodels"] if item["idShort"] == "TechnicalData"
+    )
+    technical_areas = next(
+        item
+        for item in technical_submodel["submodelElements"]
+        if item.get("idShort") == "TechnicalPropertyAreas"
+    )
+    rendered = str(technical_areas)
+    assert "RatedPower" in rendered
+    assert "0173-1#02-POWER#001" in rendered

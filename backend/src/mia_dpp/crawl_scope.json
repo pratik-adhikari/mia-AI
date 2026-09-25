@@ -1,0 +1,19 @@
+{
+  "max_total_sources": 32,
+  "max_links_per_page": 12,
+  "off_subtree_mode": "one_hop",
+  "min_identity_token_length": 4,
+  "identity_stopwords": [
+    "product",
+    "products",
+    "technical",
+    "technology",
+    "domestic",
+    "industrial",
+    "category",
+    "catalogue",
+    "download",
+    "document",
+    "manual"
+  ]
+}

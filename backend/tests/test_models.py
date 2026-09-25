@@ -66,7 +66,6 @@ def test_mapping_assessment_requires_an_explanation() -> None:
         MappingAssessment(basis=MappingBasis.EXACT, review_required=False, reason="")
 
 
-
 def test_agent_request_has_explicit_refresh_flag() -> None:
     from mia_dpp.agent.models import AgentRequest
 

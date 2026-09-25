@@ -72,7 +72,9 @@ async def build_aas(
         aas_artifact_id=aas_id,
         validation_artifact_id=validation_id,
         build_input_fingerprint=build_input_fingerprint,
-        last_error=None if package.deployable else "AAS validation did not produce a deployable artifact",
+        last_error=None
+        if package.deployable
+        else "AAS validation did not produce a deployable artifact",
     )
     return {
         "dpp_artifact_id": dpp_id,
@@ -101,11 +103,9 @@ async def store_result(
         and item.human_value_kind == "dummy"
     )
     release_status = (
-        DppReleaseStatus.PROVISIONAL
-        if dummy_mapping_ids
-        else DppReleaseStatus.VERIFIED
+        DppReleaseStatus.PROVISIONAL if dummy_mapping_ids else DppReleaseStatus.VERIFIED
     )
-    metrics = {
+    metrics: dict[str, int | float | str | bool | None] = {
         "requiredUnresolved": state.get("required_unresolved", 0),
         "researchAttempts": state.get("research_attempts", 0),
     }

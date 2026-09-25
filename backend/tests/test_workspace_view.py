@@ -4,8 +4,8 @@ import zipfile
 from io import BytesIO
 from pathlib import Path
 
-from mia_dpp.persistence.catalogue import ProductCatalogue
 from mia_dpp.domain.product import RunStatus
+from mia_dpp.persistence.catalogue import ProductCatalogue
 from mia_dpp.persistence.workspace import WorkspaceView
 from mia_dpp.storage.local import LocalArtifactStore
 

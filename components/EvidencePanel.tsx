@@ -1,17 +1,25 @@
 import type { EvidenceRecord, MappingResult } from "@/lib/types";
+import { SourceVerificationLink } from "@/components/SourceVerificationLink";
 
 type EvidenceOutcome = "mapped" | "ambiguous" | "unmatched";
 
 export function EvidencePanel({
   evidence,
   mappingResult,
+  threadId,
 }: {
   evidence: EvidenceRecord[];
   mappingResult: MappingResult | null;
+  threadId: string | null;
 }) {
   const outcomes = new Map<string, EvidenceOutcome>();
+  const mappingByEvidence = new Map(
+    [...(mappingResult?.mapped ?? []), ...(mappingResult?.ambiguous ?? [])].map(
+      (mapping) => [mapping.evidenceId, mapping]
+    )
+  );
   mappingResult?.mapped.forEach((mapping) =>
-    outcomes.set(mapping.evidenceId, "mapped")
+    outcomes.set(mapping.evidenceId, mapping.status === "review" ? "ambiguous" : "mapped")
   );
   mappingResult?.ambiguous.forEach((mapping) =>
     outcomes.set(mapping.evidenceId, "ambiguous")
@@ -34,6 +42,7 @@ export function EvidencePanel({
       </p>
       {evidence.map((item) => {
         const outcome = outcomes.get(item.id) ?? "unmatched";
+        const mapping = mappingByEvidence.get(item.id);
         const location =
           item.sourceLocation.jsonPointer ??
           item.sourceLocation.selector ??
@@ -56,6 +65,15 @@ export function EvidencePanel({
               </div>
               <OutcomeBadge outcome={outcome} />
             </div>
+            {mapping && (
+              <p className="mt-2 text-[11px] text-muted">
+                {outcome === "mapped" ? "Mapped to: " : "Proposed target: "}
+                <span className={`font-mono ${outcome === "mapped" ? "font-semibold text-ok" : "text-warn"}`}>
+                  {mapping.target.templatePath.join(" / ")}
+                </span>
+              </p>
+            )}
+            <div className="mt-3"><SourceVerificationLink threadId={threadId} evidenceId={item.id} /></div>
             <details className="mt-3 border-t border-hairline pt-2">
               <summary className="cursor-pointer text-[11px] font-medium text-muted">
                 Provenance
@@ -114,7 +132,7 @@ function OutcomeBadge({ outcome }: { outcome: EvidenceOutcome }) {
     <span
       className={`shrink-0 rounded-full px-2 py-1 font-mono text-[10px] ${classes}`}
     >
-      {label}
+      {outcome === "mapped" && <span aria-hidden="true">✓ </span>}{label}
     </span>
   );
 }

@@ -40,9 +40,20 @@ class MiaWorkflowState(TypedDict, total=False):
 
     # Durable stage artifacts (large payloads never live in checkpoints)
     evidence_artifact_id: str
+    normalization_artifact_id: str
+    semantic_context_artifact_id: str
+    jev_idta_routing_artifact_id: str
+    jev_routing_diagnostics_artifact_id: str
+    jev_decision_policy_artifact_id: str
+    jev_semantic_grouping_artifact_id: str
+    eclass_resolution_artifact_id: str
+    eclass_diagnostics_artifact_id: str
+    eclass_policy_artifact_id: str
+    open_property_proposals_artifact_id: str
     targets_artifact_id: str
     deterministic_mapping_artifact_id: str
     semantic_mapping_artifact_id: str
+    semantic_promotion_artifact_id: str
     review_items_artifact_id: str
     conflict_artifact_id: str
     reviewed_mapping_artifact_id: str
@@ -51,6 +62,7 @@ class MiaWorkflowState(TypedDict, total=False):
     aas_artifact_id: str
     validation_artifact_id: str
     background_job_id: str
+    integrated_research_iteration: int
 
     # Routing summaries
     mapping_cycle_id: str
@@ -99,9 +111,20 @@ def reset_product_state(
         "image_url": "",
         "known_source_urls": (),
         "evidence_artifact_id": "",
+        "normalization_artifact_id": "",
+        "semantic_context_artifact_id": "",
+        "jev_idta_routing_artifact_id": "",
+        "jev_routing_diagnostics_artifact_id": "",
+        "jev_decision_policy_artifact_id": "",
+        "jev_semantic_grouping_artifact_id": "",
+        "eclass_resolution_artifact_id": "",
+        "eclass_diagnostics_artifact_id": "",
+        "eclass_policy_artifact_id": "",
+        "open_property_proposals_artifact_id": "",
         "targets_artifact_id": "",
         "deterministic_mapping_artifact_id": "",
         "semantic_mapping_artifact_id": "",
+        "semantic_promotion_artifact_id": "",
         "review_items_artifact_id": "",
         "conflict_artifact_id": "",
         "reviewed_mapping_artifact_id": "",
@@ -110,6 +133,7 @@ def reset_product_state(
         "aas_artifact_id": "",
         "validation_artifact_id": "",
         "background_job_id": "",
+        "integrated_research_iteration": 0,
         "mapping_cycle_id": "",
         "review_required": False,
         "required_unresolved": 0,

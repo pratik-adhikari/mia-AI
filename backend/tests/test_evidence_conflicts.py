@@ -1,5 +1,7 @@
 from datetime import UTC, datetime
 
+from mia_dpp.aas.requirements import build_template_index
+from mia_dpp.aas.templates import OfficialTemplateRepository
 from mia_dpp.domain.evidence import (
     EvidenceRecord,
     EvidenceStatus,
@@ -15,8 +17,6 @@ from mia_dpp.domain.mappings import (
     MappingResult,
     MappingStatus,
 )
-from mia_dpp.aas.requirements import build_template_index
-from mia_dpp.aas.templates import OfficialTemplateRepository
 from mia_dpp.services.evidence_conflicts import (
     detect_review_conflicts,
     mark_conflicting_evidence,

@@ -48,7 +48,7 @@ PRODUCT_ROUTES: dict[Hashable, str] = {
     "extract": "evidence_and_coverage",
 }
 SEMANTIC_ROUTES: dict[Hashable, str] = {
-    "review": "human_review",
+    "review": "integrate_background_research",
     "coverage": "integrate_background_research",
 }
 BACKGROUND_INTEGRATION_ROUTES: dict[Hashable, str] = {

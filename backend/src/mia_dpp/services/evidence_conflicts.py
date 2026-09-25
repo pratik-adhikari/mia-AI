@@ -119,12 +119,16 @@ def require_review_for_conflicts(
                 "assessment": MappingAssessment(
                     basis=item.assessment.basis,
                     review_required=True,
-                    reason="New durable evidence supplies a different value for this reviewed requirement.",
+                    reason=(
+                        "New durable evidence supplies a different value for this reviewed "
+                        "requirement."
+                    ),
                     uncertainties=tuple(
                         dict.fromkeys(
                             (
                                 *item.assessment.uncertainties,
-                                "A competing value was discovered after the previous human decision.",
+                                "A competing value was discovered after the previous human "
+                                "decision.",
                             )
                         )
                     ),

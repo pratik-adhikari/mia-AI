@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from pydantic import AliasChoices, Field, PrivateAttr, SecretStr
@@ -38,6 +38,120 @@ class Settings(BaseSettings):
     agent_model: str = Field(
         default="deepseek/deepseek-v3.2",
         validation_alias="MIA_AGENT_MODEL",
+    )
+    jev_shadow_enabled: bool = Field(
+        default=False,
+        validation_alias="MIA_JEV_SHADOW_ENABLED",
+    )
+    jev_mapping_enabled: bool = Field(
+        default=False,
+        validation_alias="MIA_JEV_MAPPING_ENABLED",
+    )
+    jev_model: str = Field(
+        default="typesafe/jev-1.13",
+        validation_alias="MIA_JEV_MODEL",
+    )
+    jev_max_concurrency: int = Field(
+        default=8,
+        ge=1,
+        le=64,
+        validation_alias="MIA_JEV_MAX_CONCURRENCY",
+    )
+    jev_auto_min_selected_probability: float = Field(
+        default=0.80,
+        ge=0.0,
+        le=1.0,
+        validation_alias="MIA_JEV_AUTO_MIN_SELECTED_PROBABILITY",
+    )
+    jev_auto_min_margin: float = Field(
+        default=0.75,
+        ge=0.0,
+        le=1.0,
+        validation_alias="MIA_JEV_AUTO_MIN_MARGIN",
+    )
+    jev_auto_max_runner_up_ratio: float = Field(
+        default=0.12,
+        ge=0.0,
+        le=1.0,
+        validation_alias="MIA_JEV_AUTO_MAX_RUNNER_UP_RATIO",
+    )
+    jev_auto_max_entropy: float = Field(
+        default=0.45,
+        ge=0.0,
+        le=1.0,
+        validation_alias="MIA_JEV_AUTO_MAX_ENTROPY",
+    )
+    jev_optional_min_selected_probability: float = Field(
+        default=0.70,
+        ge=0.0,
+        le=1.0,
+        validation_alias="MIA_JEV_OPTIONAL_MIN_SELECTED_PROBABILITY",
+    )
+    jev_optional_min_margin: float = Field(
+        default=0.45,
+        ge=0.0,
+        le=1.0,
+        validation_alias="MIA_JEV_OPTIONAL_MIN_MARGIN",
+    )
+    jev_optional_max_runner_up_ratio: float = Field(
+        default=0.15,
+        ge=0.0,
+        le=1.0,
+        validation_alias="MIA_JEV_OPTIONAL_MAX_RUNNER_UP_RATIO",
+    )
+    jev_optional_max_entropy: float = Field(
+        default=0.65,
+        ge=0.0,
+        le=1.0,
+        validation_alias="MIA_JEV_OPTIONAL_MAX_ENTROPY",
+    )
+    jev_grouping_max_groups: int = Field(
+        default=200,
+        ge=1,
+        le=253,
+        validation_alias="MIA_JEV_GROUPING_MAX_GROUPS",
+    )
+    eclass_shadow_enabled: bool = Field(
+        default=False,
+        validation_alias="MIA_ECLASS_SHADOW_ENABLED",
+    )
+    eclass_provider_mode: Literal["local", "api"] = Field(
+        default="api",
+        validation_alias="MIA_ECLASS_PROVIDER",
+    )
+    eclass_certificate_file: Path | None = Field(
+        default=None,
+        validation_alias="MIA_ECLASS_CERTIFICATE_FILE",
+    )
+    eclass_xml_dictionary_zips: str | None = Field(
+        default=None,
+        validation_alias="MIA_ECLASS_XML_DICTIONARY_ZIPS",
+    )
+    eclass_xml_language: str = Field(
+        default="en",
+        validation_alias="MIA_ECLASS_XML_LANGUAGE",
+    )
+    eclass_key_file: Path | None = Field(
+        default=None,
+        validation_alias="MIA_ECLASS_KEY_FILE",
+    )
+    eclass_json_base_url: str = Field(
+        default="https://eclass-cdp.com/jsonapi/v2",
+        validation_alias="MIA_ECLASS_JSON_BASE_URL",
+    )
+    eclass_search_parameter: str = Field(
+        default="preferredName",
+        validation_alias="MIA_ECLASS_SEARCH_PARAMETER",
+    )
+    eclass_candidate_limit: int = Field(
+        default=12,
+        ge=1,
+        le=64,
+        validation_alias="MIA_ECLASS_CANDIDATE_LIMIT",
+    )
+    semantic_promotion_enabled: bool = Field(
+        default=False,
+        validation_alias="MIA_SEMANTIC_PROMOTION_ENABLED",
     )
     mia_database_url: str | None = Field(
         default=None,

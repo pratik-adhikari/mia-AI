@@ -20,8 +20,8 @@ from mia_dpp.domain.evidence import ProductKnowledgePackage
 from mia_dpp.domain.mappings import MappingResult, SemanticReviewItem
 from mia_dpp.domain.targets import TemplateIndex
 from mia_dpp.persistence.workspace import WorkspaceView
+from mia_dpp.services.deep_research import merge_mapping_results
 from mia_dpp.workflow.context import MiaContext
-from mia_dpp.workflow.workspace import RunWorkspace
 
 ModelT = TypeVar("ModelT", bound=BaseModel)
 
@@ -36,8 +36,15 @@ class AgentResponseView:
     def build(self, state: dict[str, Any], *, trace_offset: int = 0) -> AgentResponse:
         thread_id = str(state.get("thread_id", ""))
         user_id = str(state.get("user_id", "local-development"))
-        pending = self._pending_request(state)
-        status = self._status(state, pending)
+        view_state = self._with_durable_run(state)
+        background_job = self._background_job(view_state)
+        snapshot = self._product_snapshot(view_state)
+        if snapshot is not None and snapshot.human_review_pending:
+            view_state["review_required"] = True
+            view_state.setdefault("mapping_cycle_id", snapshot.mapping_cycle_id)
+            view_state["status"] = AgentStatus.AWAITING_REVIEW.value
+        pending = self._pending_request(view_state)
+        status = self._status(view_state, pending)
         return AgentResponse(
             thread_id=thread_id,
             reply=(
@@ -51,7 +58,7 @@ class AgentResponseView:
             selected_company=state.get("selected_company"),
             product_candidates=tuple(state.get("product_candidates", ())),
             selected_product_ids=tuple(state.get("selected_product_ids", ())),
-            current_product=self._current_product(state),
+            current_product=self._current_product(view_state),
             pending_human_request=pending,
             trace_events=self._workspace.list_events(
                 thread_id,
@@ -59,73 +66,244 @@ class AgentResponseView:
                 user_id=user_id,
             ),
             artifact_count=len(self._workspace.list_artifacts(thread_id, user_id=user_id)),
-            background_job_id=state.get("background_job_id") or None,
+            background_job_id=background_job.id if background_job else None,
         )
+
+    def _with_durable_run(self, state: dict[str, Any]) -> dict[str, Any]:
+        """Restore product/run identity when a stale checkpoint omitted it."""
+        if state.get("product_id") and state.get("run_id"):
+            return dict(state)
+        thread_id = str(state.get("thread_id", ""))
+        if not thread_id:
+            return dict(state)
+        user_id = str(state.get("user_id", "local-development"))
+        runs = self._context.catalogue.list_runs_for_thread(thread_id, user_id=user_id)
+        if not runs:
+            return dict(state)
+        run_id = state.get("run_id")
+        run = next((item for item in runs if item.id == run_id), None) if run_id else None
+        run = run or runs[-1]
+        restored = dict(state)
+        if not restored.get("run_id"):
+            restored["run_id"] = run.id
+        if not restored.get("product_id"):
+            restored["product_id"] = run.product_id
+        return restored
 
     def _current_product(self, state: dict[str, Any]) -> ProductWork | None:
         product_id = state.get("product_id")
         run_id = state.get("run_id")
         if not product_id or not run_id:
             return None
-        work = RunWorkspace(state, self._context)  # type: ignore[arg-type]
+        user_id = str(state.get("user_id", "local-development"))
+        run_id = str(run_id)
+        product_id = str(product_id)
+        snapshot = self._product_snapshot(state)
+        evidence_artifact_id = state.get("evidence_artifact_id") or (
+            snapshot.evidence_artifact_id if snapshot is not None else None
+        )
+        mapping_artifact_id = (
+            state.get("reviewed_mapping_artifact_id")
+            or state.get("semantic_mapping_artifact_id")
+            or (
+                snapshot.reviewed_mapping_artifact_id or snapshot.semantic_mapping_artifact_id
+                if snapshot is not None
+                else None
+            )
+        )
         package = self._load_optional(
-            work, state.get("evidence_artifact_id"), ProductKnowledgePackage
+            evidence_artifact_id,
+            ProductKnowledgePackage,
+            user_id=user_id,
+            product_id=product_id,
         )
         mapping = self._load_optional(
-            work,
-            state.get("reviewed_mapping_artifact_id") or state.get("semantic_mapping_artifact_id"),
+            mapping_artifact_id,
             MappingResult,
+            user_id=user_id,
+            product_id=product_id,
         )
-        index = self._load_optional(work, state.get("targets_artifact_id"), TemplateIndex)
-        dpp = self._load_optional(work, state.get("dpp_artifact_id"), DppPackage)
+        job = self._background_job(state)
+        if job is not None:
+            research_evidence_id = job.metadata.get("researchEvidenceArtifactId")
+            research_package = self._load_optional(
+                research_evidence_id,
+                ProductKnowledgePackage,
+                user_id=user_id,
+                product_id=product_id,
+            )
+            if research_package is not None:
+                if package is None:
+                    package = research_package
+                else:
+                    sources = {item.id: item for item in package.acquired_sources}
+                    sources.update(
+                        {item.id: item for item in research_package.acquired_sources}
+                    )
+                    evidence = {item.id: item for item in package.evidence}
+                    for item in research_package.evidence:
+                        evidence.setdefault(item.id, item)
+                    package = package.model_copy(
+                        update={
+                            "source_artifact_ids": tuple(
+                                dict.fromkeys(
+                                    (
+                                        *package.source_artifact_ids,
+                                        *research_package.source_artifact_ids,
+                                    )
+                                )
+                            ),
+                            "acquired_sources": tuple(sources.values()),
+                            "extracted_pages": tuple(
+                                {
+                                    (item.source_url, index): item
+                                    for index, item in enumerate(
+                                        (
+                                            *package.extracted_pages,
+                                            *research_package.extracted_pages,
+                                        )
+                                    )
+                                }.values()
+                            ),
+                            "evidence": tuple(evidence.values()),
+                        }
+                    )
+            research_mapping_id = job.metadata.get("integratedMappingArtifactId")
+            research_mapping = self._load_optional(
+                research_mapping_id, MappingResult, user_id=user_id, product_id=product_id
+            )
+            if research_mapping is not None:
+                mapping = merge_mapping_results(mapping or MappingResult(), research_mapping)
+        index = self._load_optional(
+            state.get("targets_artifact_id"), TemplateIndex, user_id=user_id, product_id=product_id
+        )
+        dpp = self._load_optional(
+            state.get("dpp_artifact_id") or (snapshot.dpp_artifact_id if snapshot else None),
+            DppPackage,
+            user_id=user_id,
+            product_id=product_id,
+        )
         artifacts = self._context.catalogue.list_artifacts(
-            run_id=str(run_id),
-            user_id=str(state.get("user_id", "local-development")),
+            run_id=run_id,
+            user_id=user_id,
         )
+        review_artifact_id = state.get("review_items_artifact_id")
+        if not review_artifact_id and snapshot is not None and snapshot.human_review_pending:
+            review_artifact_id = next(
+                (
+                    item.id
+                    for item in reversed(artifacts)
+                    if item.key
+                    in {"mapping/review-items.json", "mapping/review-items-research.json"}
+                ),
+                None,
+            )
         return ProductWork(
             product_id=str(product_id),
-            status=self._product_status(str(state.get("status", "running"))),
+            status=(
+                ProductStatus.AWAITING_REVIEW
+                if snapshot is not None and snapshot.human_review_pending
+                else self._product_status(str(state.get("status", "running")))
+            ),
             product_name=(package.product_name if package else state.get("product_name")),
-            source_urls=tuple(state.get("known_source_urls", ())),
+            source_urls=tuple(
+                dict.fromkeys(
+                    (
+                        *state.get("known_source_urls", ()),
+                        *((item.final_url for item in package.acquired_sources) if package else ()),
+                    )
+                )
+            ),
             source_artifact_ids=package.source_artifact_ids if package else (),
             acquired_sources=package.acquired_sources if package else (),
             evidence=package.evidence if package else (),
             mapping_result=mapping,
-            template_index=index,
-            pending_reviews=self._review_items(work, state.get("review_items_artifact_id")),
-            mapping_cycle_id=state.get("mapping_cycle_id") or None,
+            template_index=(
+                index
+                or self._load_optional(
+                    snapshot.targets_artifact_id if snapshot is not None else None,
+                    TemplateIndex,
+                    user_id=user_id,
+                    product_id=product_id,
+                )
+            ),
+            pending_reviews=self._review_items(
+                review_artifact_id,
+                user_id=user_id,
+                product_id=product_id,
+            ),
+            mapping_cycle_id=(
+                state.get("mapping_cycle_id")
+                or (snapshot.mapping_cycle_id if snapshot is not None else None)
+            ),
             aas_artifact_sha256=dpp.artifact_sha256 if dpp else None,
             artifact_ids=tuple(item.id for item in artifacts),
         )
 
+    def _product_snapshot(self, state: dict[str, Any]):
+        product_id = state.get("product_id")
+        run_id = state.get("run_id")
+        if not product_id or not run_id:
+            return None
+        snapshot = self._context.catalogue.get_product_work_snapshot(
+            str(product_id), user_id=str(state.get("user_id", "local-development"))
+        )
+        return snapshot if snapshot is not None and snapshot.run_id == str(run_id) else None
+
+    def _background_job(self, state: dict[str, Any]):
+        thread_id = str(state.get("thread_id", ""))
+        run_id = str(state.get("run_id", ""))
+        product_id = str(state.get("product_id", ""))
+        user_id = str(state.get("user_id", "local-development"))
+        if not thread_id or not run_id or not product_id:
+            return None
+        requested_id = state.get("background_job_id")
+        jobs = self._context.catalogue.list_background_jobs(
+            user_id=user_id, thread_id=thread_id
+        )
+        matching = tuple(
+            job for job in jobs if job.run_id == run_id and job.product_id == product_id
+        )
+        if requested_id:
+            selected = next((job for job in matching if job.id == requested_id), None)
+            if selected is not None:
+                return selected
+        return matching[-1] if matching else None
+
     def _review_items(
-        self,
-        work: RunWorkspace,
-        artifact_id: object,
+        self, artifact_id: object, *, user_id: str, product_id: str
     ) -> tuple[SemanticReviewItem, ...]:
         if not artifact_id:
             return ()
         artifact = self._context.catalogue.get_artifact(
             str(artifact_id),
-            user_id=work.user_id,
+            user_id=user_id,
         )
-        if artifact is None:
+        if artifact is None or artifact.product_id != product_id:
             return ()
         return tuple(
             SemanticReviewItem.model_validate(item)
             for item in json.loads(self._context.artifacts.get(artifact))
         )
 
-    @staticmethod
     def _load_optional(
-        work: RunWorkspace,
+        self,
         artifact_id: object,
         model: type[ModelT],
+        *,
+        user_id: str,
+        product_id: str,
     ) -> ModelT | None:
         if not artifact_id:
             return None
         try:
-            return work.load(str(artifact_id), model)
+            artifact = self._context.catalogue.get_artifact(str(artifact_id), user_id=user_id)
+            # Continue-saved-work intentionally reuses artifacts from earlier runs of
+            # this same user/product. The user-scoped catalogue lookup prevents leakage;
+            # product identity prevents accidentally loading another product's bytes.
+            if artifact is None or artifact.product_id != product_id:
+                return None
+            return model.model_validate_json(self._context.artifacts.get(artifact))
         except (KeyError, ValueError):
             return None
 

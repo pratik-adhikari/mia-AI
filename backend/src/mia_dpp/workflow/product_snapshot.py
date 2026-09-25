@@ -64,7 +64,9 @@ def update_product_snapshot(
             "run_id": work.run_id,
             "thread_id": work.state["thread_id"],
             "workflow_stage": stage,
-            "source_generation": int(work.state.get("source_generation", snapshot.source_generation)),
+            "source_generation": int(
+                work.state.get("source_generation", snapshot.source_generation)
+            ),
             **changes,
         }
     )

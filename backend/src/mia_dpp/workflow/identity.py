@@ -31,7 +31,6 @@ def canonical_product_url(url: str) -> str:
     return urlunsplit((parsed.scheme.casefold(), netloc, path, query, ""))
 
 
-
 def direct_product_url(message: str) -> str | None:
     """Return the first explicit product URL from a chat turn, if one exists."""
 

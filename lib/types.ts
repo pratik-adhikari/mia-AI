@@ -1,5 +1,9 @@
 export type MappingStatus = "auto" | "review" | "approved" | "rejected";
-export type MappingOrigin = "deterministic" | "semantic_agent" | "human";
+export type MappingOrigin =
+  | "deterministic"
+  | "semantic_agent"
+  | "semantic_engine"
+  | "human";
 export type Severity = "info" | "warning" | "error";
 export type ValidationCategory = "metamodel" | "template" | "policy";
 export type RequirementKind = "value" | "structural";
@@ -45,6 +49,16 @@ export interface EvidenceRecord {
   acquiredAt: string;
 }
 
+export interface AcquiredSource {
+  id: string;
+  finalUrl: string;
+  renderedHtml: string;
+  markdown: string;
+  structuredContent: string | null;
+  contentSha256: string;
+  acquiredAt: string;
+}
+
 export interface ReferenceKey {
   type: string;
   value: string;
@@ -74,6 +88,13 @@ export interface TemplateRelease {
   metamodelVersion: string;
 }
 
+export interface ListInstanceBinding {
+  templatePath: string[];
+  instanceKey: string;
+  sourceContextPath: string[];
+  label: string | null;
+}
+
 export interface MappingTarget {
   templateKey: string;
   templateRelease: string;
@@ -81,6 +102,7 @@ export interface MappingTarget {
   instancePath: string[];
   idShort: string;
   semanticId: SemanticReference;
+  listInstanceBindings: ListInstanceBinding[];
 }
 
 export interface FieldMapping {
@@ -94,6 +116,7 @@ export interface FieldMapping {
   reasoning: string;
   status: MappingStatus;
   mappingOrigin: MappingOrigin;
+  reviewPriority?: "auto" | "optional" | "confirm" | "alarm" | null;
   humanReviewed: boolean;
   humanActorName?: string | null;
   humanValueKind?: "verified" | "dummy" | null;
@@ -108,6 +131,38 @@ export interface FieldMapping {
 }
 
 export type ProposedFieldMapping = FieldMapping;
+
+export interface JevRoutingStep {
+  depth: number;
+  parentPath: string[];
+  options: string[];
+  decision: {
+    questionId?: string;
+    choice: string;
+    probabilities: Record<string, number>;
+    inputTokens: number | null;
+    outputTokens: number | null;
+  };
+  deterministic: boolean;
+}
+
+export interface JevRoutingTrace {
+  focusEvidenceId: string;
+  contextViewId: string;
+  scope: string;
+  selectedTemplateKey: string | null;
+  selectedPath: string[];
+  terminalReason: string;
+  steps: JevRoutingStep[];
+  requestState?: Record<string, unknown> | null;
+}
+
+export interface JevPolicyDecision {
+  evidenceId: string;
+  priority: "auto" | "optional" | "confirm" | "alarm";
+  consensusSignature: string;
+  reasons: string[];
+}
 
 export interface ProductKnowledgePackage {
   productId: string;
@@ -197,6 +252,7 @@ export interface EvidenceOutcome {
   evidenceId: string;
   status: EvidenceOutcomeStatus;
   requirementId: string | null;
+  directTarget: boolean;
   alternativeRequirementIds: string[];
   reason: string;
   mappingOrigin: MappingOrigin;
@@ -207,9 +263,12 @@ export interface MappingKnowledgeEntry {
   scope: "user" | "organization" | "global";
   ownerId: string | null;
   sourceField: string;
+  sourceContextPath: string[];
   exampleValues: string[];
   targetTemplate: string;
   targetPath: string[];
+  targetInstancePath: string[];
+  listInstanceBindings: ListInstanceBinding[];
   semanticId: string;
   manufacturer: string | null;
   domain: string | null;
@@ -268,6 +327,10 @@ export interface DppPackage {
   validationReport: ValidationReport;
   deployable: boolean;
   evidence: EvidenceRecord[];
+  submodels?: Record<string, unknown>[];
+  templates?: TemplateRelease[];
+  gapReports?: GapReport[];
+  validationReports?: ValidationReport[];
 }
 
 export interface ChatMessage {
@@ -290,6 +353,9 @@ export interface SemanticReviewItem {
   status: EvidenceOutcomeStatus;
   requirementId: string | null;
   alternativeRequirementIds: string[];
+  targetKind: "requirement" | "direct";
+  alternativeTargets: MappingTarget[];
+  reviewPriority: "optional" | "confirm" | "alarm" | null;
   reason: string;
   mapping: ProposedFieldMapping | null;
 }
@@ -303,6 +369,7 @@ export interface AgentReviewDecision {
     | "irrelevant"
     | "reject";
   correctedRequirementId?: string | null;
+  correctedSemanticId?: string | null;
   correctedValue?: string | null;
   comment?: string | null;
 }
@@ -372,6 +439,7 @@ export interface AgentProductWork {
   productName: string | null;
   sourceUrls: string[];
   sourceArtifactIds: string[];
+  acquiredSources: AcquiredSource[];
   evidence: EvidenceRecord[];
   mappingResult: MappingResult | null;
   templateIndex: RequirementInventory | null;
@@ -521,6 +589,7 @@ export interface ProductWorkSnapshot {
   templateReleases: string[];
   evidenceArtifactId: string | null;
   reviewedMappingArtifactId: string | null;
+  semanticPromotionArtifactId?: string | null;
   coverageArtifactId: string | null;
   dppArtifactId: string | null;
   aasArtifactId: string | null;
@@ -547,6 +616,10 @@ export interface HumanReviewRecord {
   finalMappingId: string | null;
   finalRequirementId: string | null;
   correctedEvidenceId: string | null;
+  proposedSemanticId?: string | null;
+  finalSemanticId?: string | null;
+  proposedListInstanceBindings?: ListInstanceBinding[];
+  finalListInstanceBindings?: ListInstanceBinding[];
   action:
     | "accepted_mapping" | "corrected_target" | "corrected_value"
     | "supplied_value" | "supplied_dummy" | "rejected_evidence"
