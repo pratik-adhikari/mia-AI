@@ -15,16 +15,22 @@ ModelT = TypeVar("ModelT", bound=BaseModel)
 
 
 class RunWorkspace(RunStore):
-    """Adapt LangGraph state keys to the shared RunStore.
-
-    Orchestration-specific conveniences stay here. Persistence, fencing, and
-    run identity live in the runtime package so future orchestrators can reuse them.
-    """
+    """Adapt LangGraph state keys to the shared RunStore contract."""
 
     def __init__(self, state: MiaWorkflowState, ctx: ServiceContainer) -> None:
         self.state = state
-        self.ctx = ctx
-        super().__init__(RunContext.from_mapping(state), ctx)
+        self._ctx = ctx
+        super().__init__(
+            RunContext.from_mapping(state),
+            ctx.catalogue,
+            ctx.artifacts,
+        )
+
+    @property
+    def ctx(self) -> ServiceContainer:
+        """Temporary compatibility access for graph-only helpers during migration."""
+
+        return self._ctx
 
     def state_id(self, key: str) -> str:
         artifact_id = self.state.get(key)
@@ -35,5 +41,7 @@ class RunWorkspace(RunStore):
     def load_state(self, key: str, model: type[ModelT]) -> ModelT:
         return self.load(self.state_id(key), model)
 
-    def load_json(self, key: str) -> Any:
-        return super().load_json(self.state_id(key))
+    def load_state_json(self, key: str) -> Any:
+        """Load JSON from the artifact ID stored in a LangGraph state field."""
+
+        return self.load_json(self.state_id(key))
