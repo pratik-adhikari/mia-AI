@@ -30,7 +30,8 @@ from mia_dpp.semantic.jev_mapping import (
     map_new_jev_evidence,
     require_review_for_projection_collisions,
 )
-from mia_dpp.services.deep_research import merge_mapping_results
+from mia_dpp.capabilities.evidence import merge_packages
+from mia_dpp.capabilities.mapping import merge_mapping_results
 from mia_dpp.services.evidence_conflicts import (
     detect_review_conflicts,
     mark_conflicting_evidence,
@@ -41,7 +42,6 @@ from mia_dpp.services.reconfirmation import ReviewReuseStatus, review_reuse_stat
 from mia_dpp.tools.mapping.coverage import coverage as calculate_coverage
 from mia_dpp.tools.mapping.mapper import DeterministicWebsiteMapper
 from mia_dpp.workflow.context import MiaContext
-from mia_dpp.workflow.nodes_product import merge_packages
 from mia_dpp.workflow.product_snapshot import (
     model_fingerprint,
     semantic_mapper_fingerprint,
