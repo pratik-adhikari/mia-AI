@@ -74,6 +74,7 @@ class SemanticMappingStageResult:
     review_required: bool
     product_snapshot_version: int
     reviewed_mapping_artifact_id: str | None = None
+    clear_reviewed_mapping: bool = False
     semantic_mapper_fingerprint: str | None = None
 
 
@@ -334,6 +335,7 @@ class MappingExecutionService:
                     mapping_cycle_id=cycle_id,
                     review_required=bool(reviews),
                     reviewed_mapping_artifact_id=mapping_id if not reviews else None,
+                    clear_reviewed_mapping=bool(reviews),
                     product_snapshot_version=snapshot.version,
                 )
 
