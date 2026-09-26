@@ -15,7 +15,7 @@ from mia_dpp.semantic.eclass_diagnostics import EclassDiagnosticsReport
 from mia_dpp.semantic.eclass_resolution import EclassResolutionReport
 from mia_dpp.semantic.open_property import OpenPropertyProposalReport
 from mia_dpp.semantic.promotion import promote_open_properties
-from mia_dpp.workflow.context import MiaContext
+from mia_dpp.runtime.services import ServiceContainer
 from mia_dpp.workflow.product_snapshot import update_product_snapshot
 from mia_dpp.workflow.state import MiaWorkflowState
 from mia_dpp.workflow.workspace import RunWorkspace
@@ -23,7 +23,7 @@ from mia_dpp.workflow.workspace import RunWorkspace
 
 async def promote_semantic_mapping(
     state: MiaWorkflowState,
-    runtime: Runtime[MiaContext],
+    runtime: Runtime[ServiceContainer],
 ) -> dict[str, Any]:
     """Merge verified open-property semantics before review/coverage routing."""
 
