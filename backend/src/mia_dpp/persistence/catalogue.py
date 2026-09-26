@@ -37,7 +37,7 @@ from mia_dpp.tools.mapping.models import (
     MappingKnowledgeScope,
     MappingKnowledgeStatus,
 )
-from mia_dpp.workflow.identity import canonical_product_url
+from mia_dpp.domain.product_identity import canonical_product_url
 
 ModelT = TypeVar("ModelT", bound=BaseModel)
 
