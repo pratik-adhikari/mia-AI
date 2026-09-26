@@ -204,7 +204,19 @@ class Mia:
             if agent_model is not None
             else None
         )
-        self.deep_research = DeepResearchService(self.context)
+        self.deep_research = DeepResearchService(
+            catalogue=self.context.catalogue,
+            artifacts=self.context.artifacts,
+            templates=self.context.templates,
+            web_tool=self.context.web_tool,
+            mapping_review=self.context.mapping_review,
+            semantic_mapper=self.context.semantic_mapper,
+            jev_decider=self.context.jev_decider,
+            jev_mapping_enabled=self.context.jev_mapping_enabled,
+            jev_routing_scopes=self.context.jev_routing_scopes,
+            jev_routing_max_concurrency=self.context.jev_routing_max_concurrency,
+            jev_decision_policy=self.context.jev_decision_policy,
+        )
         self._response_view = AgentResponseView(self.context, self.store)
         self._graph: Any | None = None
         self._checkpoint_cm: Any | None = None
