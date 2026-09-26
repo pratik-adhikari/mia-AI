@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from urllib.parse import urlsplit
 
 from mia_dpp.domain.evidence import ProductKnowledgePackage
@@ -157,7 +157,7 @@ class MappingHumanService:
                 "mappingCycleId": mapping_cycle_id,
                 "actorName": submission.actor_name,
                 "decisions": [
-                    asdict(item) for item in submission.decisions
+                    item.to_wire_dict() for item in submission.decisions
                 ],
                 "result": [item.model_dump(mode="json", by_alias=True) for item in reviewed],
             },
