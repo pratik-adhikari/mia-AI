@@ -1,4 +1,4 @@
-"""Architecture-neutral run persistence and event helpers."""
+"""Architecture-neutral persistence for one active durable execution."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ from typing import Any, TypeVar
 
 from pydantic import BaseModel
 
-from mia_dpp.persistence.catalogue import ProductCatalogue
+from mia_dpp.runtime.run_catalogue import RunCatalogue
 from mia_dpp.runtime.run_context import RunContext
 from mia_dpp.storage.base import ArtifactStore
 
@@ -15,23 +15,46 @@ ModelT = TypeVar("ModelT", bound=BaseModel)
 
 
 class RunStore:
-    """Persist artifacts and events for one fully identified run.
+    """Persist artifacts and events for one active, fully identified execution.
 
-    The store intentionally depends only on durable catalogue metadata and
-    artifact-byte storage. It must not become a service locator for semantic,
-    search, agent, or orchestration dependencies.
+    Constructing a RunStore asserts that the supplied run, product, thread, and
+    user belong together, verifies the current workflow generation, and renews
+    the execution lease. It is therefore a mutation-capable active-executor
+    object, not a general historical run reader.
     """
 
     def __init__(
         self,
         context: RunContext,
-        catalogue: ProductCatalogue,
+        catalogue: RunCatalogue,
         artifacts: ArtifactStore,
     ) -> None:
         self.context = context
         self._catalogue = catalogue
         self._artifacts = artifacts
+        self._validate_binding()
         self._heartbeat()
+
+    def _validate_binding(self) -> None:
+        """Bind all context identifiers to one durable catalogue execution."""
+
+        run = self._catalogue.get_run(self.run_id)
+        if run is None:
+            raise KeyError(f"unknown run: {self.run_id}")
+        if run.product_id != self.product_id:
+            raise ValueError(
+                f"run {self.run_id} belongs to product {run.product_id}, "
+                f"not {self.product_id}"
+            )
+        if run.thread_id != self.thread_id:
+            raise ValueError(
+                f"run {self.run_id} belongs to thread {run.thread_id}, "
+                f"not {self.thread_id}"
+            )
+        if self._catalogue.get_thread(self.thread_id, user_id=self.user_id) is None:
+            raise PermissionError(
+                f"thread {self.thread_id} does not belong to user {self.user_id}"
+            )
 
     def _heartbeat(self) -> None:
         """Fence stale workers and extend the lease of the current running generation."""
@@ -67,12 +90,7 @@ class RunStore:
         return model.model_validate_json(self._artifacts.get(artifact))
 
     def load_json(self, artifact_id: str) -> Any:
-        """Load JSON by durable artifact ID.
-
-        This method has the same meaning for every RunStore subtype. Adapters
-        that translate orchestration state keys must expose a differently named
-        helper instead of overriding this contract.
-        """
+        """Load JSON by durable artifact ID."""
 
         artifact = self._catalogue.get_artifact(artifact_id, user_id=self.user_id)
         if artifact is None:
@@ -88,7 +106,6 @@ class RunStore:
     ) -> str:
         return self.put_bytes(
             key,
-            # Persisted JSON is an audit artifact, so favor readability over byte size.
             value.model_dump_json(by_alias=True, indent=2).encode(),
             content_type="application/json",
             derived_from=derived_from,
@@ -103,7 +120,6 @@ class RunStore:
     ) -> str:
         return self.put_bytes(
             key,
-            # Stable ordering makes generated manifests easy to diff and reproduce.
             json.dumps(value, ensure_ascii=False, sort_keys=True, indent=2, default=str).encode(),
             content_type="application/json",
             derived_from=derived_from,
