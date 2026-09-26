@@ -1,4 +1,4 @@
-"""Architecture-neutral persistence for one active durable execution."""
+"""Architecture-neutral active-run persistence and event helpers."""
 
 from __future__ import annotations
 
@@ -17,10 +17,10 @@ ModelT = TypeVar("ModelT", bound=BaseModel)
 class RunStore:
     """Persist artifacts and events for one active, fully identified execution.
 
-    Constructing a RunStore asserts that the supplied run, product, thread, and
-    user belong together, verifies the current workflow generation, and renews
-    the execution lease. It is therefore a mutation-capable active-executor
-    object, not a general historical run reader.
+    Construction validates that run_id, product_id, thread_id, and user_id
+    identify the same durable execution, then renews that execution lease.
+    This is intentionally an active-executor abstraction, not a read-only
+    historical run reader.
     """
 
     def __init__(
@@ -32,11 +32,11 @@ class RunStore:
         self.context = context
         self._catalogue = catalogue
         self._artifacts = artifacts
-        self._validate_binding()
+        self._validate_context_binding()
         self._heartbeat()
 
-    def _validate_binding(self) -> None:
-        """Bind all context identifiers to one durable catalogue execution."""
+    def _validate_context_binding(self) -> None:
+        """Bind all context identifiers to the durable run before lease mutation."""
 
         run = self._catalogue.get_run(self.run_id)
         if run is None:
@@ -63,7 +63,7 @@ class RunStore:
         self._catalogue.renew_run_lease(self.run_id)
 
     def heartbeat(self) -> None:
-        """Renew the run lease during a long wait while retaining generation fencing."""
+        """Renew the active run lease while retaining generation fencing."""
 
         self._heartbeat()
 
