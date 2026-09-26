@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from mia_dpp.domain.evidence import ProductKnowledgePackage
-from mia_dpp.domain.mappings import MappingResult, SemanticReviewItem
+from mia_dpp.domain.mappings import MappingResult
 from mia_dpp.domain.targets import TemplateIndex
 from mia_dpp.tools.mapping.models import SemanticMapper, SemanticMappingRun
 from mia_dpp.tools.mapping.review import MappingReviewService
@@ -13,11 +13,10 @@ from mia_dpp.tools.mapping.review import MappingReviewService
 
 @dataclass(frozen=True, slots=True)
 class SemanticMappingExecution:
-    """One model mapping run plus its trusted projection and review rows."""
+    """One model mapping run plus its trusted mapping projection."""
 
     semantic_run: SemanticMappingRun
     mapping: MappingResult
-    reviews: tuple[SemanticReviewItem, ...]
 
 
 async def run_semantic_mapping(
@@ -29,7 +28,7 @@ async def run_semantic_mapping(
     review: MappingReviewService,
     reviewed_knowledge: tuple[dict[str, object], ...] = (),
 ) -> SemanticMappingExecution:
-    """Execute a semantic mapper once and apply the same trust/review rules everywhere."""
+    """Execute a semantic mapper once and apply the same trust rules everywhere."""
 
     semantic_run = await mapper.map(
         package,
@@ -43,9 +42,7 @@ async def run_semantic_mapping(
         index,
         semantic_run,
     )
-    reviews = review.complete_review(package, mapping, index)
     return SemanticMappingExecution(
         semantic_run=semantic_run,
         mapping=mapping,
-        reviews=reviews,
     )
