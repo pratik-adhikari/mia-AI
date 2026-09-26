@@ -1,7 +1,7 @@
 # Backend Architecture Refinement Plan
 
-Status: planning only  
-Branch: `temp`  
+Status: implemented on refactor branch; agentic/GUI executors remain future work  
+Branch: `refactor/lego-backend`  
 Base: `develop@96b8ea0ba7745836bc11fa4a8ebed016a3b1df25`
 
 ## 1. Purpose
@@ -1013,3 +1013,119 @@ The first implementation PR after this plan should be limited to **Phase 1**:
 No agentic code should be added in that first implementation step.
 
 That creates the foundation on which all later architecture experiments can safely build.
+
+
+---
+
+## 18. Implementation status on `refactor/lego-backend`
+
+The architecture cleanup has now been implemented as a behavior-preserving foundation.
+
+### Implemented
+
+- architecture-neutral `ServiceContainer`;
+- architecture-neutral `RunContext` and `RunStore`;
+- LangGraph `RunWorkspace` reduced to a compatibility adapter;
+- shared evidence merge capability;
+- shared mapping-result merge capability;
+- shared semantic mapper execution/review capability;
+- shared deterministic AAS/DPP build capability;
+- `DeepResearchService` no longer imports workflow modules;
+- provider/model/ECLASS/JEV construction moved from `Mia` into `runtime/bootstrap.py`;
+- `Mia` now consumes an assembled runtime instead of constructing every dependency itself;
+- explicit `Orchestrator` protocol;
+- `GraphOrchestrator` registered as `graph-v1`;
+- architecture selection through `MIA_ARCHITECTURE`;
+- machine-readable component catalog;
+- serializable `PipelineDefinition` suitable for a future GUI pipeline builder;
+- privacy modes `local`, `shareable`, and `hybrid` represented in pipeline definitions;
+- architecture-boundary tests prevent reusable layers from importing graph/agent orchestration;
+- pipeline-contract tests validate component/dependency references.
+
+### Intentionally not implemented in this refactor
+
+The following are execution architectures, not cleanup prerequisites, and remain separate future work:
+
+- `agentic-v1` controller implementation;
+- GUI pipeline editor;
+- `pipeline-v1` executor;
+- automatic model routing between local and remote models;
+- local LLM adapter selection;
+- remote high-intelligence escalation policy.
+
+Those features can now be added without duplicating core product operations.
+
+### Resulting hierarchy
+
+```text
+Frontend / API
+      |
+      v
+Mia application facade
+      |
+      v
+ArchitectureRegistry
+      |
+      +---------------------+----------------------+--------------------+
+      |                     |                      |
+      v                     v                      v
+ graph-v1              agentic-v1             pipeline-v1
+ implemented             future                  future
+      |                     |                      |
+      +---------------------+----------------------+
+                            |
+                            v
+                    Capability catalog
+                            |
+      +----------+----------+----------+----------+-----------+
+      |          |          |          |          |           |
+   evidence   semantic    mapping   research     AAS       coverage
+      |          |          |          |          |           |
+      +----------+----------+----------+----------+-----------+
+                            |
+                            v
+                    ServiceContainer
+                            |
+                 ports / concrete adapters
+                            |
+          local models / remote models / search /
+          ECLASS / storage / database / Crawl4AI
+```
+
+### Future execution policy
+
+The intended future selection rule is:
+
+```text
+Can deterministic code solve it?
+        |
+       yes --------------------------> deterministic capability
+        |
+        no
+        v
+Can a small/local model solve it?
+        |
+       yes --------------------------> local/private model
+        |
+        no
+        v
+Is the data allowed to leave the environment?
+        |
+       no ---------------------------> human review / local fallback
+        |
+       yes
+        v
+Does the task justify higher cost?
+        |
+       yes --------------------------> advanced remote model
+       no ---------------------------> cheaper remote/local model
+```
+
+This policy should live above the capabilities. Extraction, mapping, validation,
+AAS compilation, provenance, and storage must not be reimplemented for each
+model or orchestration strategy.
+
+That is the basis for the longer-term MIA goal: a general industrial data
+integration platform where the same verified transformation blocks can be
+assembled as fixed pipelines, locally private workflows, GUI-defined workflows,
+or intelligent agentic executions.
