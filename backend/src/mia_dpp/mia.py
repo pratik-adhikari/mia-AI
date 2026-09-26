@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import logging
 import uuid
 from collections.abc import AsyncIterator
@@ -33,6 +32,7 @@ from mia_dpp.agents.source_exploration import PydanticSourceExplorationPlanner
 from mia_dpp.api.agent_view import AgentResponseView
 from mia_dpp.config import Settings
 from mia_dpp.domain.product import BackgroundJob, MessageRole, ProductRun, RunStatus
+from mia_dpp.domain.product_identity import direct_product_url
 from mia_dpp.integrations.crawl4ai import Crawl4AIPageLoader
 from mia_dpp.integrations.ddgs import DdgsSearchProvider
 from mia_dpp.persistence.catalogue import LOCAL_USER_ID, ActiveProductRunExists
@@ -52,7 +52,6 @@ from mia_dpp.tools.mapping.review import MappingReviewService
 from mia_dpp.tools.search import SearchProvider, SearchUnavailableError
 from mia_dpp.tools.web.models import PageLoadError
 from mia_dpp.tools.web.tool import WebExtractionTool
-from mia_dpp.workflow.identity import direct_product_url
 
 
 class Mia:
