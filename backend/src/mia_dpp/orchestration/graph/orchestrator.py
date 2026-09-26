@@ -13,10 +13,11 @@ from langgraph.types import Command
 from langgraph_sdk import get_client
 
 from mia_dpp.config import Settings
-from mia_dpp.orchestration.base import OrchestrationSnapshot
+from mia_dpp.orchestration.base import OrchestrationRunRequest, OrchestrationSnapshot
 from mia_dpp.runtime.checkpoints import open_checkpointer
 from mia_dpp.runtime.services import ServiceContainer
 from mia_dpp.workflow.graph import create_graph
+from mia_dpp.workflow.state import reset_product_state
 
 
 @dataclass
@@ -87,14 +88,17 @@ class GraphOrchestrator:
 
     async def run(
         self,
-        thread_id: str,
-        user_id: str,
-        run_input: dict[str, Any],
+        request: OrchestrationRunRequest,
     ) -> dict[str, Any]:
-        if self._backend(thread_id, user_id) == "remote":
-            return await self._run_agent_server(thread_id, user_id, run_input=run_input)
+        run_input = self._graph_input(request)
+        if self._backend(request.thread_id, request.user_id) == "remote":
+            return await self._run_agent_server(
+                request.thread_id,
+                request.user_id,
+                run_input=run_input,
+            )
         graph = await self._ensure_graph()
-        config = self._config(thread_id, user_id)
+        config = self._config(request.thread_id, request.user_id)
         await graph.ainvoke(run_input, config=config, context=self._services)
         raw = await graph.aget_state(config, subgraphs=True)
         return self._snapshot_values(raw)
@@ -272,6 +276,52 @@ class GraphOrchestrator:
             checkpointer = await self._checkpoint_cm.__aenter__()
             self._graph = create_graph(checkpointer)
         return self._graph
+
+    @staticmethod
+    def _graph_input(request: OrchestrationRunRequest) -> dict[str, Any]:
+        if request.seed is not None:
+            seed = request.seed
+            update: dict[str, Any] = {
+                **reset_product_state(product_url=seed.product_url),
+                "thread_id": request.thread_id,
+                "user_id": request.user_id,
+                "user_message": request.user_message,
+                "product_id": seed.product_id,
+                "run_id": seed.run_id,
+                "workflow_generation": seed.workflow_generation,
+                "source_generation": seed.source_generation,
+                "refresh_requested": request.refresh_requested,
+                "reuse_mode": seed.reuse_mode,
+                "reuse_prior_work": seed.reuse_prior_work,
+                "seeded_from_run_id": seed.seeded_from_run_id,
+                "evidence_artifact_id": seed.evidence_artifact_id,
+                "reviewed_mapping_artifact_id": seed.reviewed_mapping_artifact_id,
+                "product_snapshot_version": seed.product_snapshot_version,
+                "discovery_history_json": seed.discovery_history_json,
+                "target_submodels": seed.target_submodels,
+                "max_research_attempts": seed.max_research_attempts,
+                "research_attempts": 0,
+                "status": "running",
+            }
+            return update
+
+        update = {
+            "thread_id": request.thread_id,
+            "user_id": request.user_id,
+            "user_message": request.user_message,
+            "refresh_requested": request.refresh_requested,
+        }
+        if request.initialize:
+            update.update(
+                {
+                    "discovery_history_json": "[]",
+                    "target_submodels": ("digital_nameplate", "technical_data"),
+                    "max_research_attempts": 2,
+                    "research_attempts": 0,
+                    "status": "running",
+                }
+            )
+        return update
 
     def _backend(self, thread_id: str, user_id: str) -> str:
         key = self._execution_key(thread_id, user_id)
