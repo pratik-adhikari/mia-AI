@@ -8,178 +8,178 @@ Scope: architecture-neutral runtime primitives only
 
 Separate reusable runtime responsibilities from LangGraph without changing the existing workflow behavior.
 
-Phase 1 intentionally does **not** extract business logic from workflow nodes and does **not** add an agentic architecture.
+Phase 1 intentionally does **not** extract business logic from workflow nodes, remove all service-to-workflow imports, or add an agentic architecture.
 
-## What changed
+## Final Phase 1 design
 
-### 1. Architecture-neutral ServiceContainer
+```text
+runtime/
+  services.py      -> orchestration-level dependency composition
+  run_context.py   -> immutable execution identity
+  run_store.py     -> narrow run persistence/events/fencing
 
-Added:
+workflow/
+  context.py       -> temporary compatibility alias only
+  workspace.py     -> graph-state adapter over RunStore
+```
 
-`backend/src/mia_dpp/runtime/services.py`
+### ServiceContainer
 
-`ServiceContainer` now owns reusable backend dependencies such as:
+`ServiceContainer` moved backend-wide dependency ownership out of `workflow/`.
 
-- catalogue
-- artifact store
-- templates
-- extraction/search dependencies
-- mapping review
-- semantic mapper
-- JEV
-- ECLASS
-- semantic policy/configuration
+It is available to orchestration, but it is **not** intended to be injected wholesale into every capability. Individual components should receive only the dependencies they actually require.
 
-The application, API view, graph, workflow nodes, and deep research now type against the runtime container instead of defining backend-wide dependencies inside `workflow/context.py`.
+### RunContext
 
-### 2. Architecture-neutral RunContext
+`RunContext` contains the fully identified execution:
 
-Added:
+- `user_id`
+- `thread_id`
+- `product_id`
+- `run_id`
 
-`backend/src/mia_dpp/runtime/run_context.py`
+Construction from orchestration state now intentionally requires all four values. Focused tests establish this invariant.
 
-`RunContext` contains only stable run identity:
+### RunStore
 
-- user_id
-- thread_id
-- product_id
-- run_id
+`RunStore` owns:
 
-It can be built from any mapping and therefore does not depend on LangGraph state.
+- generation fencing;
+- run lease heartbeat;
+- artifact loading;
+- model/JSON/binary artifact writes;
+- artifact registration;
+- event recording.
 
-### 3. Architecture-neutral RunStore
+Its constructor is deliberately narrow:
 
-Added:
+```python
+RunStore(
+    context,
+    catalogue,
+    artifacts,
+)
+```
 
-`backend/src/mia_dpp/runtime/run_store.py`
+It does **not** receive or expose the complete `ServiceContainer`. Generic persistence code therefore cannot reach semantic models, search, JEV, ECLASS, agents, or other unrelated services through the store.
 
-`RunStore` owns reusable run-scoped infrastructure:
+### RunWorkspace
 
-- generation fencing
-- run lease heartbeat
-- artifact loading
-- JSON/model/binary artifact writes
-- artifact registration
-- event recording
+`RunWorkspace` remains a thin LangGraph adapter.
 
-This logic previously lived in `workflow/workspace.py`.
+It adds only graph-specific concerns:
 
-### 4. RunWorkspace reduced to a graph adapter
+- retaining `MiaWorkflowState`;
+- resolving artifact IDs stored in graph state;
+- `load_state(...)`;
+- `load_state_json(...)`;
+- temporary `ctx` access for existing graph helpers.
 
-`workflow/workspace.py` now subclasses `RunStore`.
+Importantly, it does **not** change the meaning of inherited `RunStore.load_json(...)`.
 
-It keeps only LangGraph-specific conveniences:
+The contract is now:
 
-- retaining graph state
-- resolving artifact IDs from state keys
-- `load_state(...)`
-- graph-state-key based `load_json(...)`
+```text
+RunStore.load_json(artifact_id)
+RunWorkspace.load_json(artifact_id)
 
-The reusable persistence implementation is no longer owned by the workflow package.
+RunWorkspace.load_state_json(state_key)
+```
 
-### 5. workflow/context.py reduced to compatibility only
+A `RunWorkspace` therefore remains substitutable anywhere a generic `RunStore` is expected.
 
-The old `MiaContext` implementation was removed.
+## Compatibility
 
-`workflow/context.py` now provides only a temporary alias:
+`workflow/context.py` temporarily provides:
 
 ```python
 MiaContext = ServiceContainer
 ```
 
-New code must import `ServiceContainer` from `mia_dpp.runtime.services`.
+New code must import `ServiceContainer` directly from `mia_dpp.runtime.services`.
 
-The shim exists only to avoid unnecessary breakage during incremental refactoring.
+The alias has a defined removal point after dependent imports are eliminated in the later orchestration cleanup.
 
-### 6. Existing graph adapted without changing orchestration
+## Focused Phase 1 tests
 
-`workflow/graph.py` and the current node type annotations now use `ServiceContainer`.
+Added `backend/tests/test_runtime_run_store.py` covering:
 
-No graph edges, routing decisions, semantic behavior, JEV behavior, persistence policy, review behavior, or AAS behavior were intentionally changed.
+- complete `RunContext` construction;
+- missing/empty run identity rejection;
+- initialization generation fencing;
+- initialization lease renewal;
+- model round trip;
+- JSON round trip;
+- artifact registration;
+- user identity propagation during artifact lookup;
+- stale generation blocking artifact mutations;
+- stale generation blocking event mutations;
+- `RunWorkspace.state_id(...)` translation;
+- `RunWorkspace.load_state_json(...)` translation;
+- preservation of generic `load_json(artifact_id)` semantics.
 
-## Responsibility change
+Existing product snapshot tests were adapted to the narrowed store constructor.
 
-Before:
+## Corrected phase boundary
 
-```text
-workflow/
-  context.py      -> backend-wide dependency container
-  workspace.py    -> run identity + fencing + persistence + graph-state helpers
-```
-
-After:
-
-```text
-runtime/
-  services.py     -> shared dependency container
-  run_context.py  -> shared run identity
-  run_store.py    -> shared run persistence/events/fencing
-
-workflow/
-  context.py      -> compatibility alias only
-  workspace.py    -> LangGraph adapter only
-```
-
-## Why this matters
-
-Future execution architectures can now reuse the same runtime primitives:
+Phase 1 exit criteria are:
 
 ```text
-LangGraph ---------┐
-                   │
-Agentic controller ├──> ServiceContainer
-                   ├──> RunContext
-GUI pipeline ------├──> RunStore
-                   │
-CLI / evaluator ---┘
+backend-wide runtime primitives are no longer defined by workflow/
+
+api/      ──X──► workflow/context.py
+new code  ──X──► workflow.context.MiaContext
 ```
 
-They do not need to construct fake LangGraph state merely to access artifacts, events, or durable run identity.
+Phase 2 owns the stronger dependency rule:
 
-## What was deliberately NOT changed
+```text
+services/ ──X──► workflow/
+```
 
-- DeepResearchService still uses `RunWorkspace` and a workflow-owned merge helper.
-- Large graph nodes still contain business operations.
-- `Mia` still performs too much composition work.
-- No `Orchestrator` protocol exists yet.
-- No capability/service extraction has started.
-- No agentic controller or GUI pipeline model was added.
+This resolves the previous contradiction between the architecture plan and the implementation.
 
-Those belong to later phases.
+## Remaining deliberate migration debt
 
-## Validation status
+The following are **not** Phase 1 defects:
 
-GitHub CI was triggered for the branch head.
+- `DeepResearchService` still imports workflow-owned helpers;
+- large workflow nodes still contain business operations;
+- `Mia` still performs too much composition work;
+- `ServiceContainer` is still broad at the orchestration composition boundary;
+- `runtime/checkpoints.py` remains LangGraph-specific until the graph package is isolated;
+- no `Orchestrator` protocol exists yet.
 
-The workflow run concluded as failure before exposing any executable job steps or retrievable job logs. The repository therefore does **not** currently provide a usable CI result for this phase through GitHub Actions.
+The rule going forward is:
 
-The connector environment used for this refactor cannot clone GitHub into a local shell, so `make check` could not be independently executed here.
+> The broad `ServiceContainer` may be available to orchestration, but reusable capabilities receive only the dependencies they actually use.
 
-This phase should therefore be reviewed and locally verified with:
+## Code-size interpretation
+
+Phase 1 reduced **responsibility concentration**, not total repository LOC.
+
+The reusable code previously embedded in `RunWorkspace` was made explicit as `RunContext` and `RunStore`, so a temporary net increase in lines is expected. Future phases should reduce duplication as graph nodes and services converge on shared capabilities.
+
+## Validation
+
+GitHub Actions has previously failed on this branch before exposing executable job steps or retrievable logs, so those runs did not provide a meaningful quality signal.
+
+After this correction pass, the required local verification remains:
 
 ```bash
 git switch refactor/backend-modular-phase-1
 make check
 ```
 
-before starting Phase 2.
+Do not proceed to Phase 2 until the current Phase 1 head passes the repository quality gates or any failures are reviewed and fixed.
 
-## Review focus
+## Phase 2 after approval
 
-Please review these questions before Phase 2:
+Phase 2 removes upward workflow dependencies from reusable services, beginning with `DeepResearchService`:
 
-1. Is `runtime/` the correct ownership layer for shared execution dependencies?
-2. Is the split between `RunStore` and graph-only `RunWorkspace` understandable?
-3. Should the temporary `MiaContext` compatibility alias remain for one more phase or be removed immediately after local verification?
-4. Are the names `ServiceContainer`, `RunContext`, and `RunStore` clear enough for the future GUI/agentic architecture?
-
-## Next phase after approval
-
-Phase 2 will remove upward workflow dependencies from reusable services, starting with `DeepResearchService`:
-
-- move evidence/package merge logic out of workflow nodes;
-- replace `RunWorkspace` use inside services with `RunStore`;
-- inject explicit reusable dependencies;
-- establish the rule that `services/` cannot import `workflow/`.
+- move package/evidence merge logic out of workflow nodes;
+- replace service use of `RunWorkspace` with `RunStore`;
+- inject explicit narrow dependencies;
+- establish and test the rule that `services/` cannot import `workflow/`.
 
 No large graph-node extraction should begin until that dependency direction is clean.
