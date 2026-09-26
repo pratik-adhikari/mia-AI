@@ -7,7 +7,7 @@ from typing import Any
 from langgraph.graph import END, START, StateGraph
 from langgraph.runtime import Runtime
 
-from mia_dpp.workflow.context import MiaContext
+from mia_dpp.runtime.services import ServiceContainer
 from mia_dpp.workflow.nodes_aas import build_aas, store_result
 from mia_dpp.workflow.nodes_discovery import discover_product
 from mia_dpp.workflow.nodes_mapping import (
@@ -56,7 +56,7 @@ from mia_dpp.workflow.routing import (
 from mia_dpp.workflow.state import MiaWorkflowState
 
 
-def _bind_context(node: Any, context: MiaContext) -> Any:
+def _bind_context(node: Any, context: ServiceContainer) -> Any:
     async def run(state: MiaWorkflowState) -> Any:
         return await node(state, Runtime(context=context))
 
@@ -64,7 +64,7 @@ def _bind_context(node: Any, context: MiaContext) -> Any:
     return run
 
 
-def _add_nodes(builder: Any, nodes: tuple[Any, ...], context: MiaContext | None) -> None:
+def _add_nodes(builder: Any, nodes: tuple[Any, ...], context: ServiceContainer | None) -> None:
     for node in nodes:
         implementation = (
             _bind_context(node, context)
@@ -74,10 +74,10 @@ def _add_nodes(builder: Any, nodes: tuple[Any, ...], context: MiaContext | None)
         builder.add_node(node.__name__, implementation)
 
 
-def _build_evidence_stage(context: MiaContext | None) -> Any:
+def _build_evidence_stage(context: ServiceContainer | None) -> Any:
     stage = StateGraph(
         MiaWorkflowState,
-        context_schema=MiaContext if context is None else None,
+        context_schema=ServiceContainer if context is None else None,
     )
     _add_nodes(
         stage,
@@ -133,10 +133,10 @@ def _build_evidence_stage(context: MiaContext | None) -> Any:
     return stage.compile()
 
 
-def _build_aas_stage(context: MiaContext | None) -> Any:
+def _build_aas_stage(context: ServiceContainer | None) -> Any:
     stage = StateGraph(
         MiaWorkflowState,
-        context_schema=MiaContext if context is None else None,
+        context_schema=ServiceContainer if context is None else None,
     )
     _add_nodes(stage, (build_aas, store_result), context)
     stage.add_edge(START, "build_aas")
@@ -148,11 +148,11 @@ def _build_aas_stage(context: MiaContext | None) -> Any:
 def create_graph(
     checkpointer: Any | None = None,
     *,
-    context: MiaContext | None = None,
+    context: ServiceContainer | None = None,
 ) -> Any:
     graph = StateGraph(
         MiaWorkflowState,
-        context_schema=MiaContext if context is None else None,
+        context_schema=ServiceContainer if context is None else None,
     )
     _add_nodes(
         graph,
