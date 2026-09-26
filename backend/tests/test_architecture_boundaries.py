@@ -3,7 +3,7 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
-_FORBIDDEN_PREFIXES = ("mia_dpp.workflow", "langgraph")
+_FORBIDDEN_PREFIXES = ("mia_dpp.workflow", "mia_dpp.agent", "langgraph")
 
 
 def _module_name(path: Path, services_root: Path) -> str:
@@ -86,6 +86,7 @@ def test_architecture_guard_catches_supported_import_forms() -> None:
         ("from mia_dpp import workflow", "mia_dpp.services.sample"),
         ("from ..workflow import state", "mia_dpp.services.sample"),
         ("from ..workflow.nodes_product import merge_packages", "mia_dpp.services.sample"),
+        ("from mia_dpp.agent.models import AgentResponse", "mia_dpp.services.sample"),
         ("from langgraph.types import Command", "mia_dpp.services.sample"),
         ("import langgraph", "mia_dpp.services.sample"),
     )
@@ -111,6 +112,7 @@ _PHASE3_FORBIDDEN_NODE_PREFIXES = (
     "mia_dpp.semantic",
     "mia_dpp.storage",
     "mia_dpp.tools.mapping",
+    "mia_dpp.tools.web",
     "mia_dpp.aas.build",
 )
 
