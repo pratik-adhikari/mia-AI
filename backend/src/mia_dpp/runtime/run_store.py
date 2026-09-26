@@ -7,25 +7,37 @@ from typing import Any, TypeVar
 
 from pydantic import BaseModel
 
+from mia_dpp.persistence.catalogue import ProductCatalogue
 from mia_dpp.runtime.run_context import RunContext
-from mia_dpp.runtime.services import ServiceContainer
+from mia_dpp.storage.base import ArtifactStore
 
 ModelT = TypeVar("ModelT", bound=BaseModel)
 
 
 class RunStore:
-    """Persist artifacts and events for one run without knowing its orchestrator."""
+    """Persist artifacts and events for one fully identified run.
 
-    def __init__(self, context: RunContext, services: ServiceContainer) -> None:
+    The store intentionally depends only on durable catalogue metadata and
+    artifact-byte storage. It must not become a service locator for semantic,
+    search, agent, or orchestration dependencies.
+    """
+
+    def __init__(
+        self,
+        context: RunContext,
+        catalogue: ProductCatalogue,
+        artifacts: ArtifactStore,
+    ) -> None:
         self.context = context
-        self.services = services
+        self._catalogue = catalogue
+        self._artifacts = artifacts
         self._heartbeat()
 
     def _heartbeat(self) -> None:
         """Fence stale workers and extend the lease of the current running generation."""
 
-        self.services.catalogue.assert_run_generation(self.run_id)
-        self.services.catalogue.renew_run_lease(self.run_id)
+        self._catalogue.assert_run_generation(self.run_id)
+        self._catalogue.renew_run_lease(self.run_id)
 
     def heartbeat(self) -> None:
         """Renew the run lease during a long wait while retaining generation fencing."""
@@ -49,16 +61,23 @@ class RunStore:
         return self.context.thread_id
 
     def load(self, artifact_id: str, model: type[ModelT]) -> ModelT:
-        artifact = self.services.catalogue.get_artifact(artifact_id, user_id=self.user_id)
+        artifact = self._catalogue.get_artifact(artifact_id, user_id=self.user_id)
         if artifact is None:
             raise KeyError(f"unknown artifact: {artifact_id}")
-        return model.model_validate_json(self.services.artifacts.get(artifact))
+        return model.model_validate_json(self._artifacts.get(artifact))
 
     def load_json(self, artifact_id: str) -> Any:
-        artifact = self.services.catalogue.get_artifact(artifact_id, user_id=self.user_id)
+        """Load JSON by durable artifact ID.
+
+        This method has the same meaning for every RunStore subtype. Adapters
+        that translate orchestration state keys must expose a differently named
+        helper instead of overriding this contract.
+        """
+
+        artifact = self._catalogue.get_artifact(artifact_id, user_id=self.user_id)
         if artifact is None:
             raise KeyError(f"unknown artifact: {artifact_id}")
-        return json.loads(self.services.artifacts.get(artifact))
+        return json.loads(self._artifacts.get(artifact))
 
     def put_model(
         self,
@@ -99,7 +118,7 @@ class RunStore:
         derived_from: tuple[str, ...] = (),
     ) -> str:
         self._heartbeat()
-        artifact = self.services.artifacts.put(
+        artifact = self._artifacts.put(
             key,
             data,
             content_type=content_type,
@@ -107,7 +126,7 @@ class RunStore:
             run_id=self.run_id,
             derived_from=derived_from,
         )
-        self.services.catalogue.register_artifact(artifact)
+        self._catalogue.register_artifact(artifact)
         return artifact.id
 
     def event(
@@ -118,4 +137,4 @@ class RunStore:
         metadata: dict[str, Any] | None = None,
     ) -> None:
         self._heartbeat()
-        self.services.catalogue.add_event(self.run_id, event_type, summary, metadata=metadata)
+        self._catalogue.add_event(self.run_id, event_type, summary, metadata=metadata)
