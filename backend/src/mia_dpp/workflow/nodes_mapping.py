@@ -317,8 +317,8 @@ async def semantic_mapping(
     semantic_duration_ms = round((perf_counter() - semantic_started) * 1000, 2)
     semantic_run = execution.semantic_run
     result = execution.mapping
-    reviews = execution.reviews
     cycle_id = work.ctx.mapping_review.cycle_id(package, index, result)
+    reviews = work.ctx.mapping_review.complete_review(package, result, index)
     semantic_id = work.put_model(
         "mapping/semantic-run.json",
         semantic_run,
