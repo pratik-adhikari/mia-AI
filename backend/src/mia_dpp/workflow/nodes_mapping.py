@@ -378,7 +378,7 @@ async def human_review(
     work = RunWorkspace(state, runtime.context)
     reviews = tuple(
         SemanticReviewItem.model_validate(item)
-        for item in work.load_json("review_items_artifact_id")
+        for item in work.load_state_json("review_items_artifact_id")
     )
     work.ctx.catalogue.set_run_status(work.run_id, RunStatus.AWAITING_HUMAN)
     payload = interrupt(
@@ -715,7 +715,7 @@ async def integrate_background_research(
         try:
             prior_reviews = tuple(
                 SemanticReviewItem.model_validate(item)
-                for item in work.load_json("review_items_artifact_id")
+                for item in work.load_state_json("review_items_artifact_id")
             )
             existing_ids = {item.evidence_id for item in focused_reviews}
             focused_reviews = tuple(
