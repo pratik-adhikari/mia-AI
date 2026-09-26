@@ -8,6 +8,7 @@ from typing import Any, TypeVar
 from pydantic import BaseModel
 
 from mia_dpp.aas.models import DppPackage
+from mia_dpp.capabilities.mapping import merge_mapping_results
 from mia_dpp.agent.models import (
     AgentResponse,
     AgentStatus,
@@ -20,8 +21,7 @@ from mia_dpp.domain.evidence import ProductKnowledgePackage
 from mia_dpp.domain.mappings import MappingResult, SemanticReviewItem
 from mia_dpp.domain.targets import TemplateIndex
 from mia_dpp.persistence.workspace import WorkspaceView
-from mia_dpp.capabilities.mapping import merge_mapping_results
-from mia_dpp.workflow.context import MiaContext
+from mia_dpp.runtime.services import ServiceContainer
 
 ModelT = TypeVar("ModelT", bound=BaseModel)
 
@@ -29,7 +29,7 @@ ModelT = TypeVar("ModelT", bound=BaseModel)
 class AgentResponseView:
     """Translate graph state + durable artifacts into the legacy workspace contract."""
 
-    def __init__(self, context: MiaContext, workspace: WorkspaceView) -> None:
+    def __init__(self, context: ServiceContainer, workspace: WorkspaceView) -> None:
         self._context = context
         self._workspace = workspace
 
