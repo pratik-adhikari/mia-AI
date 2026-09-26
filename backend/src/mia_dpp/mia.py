@@ -22,16 +22,16 @@ from mia_dpp.agent.models import (
 )
 from mia_dpp.agents.conversation import ConversationAction
 from mia_dpp.config import Settings
-from mia_dpp.runtime.bootstrap import build_runtime
-from mia_dpp.semantic.eclass import EclassPropertyProvider
 from mia_dpp.domain.product import BackgroundJob, MessageRole, ProductRun, RunStatus
+from mia_dpp.orchestration.registry import ArchitectureRegistry
 from mia_dpp.persistence.catalogue import LOCAL_USER_ID, ActiveProductRunExists
+from mia_dpp.runtime.bootstrap import build_runtime
 from mia_dpp.runtime.checkpoints import open_checkpointer
+from mia_dpp.semantic.eclass import EclassPropertyProvider
 from mia_dpp.tools.mapping.models import SemanticMapper
 from mia_dpp.tools.search import SearchProvider, SearchUnavailableError
 from mia_dpp.tools.web.models import PageLoadError
 from mia_dpp.tools.web.tool import WebExtractionTool
-from mia_dpp.orchestration.registry import ArchitectureRegistry
 from mia_dpp.workflow.identity import direct_product_url
 from mia_dpp.workflow.state import reset_product_state
 
