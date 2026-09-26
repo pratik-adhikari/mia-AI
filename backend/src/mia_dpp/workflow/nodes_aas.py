@@ -12,7 +12,7 @@ from mia_dpp.domain.evidence import ProductKnowledgePackage
 from mia_dpp.domain.mappings import MappingResult, MappingStatus
 from mia_dpp.domain.product import DppReleaseStatus, RunStatus
 from mia_dpp.domain.product_work import ProductWorkStage
-from mia_dpp.workflow.context import MiaContext
+from mia_dpp.runtime.services import ServiceContainer
 from mia_dpp.workflow.product_snapshot import model_fingerprint, update_product_snapshot
 from mia_dpp.workflow.state import MiaWorkflowState
 from mia_dpp.workflow.workspace import RunWorkspace
@@ -20,7 +20,7 @@ from mia_dpp.workflow.workspace import RunWorkspace
 
 async def build_aas(
     state: MiaWorkflowState,
-    runtime: Runtime[MiaContext],
+    runtime: Runtime[ServiceContainer],
 ) -> dict[str, Any]:
     work = RunWorkspace(state, runtime.context)
     package_input = work.load_state("evidence_artifact_id", ProductKnowledgePackage)
@@ -82,7 +82,7 @@ async def build_aas(
 
 async def store_result(
     state: MiaWorkflowState,
-    runtime: Runtime[MiaContext],
+    runtime: Runtime[ServiceContainer],
 ) -> dict[str, Any]:
     work = RunWorkspace(state, runtime.context)
     deployable = state.get("build_deployable", False)
