@@ -18,13 +18,13 @@ from mia_dpp.domain.evidence import ProductKnowledgePackage
 from mia_dpp.domain.mappings import MappingResult
 from mia_dpp.domain.product import BackgroundJob, BackgroundJobStatus
 from mia_dpp.domain.targets import TemplateIndex
+from mia_dpp.runtime.run_store import RunContext, RunStore
+from mia_dpp.runtime.services import ServiceContainer
 from mia_dpp.semantic.jev_mapping import map_new_jev_evidence
 from mia_dpp.storage.models import StoredArtifact
 from mia_dpp.tools.mapping.coverage import coverage
 from mia_dpp.tools.mapping.mapper import DeterministicWebsiteMapper
 from mia_dpp.tools.web.models import SourceLink
-from mia_dpp.runtime.run_store import RunContext, RunStore
-from mia_dpp.runtime.services import ServiceContainer
 
 # Keep each Vercel worker invocation comfortably below the platform request ceiling.
 # Telemetry is persisted for every batch so this can later become data-driven/configurable.
@@ -95,13 +95,11 @@ def _is_related_link(link: SourceLink, identity_tokens: frozenset[str]) -> bool:
     return bool(identity_tokens & words)
 
 
-
-
 class DeepResearchService:
     """Advance one catalogue-owned crawl job by one retry-safe bounded batch."""
 
-    def __init__(self, context: MiaContext) -> None:
-        self._services = context
+    def __init__(self, services: ServiceContainer) -> None:
+        self._services = services
         self._crawl_scope = CrawlScopeConfig.load()
 
     async def run(self, job_id: str, *, user_id: str) -> BackgroundJob:
