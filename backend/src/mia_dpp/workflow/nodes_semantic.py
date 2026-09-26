@@ -8,6 +8,7 @@ from langgraph.runtime import Runtime
 
 from mia_dpp.domain.evidence import ProductKnowledgePackage
 from mia_dpp.normalization import NormalizationReport, normalize_package
+from mia_dpp.runtime.services import ServiceContainer
 from mia_dpp.semantic import ContextViewSet, build_context_views
 from mia_dpp.semantic.decision_policy import apply_decision_policy
 from mia_dpp.semantic.diagnostics import build_routing_diagnostics
@@ -26,7 +27,6 @@ from mia_dpp.semantic.open_property import (
     OpenPropertyProposalReport,
     build_open_property_proposals,
 )
-from mia_dpp.runtime.services import ServiceContainer
 from mia_dpp.workflow.state import MiaWorkflowState
 from mia_dpp.workflow.workspace import RunWorkspace
 
