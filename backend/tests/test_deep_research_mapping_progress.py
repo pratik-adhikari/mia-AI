@@ -56,9 +56,9 @@ def test_last_source_batch_remains_queued_when_targets_are_missing() -> None:
     service._extract_timed = extract
     service._map_new_evidence = map_new
     updates: list[dict[str, object]] = []
-    service._context = SimpleNamespace(catalogue=SimpleNamespace(
+    service._catalogue = SimpleNamespace(
         update_background_job=lambda *args, **kwargs: updates.append(kwargs["metadata"]),
-    ))
+    )
     work = SimpleNamespace(
         load=lambda artifact_id, model: object(),
         event=lambda *args, **kwargs: None,
@@ -83,15 +83,13 @@ def test_deferred_evidence_maps_after_targets_arrive_without_review(monkeypatch)
         SimpleNamespace(id="seed-fact"), SimpleNamespace(id="new-fact"),
     ), model_copy=lambda update: SimpleNamespace(**update))
     index = object()
-    service._context = SimpleNamespace(
-        jev_mapping_enabled=True,
-        semantic_mapper=None,
-        jev_decider=object(),
-        templates=object(),
-        jev_routing_scopes=(),
-        jev_routing_max_concurrency=1,
-        jev_decision_policy=object(),
-    )
+    service._jev_mapping_enabled = True
+    service._semantic_mapper = None
+    service._jev_decider = object()
+    service._templates = object()
+    service._jev_routing_scopes = ()
+    service._jev_routing_max_concurrency = 1
+    service._jev_decision_policy = object()
     service._latest_mapping_artifact = lambda work: None
     service._latest_artifact = lambda work, key: SimpleNamespace(id="targets-1")
     called: list[set[str]] = []
