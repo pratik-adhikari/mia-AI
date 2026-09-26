@@ -153,6 +153,36 @@ def test_run_context_enforces_identity_on_every_construction_path() -> None:
         )
 
 
+@pytest.mark.parametrize("field", ("user_id", "thread_id", "product_id", "run_id"))
+def test_run_context_direct_constructor_rejects_each_blank_identity_field(field: str) -> None:
+    values = {
+        "user_id": "user-a",
+        "thread_id": "thread-a",
+        "product_id": "product-a",
+        "run_id": "run-a",
+    }
+    values[field] = "   "
+
+    with pytest.raises(ValueError, match=field):
+        RunContext(**values)
+
+
+def test_run_store_rejects_identity_mismatch_before_renewing_lease() -> None:
+    catalogue = FakeCatalogue()
+    context = RunContext(
+        user_id="user-a",
+        thread_id="thread-a",
+        product_id="wrong-product",
+        run_id="run-a",
+    )
+
+    with pytest.raises(ValueError, match="belongs to product"):
+        RunStore(context, catalogue, FakeArtifactStore())
+
+    assert catalogue.assertions == []
+    assert catalogue.renewals == []
+
+
 def test_run_store_initialization_validates_binding_then_renews_lease() -> None:
     catalogue = FakeCatalogue()
     store = RunStore(_context(), catalogue, FakeArtifactStore())
