@@ -53,7 +53,7 @@ from mia_dpp.tools.search import SearchProvider, SearchUnavailableError
 from mia_dpp.tools.web.models import PageLoadError
 from mia_dpp.tools.web.tool import WebExtractionTool
 from mia_dpp.workflow.context import MiaContext
-from mia_dpp.workflow.graph import create_graph
+from mia_dpp.orchestration.registry import ArchitectureRegistry
 from mia_dpp.workflow.identity import direct_product_url
 from mia_dpp.workflow.state import reset_product_state
 
@@ -206,6 +206,8 @@ class Mia:
         )
         self.deep_research = DeepResearchService(self.context)
         self._response_view = AgentResponseView(self.context, self.store)
+        self.architectures = ArchitectureRegistry()
+        self.orchestrator = self.architectures.create("graph-v1", self.context)
         self._graph: Any | None = None
         self._checkpoint_cm: Any | None = None
         self._agent_client: Any | None = None
@@ -1003,7 +1005,7 @@ class Mia:
         if self._graph is None:
             self._checkpoint_cm = open_checkpointer(self.settings)
             checkpointer = await self._checkpoint_cm.__aenter__()
-            self._graph = create_graph(checkpointer)
+            self._graph = await self.orchestrator.build(checkpointer=checkpointer)
         return self._graph
 
     @property
