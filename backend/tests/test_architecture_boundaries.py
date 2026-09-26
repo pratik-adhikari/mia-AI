@@ -94,3 +94,42 @@ def test_architecture_guard_catches_supported_import_forms() -> None:
         tree = ast.parse(source)
         targets = _import_targets(tree, current_module=current_module)
         assert any(_is_forbidden(module) for _, module in targets), source
+
+
+_PHASE3_NODE_FILES = (
+    "nodes_product.py",
+    "nodes_semantic.py",
+    "nodes_mapping.py",
+    "nodes_research.py",
+    "nodes_aas.py",
+    "nodes_promotion.py",
+)
+
+_PHASE3_FORBIDDEN_NODE_PREFIXES = (
+    "mia_dpp.persistence",
+    "mia_dpp.normalization",
+    "mia_dpp.semantic",
+    "mia_dpp.storage",
+    "mia_dpp.tools.mapping",
+    "mia_dpp.aas.build",
+)
+
+
+def test_extracted_workflow_nodes_do_not_reimport_business_implementations() -> None:
+    """Phase-3 graph nodes should compose services instead of owning backend algorithms."""
+
+    workflow_root = Path(__file__).resolve().parents[1] / "src" / "mia_dpp" / "workflow"
+    violations: list[str] = []
+
+    for name in _PHASE3_NODE_FILES:
+        path = workflow_root / name
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        current_module = f"mia_dpp.workflow.{path.stem}"
+        for lineno, module in _import_targets(tree, current_module=current_module):
+            if any(
+                module == prefix or module.startswith(f"{prefix}.")
+                for prefix in _PHASE3_FORBIDDEN_NODE_PREFIXES
+            ):
+                violations.append(f"{name}:{lineno} imports {module}")
+
+    assert violations == [], "\n".join(violations)
