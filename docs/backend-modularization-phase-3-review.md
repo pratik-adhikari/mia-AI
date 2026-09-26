@@ -392,18 +392,21 @@ This is expected until the current graph is isolated as an explicit orchestrator
 
 ## Architectural guards
 
-The Phase 2 rule remains:
+The reusable-service boundary is now:
 
 ```text
 services/ ──X──► workflow/
+services/ ──X──► agent wire/application models
 services/ ──X──► langgraph
 ```
 
-All newly added Phase 3 services satisfy it.
+Human-review wire payloads are validated in the graph boundary and translated into neutral
+`MappingReviewSubmission` / `HumanValueSubmission` DTOs before entering
+`MappingHumanService`. All Phase 3 services satisfy this boundary.
 
 Phase 3 also extends the architecture test for the extracted node modules.
 
-The following graph-node files are prevented from directly importing low-level business implementation packages such as persistence, normalization, semantic engines, mapping algorithms, storage, and the AAS builder:
+The following graph-node files are prevented from directly importing low-level business implementation packages such as persistence, normalization, semantic engines, mapping algorithms, crawler/web internals, storage, and the AAS builder:
 
 - `nodes_product.py`;
 - `nodes_semantic.py`;
@@ -427,23 +430,16 @@ It uses real:
 - `ProductLifecycleService`;
 - architecture-neutral `update_product_snapshot(...)`.
 
-It verifies that a product can:
+It verifies two non-LangGraph paths.
 
-```text
-resolve product
-    ↓
-create active run
-    ↓
-persist product snapshot
-    ↓
-resolve same product again
-    ↓
-resume existing durable work
-```
+The first verifies active-run resume and snapshot continuity.
 
-without LangGraph or `MiaWorkflowState`.
+The second writes a real evidence artifact through `RunStore`, registers it in the real
+catalogue, persists the snapshot, terminates the original run as incomplete, and resolves the
+product again. That second request must enter `CONTINUE_SAVED_WORK` and seed the new run from
+the prior durable evidence.
 
-This is an executable proof of the main Phase 3 design goal.
+Both paths run without LangGraph or `MiaWorkflowState`.
 
 ## Deliberate non-goals
 
@@ -470,7 +466,14 @@ Those belong to later phases.
 
 `DeepResearchService` is orchestration-neutral after Phase 2, but it still owns several research-batch responsibilities.
 
-Phase 3 deliberately does not reopen it while extracting graph-node business logic. It can be decomposed later if repeated use cases demonstrate stable smaller boundaries.
+The Phase 3 hardening pass updated its mapping-progress tests to use the explicit dependency
+fields introduced in Phase 2 rather than the removed `_context` service locator.
+
+There is still duplicated incremental-evidence mapping logic between
+`DeepResearchService._map_new_evidence()` and
+`ResearchMappingIntegrationService._map_research_evidence()`. This is recorded as real
+capability-consolidation debt, but it is not reopened in Phase 3 because it is entirely below
+the orchestration boundary and DeepResearchService decomposition was a deliberate non-goal.
 
 ### Concrete catalogue/template dependencies
 
@@ -479,6 +482,12 @@ Several services still use `ProductCatalogue` and concrete template/web/mapping 
 This is visible rather than hidden behind another context object.
 
 Do not introduce ports solely for architectural symmetry. Introduce them when the alternate implementation boundary is real.
+
+### Presentation remains outside reusable capabilities
+
+`ProductLifecycleService` and `AasOutputService` return structured reuse/release facts.
+User-facing `reply` and `decision_summary` text is constructed in the workflow/application
+adapter instead of being embedded in those reusable capabilities.
 
 ### Service construction is repeated in graph adapters
 
@@ -495,7 +504,7 @@ Phase 3 is structurally complete when:
 1. major product/evidence/semantic/mapping/research/AAS operations are callable without LangGraph;
 2. graph nodes do not own the extracted algorithms/persistence workflows;
 3. HITL interrupts remain graph-owned;
-4. reusable services contain no workflow/LangGraph imports;
+4. reusable services contain no workflow, agent-wire, or LangGraph imports;
 5. graph node state contracts remain compatible with the existing graph.
 
 The current branch satisfies the first four structurally.
@@ -511,6 +520,7 @@ git fetch --all --prune
 git switch refactor/backend-modular-phase-3
 git pull
 
+pytest backend/tests/test_deep_research_mapping_progress.py -q
 pytest backend/tests/test_architecture_boundaries.py -q
 pytest backend/tests/test_product_lifecycle_service.py -q
 make check
