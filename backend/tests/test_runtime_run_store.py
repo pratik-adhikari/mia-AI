@@ -22,6 +22,19 @@ class FakeCatalogue:
         self.artifacts: dict[str, StoredArtifact] = {}
         self.fail_generation = False
         self.last_artifact_user_id: str | None = None
+        self.run = SimpleNamespace(
+            id="run-a",
+            product_id="product-a",
+            thread_id="thread-a",
+        )
+
+    def get_run(self, run_id: str):
+        return self.run if run_id == self.run.id else None
+
+    def get_thread(self, thread_id: str, *, user_id: str):
+        if thread_id == "thread-a" and user_id == "user-a":
+            return SimpleNamespace(id=thread_id, user_id=user_id)
+        return None
 
     def assert_run_generation(self, run_id: str) -> None:
         self.assertions.append(run_id)
@@ -119,7 +132,7 @@ def test_run_context_from_mapping_requires_complete_non_empty_identity() -> None
         with pytest.raises(KeyError, match=key):
             RunContext.from_mapping(values)
 
-    with pytest.raises(KeyError, match="run_id"):
+    with pytest.raises(ValueError, match="run_id"):
         RunContext.from_mapping(
             {
                 "user_id": "user-a",
@@ -128,6 +141,15 @@ def test_run_context_from_mapping_requires_complete_non_empty_identity() -> None
                 "run_id": "",
             }
         )
+
+    for invalid in ("", "   "):
+        with pytest.raises(ValueError, match="user_id"):
+            RunContext(
+                user_id=invalid,
+                thread_id="thread-a",
+                product_id="product-a",
+                run_id="run-a",
+            )
 
 
 def test_run_store_initialization_fences_and_renews_lease() -> None:
@@ -191,3 +213,68 @@ def test_run_workspace_preserves_run_store_contract_and_translates_state_keys() 
         "decision": "confirm"
     }
     assert workspace.state_id("review_items_artifact_id") == artifact_id
+
+
+def test_run_store_binds_full_identity_with_real_catalogue(tmp_path) -> None:
+    from mia_dpp.persistence.catalogue import ProductCatalogue
+    from mia_dpp.storage.local import LocalArtifactStore
+
+    catalogue = ProductCatalogue(tmp_path / "catalogue.sqlite3")
+    catalogue.get_or_create_thread("thread-a", "user-a")
+    product, _ = catalogue.get_or_create_product(
+        "https://example.com/product-a",
+        user_id="user-a",
+    )
+    run = catalogue.start_run(product.id, "thread-a", user_id="user-a")
+    artifacts = LocalArtifactStore(tmp_path / "artifacts")
+
+    valid = RunContext(
+        user_id="user-a",
+        thread_id="thread-a",
+        product_id=product.id,
+        run_id=run.id,
+    )
+    store = RunStore(valid, catalogue, artifacts)
+    artifact_id = store.put_json("payload.json", {"ok": True})
+    store.event("runtime.identity_verified", "Validated active run identity.")
+
+    assert store.load_json(artifact_id) == {"ok": True}
+    assert catalogue.list_events(run.id, user_id="user-a")[-1].event_type == (
+        "runtime.identity_verified"
+    )
+
+    with pytest.raises(ValueError, match="product"):
+        RunStore(
+            RunContext(
+                user_id="user-a",
+                thread_id="thread-a",
+                product_id="wrong-product",
+                run_id=run.id,
+            ),
+            catalogue,
+            artifacts,
+        )
+
+    with pytest.raises(ValueError, match="thread"):
+        RunStore(
+            RunContext(
+                user_id="user-a",
+                thread_id="wrong-thread",
+                product_id=product.id,
+                run_id=run.id,
+            ),
+            catalogue,
+            artifacts,
+        )
+
+    with pytest.raises(PermissionError, match="does not belong to user"):
+        RunStore(
+            RunContext(
+                user_id="user-b",
+                thread_id="thread-a",
+                product_id=product.id,
+                run_id=run.id,
+            ),
+            catalogue,
+            artifacts,
+        )
