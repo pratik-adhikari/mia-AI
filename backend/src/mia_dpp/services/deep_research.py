@@ -12,6 +12,8 @@ from urllib.parse import unquote, urljoin, urlsplit
 from bs4 import BeautifulSoup
 from pydantic import BaseModel, ConfigDict, Field
 
+from mia_dpp.capabilities.evidence import merge_packages
+from mia_dpp.capabilities.mapping import merge_mapping_results
 from mia_dpp.domain.evidence import ProductKnowledgePackage
 from mia_dpp.domain.mappings import MappingResult
 from mia_dpp.domain.product import BackgroundJob, BackgroundJobStatus
@@ -21,9 +23,8 @@ from mia_dpp.storage.models import StoredArtifact
 from mia_dpp.tools.mapping.coverage import coverage
 from mia_dpp.tools.mapping.mapper import DeterministicWebsiteMapper
 from mia_dpp.tools.web.models import SourceLink
-from mia_dpp.workflow.context import MiaContext
-from mia_dpp.workflow.nodes_product import merge_packages
-from mia_dpp.workflow.workspace import RunWorkspace
+from mia_dpp.runtime.run_store import RunContext, RunStore
+from mia_dpp.runtime.services import ServiceContainer
 
 # Keep each Vercel worker invocation comfortably below the platform request ceiling.
 # Telemetry is persisted for every batch so this can later become data-driven/configurable.
@@ -137,18 +138,18 @@ class DeepResearchService:
     """Advance one catalogue-owned crawl job by one retry-safe bounded batch."""
 
     def __init__(self, context: MiaContext) -> None:
-        self._context = context
+        self._services = context
         self._crawl_scope = CrawlScopeConfig.load()
 
     async def run(self, job_id: str, *, user_id: str) -> BackgroundJob:
-        claimed = self._context.catalogue.claim_background_job(job_id, user_id=user_id)
+        claimed = self._services.catalogue.claim_background_job(job_id, user_id=user_id)
         if claimed is None:
-            existing = self._context.catalogue.get_background_job(job_id, user_id=user_id)
+            existing = self._services.catalogue.get_background_job(job_id, user_id=user_id)
             if existing is None:
                 raise KeyError(job_id)
             return existing
 
-        work: RunWorkspace | None = None
+        work: RunStore | None = None
         iteration = int(claimed.metadata.get("iteration", 0)) + 1
         batch_started = perf_counter()
         try:
@@ -180,7 +181,7 @@ class DeepResearchService:
                 except Exception:
                     # Recovery may have fenced the old run. Job terminalization must still happen.
                     pass
-            self._context.catalogue.finish_background_job(
+            self._services.catalogue.finish_background_job(
                 claimed.id,
                 user_id=user_id,
                 status=BackgroundJobStatus.FAILED,
@@ -211,14 +212,14 @@ class DeepResearchService:
                 "Deep research completed and persisted its incremental evidence.",
                 metadata={"jobId": claimed.id, "iterations": iteration},
             )
-            finished = self._context.catalogue.finish_background_job(
+            finished = self._services.catalogue.finish_background_job(
                 claimed.id,
                 user_id=user_id,
                 status=BackgroundJobStatus.COMPLETED,
                 metadata={**metadata, "phase": "completed"},
             )
         else:
-            finished = self._context.catalogue.requeue_background_job(
+            finished = self._services.catalogue.requeue_background_job(
                 claimed.id,
                 user_id=user_id,
                 metadata={
@@ -254,7 +255,7 @@ class DeepResearchService:
     async def _process_batch(
         self,
         job: BackgroundJob,
-        work: RunWorkspace,
+        work: RunStore,
         *,
         iteration: int,
     ) -> tuple[dict[str, Any], bool]:
@@ -368,7 +369,7 @@ class DeepResearchService:
         ]
         # Publish acquired evidence before the comparatively slow semantic model call. The
         # workspace can then display new source facts while mapping for this batch is running.
-        self._context.catalogue.update_background_job(
+        self._services.catalogue.update_background_job(
             job.id,
             user_id=job.user_id,
             metadata={
@@ -392,7 +393,7 @@ class DeepResearchService:
         if mapping_metadata.get("mappingRefreshPending"):
             complete = False
         mapping_duration_ms = round((perf_counter() - mapping_started) * 1000, 2)
-        self._context.catalogue.update_background_job(
+        self._services.catalogue.update_background_job(
             job.id,
             user_id=job.user_id,
             metadata={
@@ -418,7 +419,7 @@ class DeepResearchService:
     def _frontier(
         self,
         job: BackgroundJob,
-        work: RunWorkspace,
+        work: RunStore,
         seed_id: str,
     ) -> tuple[tuple[SourceLink, ...], str, int]:
         stored = job.metadata.get("sourceCandidates")
@@ -466,7 +467,7 @@ class DeepResearchService:
                     {"jobId": job.id, "seedUrl": seed_url, "sources": payload},
                     derived_from=(sources_id,),
                 )
-                self._context.catalogue.update_background_job(
+                self._services.catalogue.update_background_job(
                     job.id,
                     user_id=job.user_id,
                     metadata={
@@ -496,7 +497,7 @@ class DeepResearchService:
             },
             derived_from=(seed_id,),
         )
-        self._context.catalogue.update_background_job(
+        self._services.catalogue.update_background_job(
             job.id,
             user_id=job.user_id,
             metadata={
@@ -582,7 +583,7 @@ class DeepResearchService:
         started = perf_counter()
         try:
             incoming = await asyncio.wait_for(
-                self._context.web_tool.extract_source(link.url),
+                self._services.web_tool.extract_source(link.url),
                 timeout=_SOURCE_TIMEOUT_SECONDS,
             )
             for source in incoming.acquired_sources:
@@ -607,7 +608,7 @@ class DeepResearchService:
 
     def _persist_source(
         self,
-        work: RunWorkspace,
+        work: RunStore,
         package: ProductKnowledgePackage,
         *,
         discovered_from: str,
@@ -677,7 +678,7 @@ class DeepResearchService:
 
     async def _map_new_evidence(
         self,
-        work: RunWorkspace,
+        work: RunStore,
         package: ProductKnowledgePackage,
         *,
         added_ids: set[str],
@@ -685,8 +686,8 @@ class DeepResearchService:
         seed_evidence_artifact_id: str,
     ) -> dict[str, Any]:
         if (
-            self._context.semantic_mapper is None
-            and not self._context.jev_mapping_enabled
+            self._services.semantic_mapper is None
+            and not self._services.jev_mapping_enabled
         ):
             return {}
         current_artifact = self._latest_mapping_artifact(work)
@@ -721,18 +722,18 @@ class DeepResearchService:
         incremental = package.model_copy(
             update={"evidence": tuple(item for item in package.evidence if item.id in pending_ids)}
         )
-        if self._context.jev_mapping_enabled:
-            if self._context.jev_decider is None:
+        if self._services.jev_mapping_enabled:
+            if self._services.jev_decider is None:
                 raise RuntimeError("Jev mapping requires a configured Jev decider")
             mapped, _, routing, policy = await map_new_jev_evidence(
                 package=package,
                 evidence_ids=pending_ids,
                 index=index,
-                templates=self._context.templates,
-                decider=self._context.jev_decider,
-                scopes=self._context.jev_routing_scopes,
-                max_concurrency=self._context.jev_routing_max_concurrency,
-                settings=self._context.jev_decision_policy,
+                templates=self._services.templates,
+                decider=self._services.jev_decider,
+                scopes=self._services.jev_routing_scopes,
+                max_concurrency=self._services.jev_routing_max_concurrency,
+                settings=self._services.jev_decision_policy,
             )
             routing_id = work.put_model(
                 "semantic/research-jev-routing.json", routing,
@@ -746,15 +747,15 @@ class DeepResearchService:
                 not step.deterministic for trace in routing.traces for step in trace.steps
             )
         else:
-            mapper = self._context.semantic_mapper
+            mapper = self._services.semantic_mapper
             if mapper is None:
                 raise RuntimeError("semantic mapping requires a configured model")
             deterministic = await DeterministicWebsiteMapper(
-                self._context.templates,
+                self._services.templates,
                 index,
             ).propose(incremental.evidence)
             semantic = await mapper.map(incremental, index, deterministic)
-            mapped = self._context.mapping_review.apply_semantic_run(
+            mapped = self._services.mapping_review.apply_semantic_run(
                 incremental,
                 deterministic,
                 index,
@@ -812,15 +813,15 @@ class DeepResearchService:
             "semanticModelRequests": model_requests,
         }
 
-    def _latest_artifact(self, work: RunWorkspace, key: str) -> StoredArtifact | None:
-        artifacts = self._context.catalogue.list_artifacts(
+    def _latest_artifact(self, work: RunStore, key: str) -> StoredArtifact | None:
+        artifacts = self._services.catalogue.list_artifacts(
             run_id=work.run_id,
             user_id=work.user_id,
         )
         return next((item for item in reversed(artifacts) if item.key == key), None)
 
-    def _latest_mapping_artifact(self, work: RunWorkspace) -> StoredArtifact | None:
-        artifacts = self._context.catalogue.list_artifacts(
+    def _latest_mapping_artifact(self, work: RunStore) -> StoredArtifact | None:
+        artifacts = self._services.catalogue.list_artifacts(
             run_id=work.run_id,
             user_id=work.user_id,
         )
@@ -831,13 +832,13 @@ class DeepResearchService:
         }
         return next((item for item in reversed(artifacts) if item.key in keys), None)
 
-    def _workspace(self, job: BackgroundJob) -> RunWorkspace:
-        return RunWorkspace(
-            {
-                "user_id": job.user_id,
-                "thread_id": job.thread_id,
-                "product_id": job.product_id,
-                "run_id": job.run_id,
-            },
-            self._context,
+    def _workspace(self, job: BackgroundJob) -> RunStore:
+        return RunStore(
+            RunContext(
+                user_id=job.user_id,
+                thread_id=job.thread_id,
+                product_id=job.product_id,
+                run_id=job.run_id,
+            ),
+            self._services,
         )
