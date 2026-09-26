@@ -10,7 +10,7 @@ if TYPE_CHECKING:
 
 from mia_dpp.agent.models import AgentStatus
 from mia_dpp.agents.discovery.models import DiscoveryState
-from mia_dpp.workflow.context import MiaContext
+from mia_dpp.runtime.services import ServiceContainer
 from mia_dpp.workflow.state import MiaWorkflowState, reset_product_state
 
 _URL = re.compile(r"https?://[^\s<>()]+", re.IGNORECASE)
@@ -18,7 +18,7 @@ _URL = re.compile(r"https?://[^\s<>()]+", re.IGNORECASE)
 
 async def discover_product(
     state: MiaWorkflowState,
-    runtime: Runtime[MiaContext],
+    runtime: Runtime[ServiceContainer],
 ) -> dict[str, Any]:
     """Resolve direct URLs without a model; use the discovery agent only for ambiguity."""
 
