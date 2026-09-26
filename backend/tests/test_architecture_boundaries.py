@@ -9,8 +9,6 @@ _FORBIDDEN_PREFIXES = ("mia_dpp.workflow", "langgraph")
 def _module_name(path: Path, services_root: Path) -> str:
     relative = path.relative_to(services_root)
     parts = list(relative.with_suffix("").parts)
-    if parts[-1] == "__init__":
-        parts.pop()
     return ".".join(("mia_dpp", "services", *parts))
 
 
