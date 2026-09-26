@@ -24,7 +24,7 @@ class PipelineDefinition(BaseModel):
     schema_version: int = Field(default=1, ge=1)
     id: str = Field(min_length=1, max_length=100)
     privacy_mode: Literal["local", "shareable", "hybrid"] = "local"
-    steps: tuple[PipelineStep, ...]
+    steps: tuple[PipelineStep, ...] = Field(min_length=1)
 
     @model_validator(mode="after")
     def validate_graph(self) -> "PipelineDefinition":
@@ -41,4 +41,22 @@ class PipelineDefinition(BaseModel):
                 raise ValueError(f"step {step.id!r} depends on unknown steps: {names}")
             if step.id in step.after:
                 raise ValueError(f"step {step.id!r} cannot depend on itself")
+
+        dependencies = {step.id: set(step.after) for step in self.steps}
+        visiting: set[str] = set()
+        visited: set[str] = set()
+
+        def visit(step_id: str) -> None:
+            if step_id in visited:
+                return
+            if step_id in visiting:
+                raise ValueError("pipeline dependencies must be acyclic")
+            visiting.add(step_id)
+            for dependency in dependencies[step_id]:
+                visit(dependency)
+            visiting.remove(step_id)
+            visited.add(step_id)
+
+        for step_id in dependencies:
+            visit(step_id)
         return self
