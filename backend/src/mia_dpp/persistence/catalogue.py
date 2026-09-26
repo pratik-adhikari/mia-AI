@@ -15,6 +15,7 @@ from typing import Any, Protocol, TypeVar, cast
 from pydantic import BaseModel
 
 from mia_dpp.domain.mappings import FieldMapping
+from mia_dpp.domain.product_identity import canonical_product_url
 from mia_dpp.domain.product import (
     BackgroundJob,
     BackgroundJobStatus,
@@ -37,7 +38,6 @@ from mia_dpp.tools.mapping.models import (
     MappingKnowledgeScope,
     MappingKnowledgeStatus,
 )
-from mia_dpp.domain.product_identity import canonical_product_url
 
 ModelT = TypeVar("ModelT", bound=BaseModel)
 
