@@ -82,8 +82,10 @@ async def reuse_existing_dpp(
         "source_fingerprint": result.source_fingerprint or "",
         "reused_dpp_version_id": result.dpp_version_id,
         "status": result.status,
-        "reply": result.reply,
-        "decision_summary": result.decision_summary,
+        "reply": "Existing DPP reused; no extraction or mapping was repeated.",
+        "decision_summary": (
+            "A successful durable DPP already exists for this product URL."
+        ),
     }
 
 
