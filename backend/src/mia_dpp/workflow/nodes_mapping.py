@@ -14,6 +14,11 @@ from mia_dpp.domain.targets import TemplateIndex
 from mia_dpp.runtime.run_context import RunContext
 from mia_dpp.runtime.services import ServiceContainer
 from mia_dpp.services.mapping_execution import MappingExecutionService
+from mia_dpp.services.human_submission import (
+    HumanValueSubmission,
+    MappingReviewDecision,
+    MappingReviewSubmission,
+)
 from mia_dpp.services.mapping_human import MappingHumanService
 from mia_dpp.services.research_mapping import (
     ResearchIntegrationRequest,
@@ -187,9 +192,23 @@ async def human_review(
     if {item.review_id for item in request.decisions} != {item.id for item in reviews}:
         raise ValueError("mapping review must contain exactly one decision for every row")
 
+    submission = MappingReviewSubmission(
+        actor_name=request.actor_name,
+        decisions=tuple(
+            MappingReviewDecision(
+                review_id=item.review_id,
+                decision=item.decision,
+                corrected_requirement_id=item.corrected_requirement_id,
+                corrected_semantic_id=item.corrected_semantic_id,
+                corrected_value=item.corrected_value,
+                comment=item.comment,
+            )
+            for item in request.decisions
+        ),
+    )
     result = _human_service(runtime).apply_review(
         RunContext.from_mapping(state),
-        request=request,
+        submission=submission,
         reviews=reviews,
         evidence_artifact_id=state["evidence_artifact_id"],
         targets_artifact_id=state["targets_artifact_id"],
@@ -337,9 +356,14 @@ async def human_value(
         state.get("reviewed_mapping_artifact_id")
         or state["semantic_mapping_artifact_id"]
     )
+    submission = HumanValueSubmission(
+        value=request.value,
+        use_dummy=request.use_dummy,
+        actor_name=request.actor_name,
+    )
     result = _human_service(runtime).record_human_value(
         RunContext.from_mapping(state),
-        request=request,
+        submission=submission,
         requirement_id=requirement_id,
         question=question,
         evidence_artifact_id=state["evidence_artifact_id"],
