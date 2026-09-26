@@ -16,7 +16,8 @@ Phase 1 intentionally does **not** extract business logic from workflow nodes, r
 runtime/
   services.py      -> orchestration-level dependency composition
   run_context.py   -> immutable execution identity
-  run_store.py     -> narrow run persistence/events/fencing
+  run_catalogue.py -> narrow active-run catalogue port
+  run_store.py     -> active run persistence/events/fencing
 
 workflow/
   context.py       -> temporary compatibility alias only
@@ -186,8 +187,11 @@ Only after this durable binding succeeds does `RunStore` assert workflow generat
 Creating `RunStore` has execution semantics:
 
 - validate durable identity;
+- require the run to be `RUNNING` or `AWAITING_HUMAN`;
 - assert current generation;
 - renew the execution lease.
+
+Terminal runs (`COMPLETED`, `FAILED`, `INCOMPLETE`, `REUSED`) are rejected.
 
 It is **not** a generic historical reader or report/query object. Future read-only inspection should use a separate query/reader abstraction instead of constructing `RunStore`.
 
@@ -220,7 +224,9 @@ The Phase 1 runtime tests now include a real SQLite `ProductCatalogue` and `Loca
 - wrong thread rejection;
 - wrong user rejection;
 - artifact persistence after successful binding;
-- event persistence after successful binding.
+- event persistence after successful binding;
+- `RUNNING` and `AWAITING_HUMAN` activation;
+- rejection of terminal run statuses.
 
 ## Validation
 
