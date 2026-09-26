@@ -8,7 +8,9 @@ import pytest
 
 from mia_dpp.domain.product import BackgroundJobStatus
 from mia_dpp.persistence.catalogue import ProductCatalogue
+from mia_dpp.semantic.decision_policy import DecisionPolicySettings
 from mia_dpp.services.deep_research import DeepResearchService
+from mia_dpp.storage.local import LocalArtifactStore
 
 
 def test_recovery_after_research_claim_never_leaves_job_running(tmp_path) -> None:
@@ -61,7 +63,19 @@ def test_recovery_after_research_claim_never_leaves_job_running(tmp_path) -> Non
         return claimed
 
     catalogue.claim_background_job = claim_then_recover  # type: ignore[method-assign]
-    service = DeepResearchService(SimpleNamespace(catalogue=catalogue))
+    service = DeepResearchService(
+        catalogue=catalogue,
+        artifacts=LocalArtifactStore(tmp_path / "artifacts"),
+        templates=SimpleNamespace(),
+        web_tool=SimpleNamespace(),
+        mapping_review=SimpleNamespace(),
+        semantic_mapper=None,
+        jev_decider=None,
+        jev_mapping_enabled=False,
+        jev_routing_scopes=(),
+        jev_routing_max_concurrency=1,
+        jev_decision_policy=DecisionPolicySettings(),
+    )
 
     with pytest.raises(RuntimeError, match="workflow generation"):
         asyncio.run(service.run(job.id, user_id="user-a"))
