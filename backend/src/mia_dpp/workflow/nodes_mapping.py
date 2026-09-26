@@ -41,7 +41,7 @@ from mia_dpp.services.reconfirmation import ReviewReuseStatus, review_reuse_stat
 from mia_dpp.tools.mapping.coverage import coverage as calculate_coverage
 from mia_dpp.tools.mapping.mapper import DeterministicWebsiteMapper
 from mia_dpp.runtime.services import ServiceContainer
-from mia_dpp.workflow.nodes_product import merge_packages
+from mia_dpp.domain.evidence_merge import merge_packages
 from mia_dpp.workflow.product_snapshot import (
     model_fingerprint,
     semantic_mapper_fingerprint,
