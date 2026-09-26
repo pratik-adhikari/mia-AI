@@ -12,6 +12,9 @@ if TYPE_CHECKING:
 from mia_dpp.aas.requirements import build_template_index
 from mia_dpp.agent.models import AgentReviewRequest, AgentValueRequest
 from mia_dpp.canonical import sha256_json
+from mia_dpp.capabilities.evidence import merge_packages
+from mia_dpp.capabilities.mapping import merge_mapping_results
+from mia_dpp.capabilities.semantic_mapping import run_semantic_mapping
 from mia_dpp.domain.evidence import ProductKnowledgePackage
 from mia_dpp.domain.mappings import (
     CoverageStatus,
@@ -23,6 +26,7 @@ from mia_dpp.domain.mappings import (
 from mia_dpp.domain.product import BackgroundJobStatus, RunStatus
 from mia_dpp.domain.product_work import ProductWorkStage
 from mia_dpp.domain.targets import RequirementKind, TemplateIndex
+from mia_dpp.runtime.services import ServiceContainer
 from mia_dpp.semantic.decision_policy import DecisionPolicyReport
 from mia_dpp.semantic.idta_routing import IdtaRoutingReport
 from mia_dpp.semantic.jev_mapping import (
@@ -30,9 +34,6 @@ from mia_dpp.semantic.jev_mapping import (
     map_new_jev_evidence,
     require_review_for_projection_collisions,
 )
-from mia_dpp.capabilities.evidence import merge_packages
-from mia_dpp.capabilities.mapping import merge_mapping_results
-from mia_dpp.capabilities.semantic_mapping import run_semantic_mapping
 from mia_dpp.services.evidence_conflicts import (
     detect_review_conflicts,
     mark_conflicting_evidence,
@@ -42,7 +43,6 @@ from mia_dpp.services.human_review_audit import mapping_review_records, supplied
 from mia_dpp.services.reconfirmation import ReviewReuseStatus, review_reuse_status
 from mia_dpp.tools.mapping.coverage import coverage as calculate_coverage
 from mia_dpp.tools.mapping.mapper import DeterministicWebsiteMapper
-from mia_dpp.runtime.services import ServiceContainer
 from mia_dpp.workflow.product_snapshot import (
     model_fingerprint,
     semantic_mapper_fingerprint,
