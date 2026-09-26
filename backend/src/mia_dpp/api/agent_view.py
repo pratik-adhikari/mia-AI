@@ -20,7 +20,7 @@ from mia_dpp.domain.evidence import ProductKnowledgePackage
 from mia_dpp.domain.mappings import MappingResult, SemanticReviewItem
 from mia_dpp.domain.targets import TemplateIndex
 from mia_dpp.persistence.workspace import WorkspaceView
-from mia_dpp.services.deep_research import merge_mapping_results
+from mia_dpp.capabilities.mapping import merge_mapping_results
 from mia_dpp.workflow.context import MiaContext
 
 ModelT = TypeVar("ModelT", bound=BaseModel)
