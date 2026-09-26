@@ -460,31 +460,6 @@ def asset_workspace_path(
     return f"documents/{stem}-{identifier}{suffix}"
 
 
-def merge_packages(
-    existing: ProductKnowledgePackage,
-    incoming: ProductKnowledgePackage,
-    *,
-    preserve_existing: bool = False,
-) -> ProductKnowledgePackage:
-    sources = {item.id: item for item in existing.acquired_sources}
-    sources.update({item.id: item for item in incoming.acquired_sources})
-    evidence = {item.id: item for item in existing.evidence}
-    if preserve_existing:
-        evidence = {item.id: item for item in incoming.evidence} | evidence
-    else:
-        evidence.update({item.id: item for item in incoming.evidence})
-    return ProductKnowledgePackage(
-        product_id=existing.product_id,
-        product_name=existing.product_name or incoming.product_name,
-        source_artifact_ids=tuple(
-            dict.fromkeys((*existing.source_artifact_ids, *incoming.source_artifact_ids))
-        ),
-        acquired_sources=tuple(sources.values()),
-        source_failures=(*existing.source_failures, *incoming.source_failures),
-        # Preserve each source hierarchy when research adds another product page later.
-        extracted_pages=(*existing.extracted_pages, *incoming.extracted_pages),
-        evidence=tuple(evidence.values()),
-    )
 
 
 def advance_product(state: MiaWorkflowState) -> dict[str, Any]:
