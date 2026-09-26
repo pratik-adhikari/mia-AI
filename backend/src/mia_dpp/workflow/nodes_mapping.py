@@ -32,6 +32,7 @@ from mia_dpp.semantic.jev_mapping import (
 )
 from mia_dpp.capabilities.evidence import merge_packages
 from mia_dpp.capabilities.mapping import merge_mapping_results
+from mia_dpp.capabilities.semantic_mapping import run_semantic_mapping
 from mia_dpp.services.evidence_conflicts import (
     detect_review_conflicts,
     mark_conflicting_evidence,
@@ -305,16 +306,19 @@ async def semantic_mapping(
         )
     )
     semantic_started = perf_counter()
-    semantic_run = await mapper.map(package, index, deterministic, reviewed_knowledge=knowledge)
-    semantic_duration_ms = round((perf_counter() - semantic_started) * 1000, 2)
-    result = work.ctx.mapping_review.apply_semantic_run(
+    execution = await run_semantic_mapping(
         package,
-        deterministic,
         index,
-        semantic_run,
+        deterministic,
+        mapper=mapper,
+        review=work.ctx.mapping_review,
+        reviewed_knowledge=knowledge,
     )
+    semantic_duration_ms = round((perf_counter() - semantic_started) * 1000, 2)
+    semantic_run = execution.semantic_run
+    result = execution.mapping
+    reviews = execution.reviews
     cycle_id = work.ctx.mapping_review.cycle_id(package, index, result)
-    reviews = work.ctx.mapping_review.complete_review(package, result, index)
     semantic_id = work.put_model(
         "mapping/semantic-run.json",
         semantic_run,
