@@ -17,9 +17,9 @@ from mia_dpp.domain.evidence import ExtractedAsset, ProductKnowledgePackage
 from mia_dpp.domain.product import RunStatus
 from mia_dpp.domain.product_work import ProductWorkStage, ReuseMode
 from mia_dpp.persistence.catalogue import ActiveProductRunExists, ProductIdentifierConflict
+from mia_dpp.runtime.services import ServiceContainer
 from mia_dpp.services.product_identifiers import discover_product_identifiers
 from mia_dpp.services.product_reuse import ProductReuseService
-from mia_dpp.runtime.services import ServiceContainer
 from mia_dpp.workflow.presentation import evidence_text, product_image_url
 from mia_dpp.workflow.product_snapshot import update_product_snapshot
 from mia_dpp.workflow.state import MiaWorkflowState, reset_product_state
