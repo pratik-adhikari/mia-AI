@@ -9,14 +9,14 @@ if TYPE_CHECKING:
     from langgraph.runtime import Runtime
 
 from mia_dpp.domain.targets import TemplateIndex
-from mia_dpp.workflow.context import MiaContext
+from mia_dpp.runtime.services import ServiceContainer
 from mia_dpp.workflow.state import MiaWorkflowState
 from mia_dpp.workflow.workspace import RunWorkspace
 
 
 async def research(
     state: MiaWorkflowState,
-    runtime: Runtime[MiaContext],
+    runtime: Runtime[ServiceContainer],
 ) -> dict[str, Any]:
     work = RunWorkspace(state, runtime.context)
     index = work.load_state("targets_artifact_id", TemplateIndex)
