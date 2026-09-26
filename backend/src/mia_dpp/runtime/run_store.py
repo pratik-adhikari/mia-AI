@@ -7,11 +7,14 @@ from typing import Any, TypeVar
 
 from pydantic import BaseModel
 
+from mia_dpp.domain.product import ProductRun, RunStatus
 from mia_dpp.runtime.run_catalogue import RunCatalogue
 from mia_dpp.runtime.run_context import RunContext
 from mia_dpp.storage.base import ArtifactStore
 
 ModelT = TypeVar("ModelT", bound=BaseModel)
+
+_RUN_STORE_STATUSES = {RunStatus.RUNNING, RunStatus.AWAITING_HUMAN}
 
 
 class RunStore:
@@ -55,11 +58,20 @@ class RunStore:
             raise PermissionError(
                 f"thread {self.thread_id} does not belong to user {self.user_id}"
             )
+        self._assert_live(run)
+
+    @staticmethod
+    def _assert_live(run: ProductRun) -> None:
+        """Reject terminal executions from the active-run persistence API."""
+
+        if run.status not in _RUN_STORE_STATUSES:
+            raise RuntimeError(f"run {run.id} is not active: {run.status.value}")
 
     def _heartbeat(self) -> None:
         """Fence stale workers and extend the lease of the current running generation."""
 
-        self._catalogue.assert_run_generation(self.run_id)
+        run = self._catalogue.assert_run_generation(self.run_id)
+        self._assert_live(run)
         self._catalogue.renew_run_lease(self.run_id)
 
     def heartbeat(self) -> None:
