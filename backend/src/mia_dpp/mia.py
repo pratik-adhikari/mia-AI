@@ -1,4 +1,4 @@
-"""Small application façade over MIA's durable LangGraph workflow."""
+"""Application facade over replaceable MIA orchestration architectures."""
 
 from __future__ import annotations
 
@@ -45,7 +45,7 @@ class _GraphDebugSession:
 
 
 class Mia:
-    """Compose MIA; LangGraph owns workflow order, persistence, and HITL."""
+    """Application facade over shared capabilities and a selected orchestrator."""
 
     def __init__(
         self,
