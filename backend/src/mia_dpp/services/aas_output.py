@@ -31,8 +31,9 @@ class AasBuildResult:
 @dataclass(frozen=True, slots=True)
 class DppStoreResult:
     status: str
-    reply: str
-    decision_summary: str
+    release_status: DppReleaseStatus | None
+    dummy_mapping_count: int
+    validation_failed: bool = False
     dpp_version_id: str | None = None
 
 
@@ -184,8 +185,9 @@ class AasOutputService:
             )
             return DppStoreResult(
                 status="failed",
-                reply="The AAS was built but deterministic validation still blocks deployment.",
-                decision_summary="Validation failed; no DPP version was published.",
+                release_status=None,
+                dummy_mapping_count=len(dummy_mapping_ids),
+                validation_failed=True,
             )
 
         version = self._catalogue.create_dpp_version(
@@ -229,19 +231,9 @@ class AasOutputService:
             RunStatus.COMPLETED,
             metrics=metrics,
         )
-        provisional = release_status is DppReleaseStatus.PROVISIONAL
         return DppStoreResult(
             status="completed",
+            release_status=release_status,
+            dummy_mapping_count=len(dummy_mapping_ids),
             dpp_version_id=version.id,
-            reply=(
-                "DPP creation completed as a provisional version because human-approved DUMMY "
-                "placeholders remain."
-                if provisional
-                else "DPP creation completed and a verified durable version was stored."
-            ),
-            decision_summary=(
-                f"Coverage and validation passed, with {len(dummy_mapping_ids)} DUMMY mapping(s)."
-                if provisional
-                else "Coverage and validation passed with verified values."
-            ),
         )
