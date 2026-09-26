@@ -25,6 +25,18 @@ class MappingReviewDecision:
     corrected_value: str | None = None
     comment: str | None = None
 
+    def to_wire_dict(self) -> dict[str, str | None]:
+        """Preserve the established persisted review-decision field names."""
+
+        return {
+            "reviewId": self.review_id,
+            "decision": self.decision,
+            "correctedRequirementId": self.corrected_requirement_id,
+            "correctedSemanticId": self.corrected_semantic_id,
+            "correctedValue": self.corrected_value,
+            "comment": self.comment,
+        }
+
 
 @dataclass(frozen=True, slots=True)
 class MappingReviewSubmission:
