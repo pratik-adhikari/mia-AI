@@ -26,14 +26,14 @@ from mia_dpp.semantic.open_property import (
     OpenPropertyProposalReport,
     build_open_property_proposals,
 )
-from mia_dpp.workflow.context import MiaContext
+from mia_dpp.runtime.services import ServiceContainer
 from mia_dpp.workflow.state import MiaWorkflowState
 from mia_dpp.workflow.workspace import RunWorkspace
 
 
 async def normalize_evidence(
     state: MiaWorkflowState,
-    runtime: Runtime[MiaContext],
+    runtime: Runtime[ServiceContainer],
 ) -> dict[str, Any]:
     """Build a lossless derived normalization artifact for every evidence record."""
 
@@ -65,7 +65,7 @@ async def normalize_evidence(
 
 async def build_semantic_context(
     state: MiaWorkflowState,
-    runtime: Runtime[MiaContext],
+    runtime: Runtime[ServiceContainer],
 ) -> dict[str, Any]:
     """Create deterministic multi-scope context views for future Jev strategies."""
 
@@ -99,7 +99,7 @@ async def build_semantic_context(
 
 async def shadow_jev_idta_routing(
     state: MiaWorkflowState,
-    runtime: Runtime[MiaContext],
+    runtime: Runtime[ServiceContainer],
 ) -> dict[str, Any]:
     """Run bounded hierarchical Jev routing for shadow or fixed-target mapping."""
 
@@ -157,7 +157,7 @@ async def shadow_jev_idta_routing(
 
 async def analyze_jev_shadow(
     state: MiaWorkflowState,
-    runtime: Runtime[MiaContext],
+    runtime: Runtime[ServiceContainer],
 ) -> dict[str, Any]:
     """Derive multi-scope diagnostics and review priority without model calls."""
 
@@ -208,7 +208,7 @@ async def analyze_jev_shadow(
 
 async def shadow_jev_semantic_grouping(
     state: MiaWorkflowState,
-    runtime: Runtime[MiaContext],
+    runtime: Runtime[ServiceContainer],
 ) -> dict[str, Any]:
     """Build lossless semantic grouping metadata without affecting trusted mappings."""
 
@@ -259,7 +259,7 @@ async def shadow_jev_semantic_grouping(
 
 async def shadow_eclass_resolution(
     state: MiaWorkflowState,
-    runtime: Runtime[MiaContext],
+    runtime: Runtime[ServiceContainer],
 ) -> dict[str, Any]:
     """Retrieve verified ECLASS properties for open Technical Properties only."""
 
@@ -328,7 +328,7 @@ async def shadow_eclass_resolution(
 
 async def analyze_eclass_shadow(
     state: MiaWorkflowState,
-    runtime: Runtime[MiaContext],
+    runtime: Runtime[ServiceContainer],
 ) -> dict[str, Any]:
     """Derive ECLASS cross-scope diagnostics and attention priority without model calls."""
 
@@ -387,7 +387,7 @@ async def analyze_eclass_shadow(
 
 async def shadow_open_property_proposals(
     state: MiaWorkflowState,
-    runtime: Runtime[MiaContext],
+    runtime: Runtime[ServiceContainer],
 ) -> dict[str, Any]:
     """Build non-authoritative wildcard MappingTarget proposals from verified ECLASS consensus."""
 
