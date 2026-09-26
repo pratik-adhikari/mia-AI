@@ -12,6 +12,7 @@ if TYPE_CHECKING:
     from langgraph.runtime import Runtime
 
 from mia_dpp.canonical import sha256_json
+from mia_dpp.capabilities.evidence import merge_packages
 from mia_dpp.domain.evidence import ExtractedAsset, ProductKnowledgePackage
 from mia_dpp.domain.product import RunStatus
 from mia_dpp.domain.product_work import ProductWorkStage, ReuseMode
