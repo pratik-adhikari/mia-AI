@@ -15,7 +15,6 @@ from typing import Any, Protocol, TypeVar, cast
 from pydantic import BaseModel
 
 from mia_dpp.domain.mappings import FieldMapping
-from mia_dpp.domain.product_identity import canonical_product_url
 from mia_dpp.domain.product import (
     BackgroundJob,
     BackgroundJobStatus,
@@ -31,6 +30,7 @@ from mia_dpp.domain.product import (
     RunStatus,
     ThreadRecord,
 )
+from mia_dpp.domain.product_identity import canonical_product_url
 from mia_dpp.domain.product_work import HumanReviewRecord, ProductWorkSnapshot
 from mia_dpp.storage.models import StoredArtifact
 from mia_dpp.tools.mapping.models import (
