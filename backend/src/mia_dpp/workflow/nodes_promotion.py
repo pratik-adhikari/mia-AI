@@ -35,7 +35,7 @@ async def promote_semantic_mapping(
     mapping = work.load_state("semantic_mapping_artifact_id", MappingResult)
     existing_reviews = tuple(
         SemanticReviewItem.model_validate(item)
-        for item in work.load_json("review_items_artifact_id")
+        for item in work.load_state_json("review_items_artifact_id")
     )
     proposals = work.load_state(
         "open_property_proposals_artifact_id",
