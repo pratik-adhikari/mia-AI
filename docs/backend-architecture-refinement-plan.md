@@ -622,9 +622,13 @@ Actions:
 Exit criteria:
 
 ```text
-services/ ──X──► workflow/
+backend-wide runtime primitives are no longer defined by workflow/
+
 api/      ──X──► workflow/context.py
+new code  ──X──► workflow.context.MiaContext
 ```
+
+`services/ ──X──► workflow/` is deliberately a **Phase 2** exit criterion.
 
 ### Phase 2 — remove upward service dependencies
 
@@ -678,6 +682,10 @@ capability = operation
 Exit criteria:
 
 - major capabilities can be directly called in unit tests without LangGraph.
+
+### Runtime package cleanup note
+
+The existing `runtime/checkpoints.py` is LangGraph-specific despite the new generic runtime primitives. It remains in place during the early behavior-preserving phases to avoid directory churn. When the graph is isolated in Phase 4, move graph checkpoint composition under `orchestration/graph/` so `runtime/` becomes consistently architecture-neutral.
 
 ### Phase 4 — isolate current LangGraph architecture
 
