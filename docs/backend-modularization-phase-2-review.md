@@ -8,7 +8,7 @@ Scope: remove reusable-service dependencies on the concrete workflow package
 
 Phase 2 makes the service layer independent of LangGraph/workflow implementation details.
 
-The required dependency direction is now:
+The Phase 2 dependency boundary is now:
 
 ```text
 workflow / future agent / future GUI pipeline
@@ -16,15 +16,18 @@ workflow / future agent / future GUI pipeline
                     ▼
                  services
                     │
-                    ▼
-           runtime + domain + ports
+        ┌───────────┼────────────┐
+        ▼           ▼            ▼
+      domain      runtime     existing concrete
+                             backend dependencies
+                             (for example persistence,
+                              templates and web/mapping)
+
+NO dependency from services back to workflow/
+NO direct LangGraph dependency from services
 ```
 
-and never:
-
-```text
-services ──X──► workflow
-```
+This is intentionally **not yet** the final ports-and-adapters architecture. Later phases can narrow concrete dependencies after capability boundaries stabilize.
 
 No graph topology, semantic policy, mapping policy, JEV thresholds, ECLASS behavior, review semantics, or AAS behavior is intentionally changed in this phase.
 
@@ -171,13 +174,14 @@ It parses every Python file under:
 
 `backend/src/mia_dpp/services/`
 
-and fails if a reusable service imports:
+and rejects:
 
-`mia_dpp.workflow`
+- `mia_dpp.workflow` and descendants;
+- relative imports that resolve into `mia_dpp.workflow`;
+- `from mia_dpp import workflow`;
+- direct `langgraph` imports.
 
-or anything below it.
-
-This turns the Phase 2 dependency rule into an executable repository constraint.
+The guard also contains self-tests for these supported import forms. This turns the Phase 2 orchestration-independence rule into an executable repository constraint.
 
 ## Responsibility change
 
@@ -257,7 +261,7 @@ is true and enforced by tests.
 
 Specifically:
 
-- `DeepResearchService` has no `ServiceContainer`, `RunWorkspace`, or `MiaWorkflowState` dependency;
+- `DeepResearchService` has no `ServiceContainer`, `RunWorkspace`, `MiaWorkflowState`, or direct LangGraph dependency;
 - shared evidence merge logic has neutral ownership;
 - application code explicitly injects required deep-research dependencies;
 - recovery behavior remains generation-fenced through `RunStore`.
