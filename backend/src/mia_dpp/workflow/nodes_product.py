@@ -19,7 +19,7 @@ from mia_dpp.domain.product_work import ProductWorkStage, ReuseMode
 from mia_dpp.persistence.catalogue import ActiveProductRunExists, ProductIdentifierConflict
 from mia_dpp.services.product_identifiers import discover_product_identifiers
 from mia_dpp.services.product_reuse import ProductReuseService
-from mia_dpp.workflow.context import MiaContext
+from mia_dpp.runtime.services import ServiceContainer
 from mia_dpp.workflow.presentation import evidence_text, product_image_url
 from mia_dpp.workflow.product_snapshot import update_product_snapshot
 from mia_dpp.workflow.state import MiaWorkflowState, reset_product_state
@@ -30,7 +30,7 @@ _SAFE_FILENAME = re.compile(r"[^A-Za-z0-9._-]+")
 
 async def resolve_product(
     state: MiaWorkflowState,
-    runtime: Runtime[MiaContext],
+    runtime: Runtime[ServiceContainer],
 ) -> dict[str, Any]:
     """Resolve durable identity and reuse a completed DPP unless refresh was requested."""
 
@@ -145,7 +145,7 @@ async def resolve_product(
 
 async def reuse_existing_dpp(
     state: MiaWorkflowState,
-    runtime: Runtime[MiaContext],
+    runtime: Runtime[ServiceContainer],
 ) -> dict[str, Any]:
     catalogue = runtime.context.catalogue
     version = catalogue.latest_successful_dpp(
@@ -175,7 +175,7 @@ async def reuse_existing_dpp(
 
 async def extract_evidence(
     state: MiaWorkflowState,
-    runtime: Runtime[MiaContext],
+    runtime: Runtime[ServiceContainer],
 ) -> dict[str, Any]:
     work = RunWorkspace(state, runtime.context)
     if (
