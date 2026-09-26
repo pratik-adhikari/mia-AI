@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     from langgraph.runtime import Runtime
 
+from mia_dpp.domain.product import DppReleaseStatus
 from mia_dpp.runtime.run_context import RunContext
 from mia_dpp.runtime.services import ServiceContainer
 from mia_dpp.services.aas_output import AasOutputService
@@ -68,10 +69,29 @@ async def store_result(
         expected_snapshot_version=int(state.get("product_snapshot_version", 0)),
         source_generation=int(state.get("source_generation", 0)),
     )
+    if result.validation_failed:
+        return {
+            "status": result.status,
+            "reply": (
+                "The AAS was built but deterministic validation still blocks deployment."
+            ),
+            "decision_summary": "Validation failed; no DPP version was published.",
+        }
+
+    provisional = result.release_status is DppReleaseStatus.PROVISIONAL
     updates: dict[str, Any] = {
         "status": result.status,
-        "reply": result.reply,
-        "decision_summary": result.decision_summary,
+        "reply": (
+            "DPP creation completed as a provisional version because human-approved DUMMY "
+            "placeholders remain."
+            if provisional
+            else "DPP creation completed and a verified durable version was stored."
+        ),
+        "decision_summary": (
+            f"Coverage and validation passed, with {result.dummy_mapping_count} DUMMY mapping(s)."
+            if provisional
+            else "Coverage and validation passed with verified values."
+        ),
     }
     if result.dpp_version_id is not None:
         updates["reused_dpp_version_id"] = result.dpp_version_id
