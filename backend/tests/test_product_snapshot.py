@@ -70,7 +70,7 @@ def test_workflow_snapshot_update_rejects_stale_graph_state(tmp_path) -> None:
             "run_id": run.id,
             "product_snapshot_version": first.version,
         },
-        SimpleNamespace(catalogue=catalogue),
+        SimpleNamespace(catalogue=catalogue, artifacts=SimpleNamespace()),
     )
 
     with pytest.raises(ProductSnapshotConflict):
@@ -180,5 +180,5 @@ def test_stale_workspace_cannot_start_after_generation_advances(tmp_path) -> Non
                 "product_id": product.id,
                 "run_id": old.id,
             },
-            SimpleNamespace(catalogue=catalogue),
+            SimpleNamespace(catalogue=catalogue, artifacts=SimpleNamespace()),
         )
