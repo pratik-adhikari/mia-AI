@@ -3,6 +3,7 @@ from types import SimpleNamespace
 import pytest
 from pydantic import BaseModel
 
+from mia_dpp.domain.product import RunStatus
 from mia_dpp.persistence.catalogue import ProductCatalogue
 from mia_dpp.runtime.run_context import RunContext
 from mia_dpp.runtime.run_store import RunStore
@@ -24,11 +25,17 @@ class FakeCatalogue:
         self.artifacts: dict[str, StoredArtifact] = {}
         self.fail_generation = False
         self.last_artifact_user_id: str | None = None
+        self.status = RunStatus.RUNNING
 
     def get_run(self, run_id: str):
         if run_id != "run-a":
             return None
-        return SimpleNamespace(id=run_id, product_id="product-a", thread_id="thread-a")
+        return SimpleNamespace(
+            id=run_id,
+            product_id="product-a",
+            thread_id="thread-a",
+            status=self.status,
+        )
 
     def get_thread(self, thread_id: str, *, user_id: str):
         if thread_id == "thread-a" and user_id == "user-a":
@@ -192,6 +199,37 @@ def test_run_store_initialization_validates_binding_then_renews_lease() -> None:
     assert catalogue.renewals == ["run-a"]
 
 
+
+@pytest.mark.parametrize("status", (RunStatus.RUNNING, RunStatus.AWAITING_HUMAN))
+def test_run_store_allows_live_execution_statuses(status: RunStatus) -> None:
+    catalogue = FakeCatalogue()
+    catalogue.status = status
+
+    store = RunStore(_context(), catalogue, FakeArtifactStore())
+
+    assert store.run_id == "run-a"
+
+
+@pytest.mark.parametrize(
+    "status",
+    (
+        RunStatus.COMPLETED,
+        RunStatus.FAILED,
+        RunStatus.INCOMPLETE,
+        RunStatus.REUSED,
+    ),
+)
+def test_run_store_rejects_terminal_execution_statuses(status: RunStatus) -> None:
+    catalogue = FakeCatalogue()
+    catalogue.status = status
+
+    with pytest.raises(RuntimeError, match=f"not active: {status.value}"):
+        RunStore(_context(), catalogue, FakeArtifactStore())
+
+    assert catalogue.assertions == []
+    assert catalogue.renewals == []
+
+
 def test_run_store_round_trips_model_and_json_by_artifact_id() -> None:
     catalogue = FakeCatalogue()
     artifacts = FakeArtifactStore()
@@ -266,6 +304,16 @@ def test_run_store_binds_real_catalogue_execution_identity(tmp_path) -> None:
 
     assert store.load_json(artifact_id) == {"valid": True}
     assert len(catalogue.list_events(run.id, user_id="user-a")) == 1
+
+
+    catalogue.set_run_status(run.id, RunStatus.AWAITING_HUMAN)
+    awaiting = RunStore(valid, catalogue, artifacts)
+    assert awaiting.run_id == run.id
+
+    catalogue.set_run_status(run.id, RunStatus.RUNNING)
+    catalogue.finish_run(run.id, RunStatus.COMPLETED)
+    with pytest.raises(RuntimeError, match="not active: completed"):
+        RunStore(valid, catalogue, artifacts)
 
     with pytest.raises(ValueError, match="belongs to product"):
         RunStore(
