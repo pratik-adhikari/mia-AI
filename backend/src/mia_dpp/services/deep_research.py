@@ -185,7 +185,7 @@ class DeepResearchService:
         iteration = int(claimed.metadata.get("iteration", 0)) + 1
         batch_started = perf_counter()
         try:
-            work = self._workspace(claimed)
+            work = self._run_store(claimed)
             work.event(
                 "research.batch.started",
                 f"Deep research batch {iteration} started.",
@@ -864,7 +864,7 @@ class DeepResearchService:
         }
         return next((item for item in reversed(artifacts) if item.key in keys), None)
 
-    def _workspace(self, job: BackgroundJob) -> RunStore:
+    def _run_store(self, job: BackgroundJob) -> RunStore:
         return RunStore(
             RunContext(
                 user_id=job.user_id,
