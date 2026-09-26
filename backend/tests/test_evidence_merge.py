@@ -1,4 +1,9 @@
-from mia_dpp.domain.evidence import EvidenceRecord, ProductKnowledgePackage
+from mia_dpp.domain.evidence import (
+    EvidenceRecord,
+    EvidenceStatus,
+    ProductKnowledgePackage,
+    SourceLocation,
+)
 from mia_dpp.domain.evidence_merge import merge_packages
 
 
@@ -7,18 +12,26 @@ def _record(record_id: str, value: str) -> EvidenceRecord:
         id=record_id,
         predicate="name",
         value=value,
-        source_url="https://example.com/product",
         source_label="Name",
+        source_uri="https://example.com/product",
+        source_content_sha256="0" * 64,
+        source_location=SourceLocation(),
+        extraction_method="test",
+        extractor_name="test-suite",
+        extractor_version="1",
+        status=EvidenceStatus.OBSERVED,
     )
 
 
 def test_merge_packages_preserves_or_replaces_duplicate_evidence_by_policy() -> None:
     existing = ProductKnowledgePackage(
         product_id="product-a",
+        product_name="Product A",
         evidence=(_record("evidence-1", "existing"),),
     )
     incoming = ProductKnowledgePackage(
         product_id="product-a",
+        product_name="Product A",
         evidence=(
             _record("evidence-1", "incoming"),
             _record("evidence-2", "new"),
