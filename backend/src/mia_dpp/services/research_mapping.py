@@ -162,15 +162,13 @@ class ResearchMappingIntegrationService:
             )
 
         current_mapping_id = (
-            request.reviewed_mapping_artifact_id
-            or request.semantic_mapping_artifact_id
+            request.reviewed_mapping_artifact_id or request.semantic_mapping_artifact_id
         )
         current_mapping = work.load(current_mapping_id, MappingResult)
         index = work.load(request.targets_artifact_id, TemplateIndex)
-        incremental_mapping_id = (
-            job.metadata.get("integratedMappingArtifactId")
-            or job.metadata.get("newMappingArtifactId")
-        )
+        incremental_mapping_id = job.metadata.get(
+            "integratedMappingArtifactId"
+        ) or job.metadata.get("newMappingArtifactId")
         if isinstance(incremental_mapping_id, str):
             incremental_mapping = work.load(incremental_mapping_id, MappingResult)
         else:
@@ -286,9 +284,10 @@ class ResearchMappingIntegrationService:
                     for item in work.load_json(request.review_items_artifact_id)
                 )
                 existing_ids = {item.evidence_id for item in focused_reviews}
-                focused_reviews = tuple(
-                    item for item in prior_reviews if item.evidence_id not in existing_ids
-                ) + focused_reviews
+                focused_reviews = (
+                    tuple(item for item in prior_reviews if item.evidence_id not in existing_ids)
+                    + focused_reviews
+                )
             except (KeyError, TypeError, ValueError):
                 pass
 
@@ -325,9 +324,7 @@ class ResearchMappingIntegrationService:
         )
         merged_fingerprint = sha256_json(
             {
-                "sources": [
-                    item.content_sha256 for item in merged_package.acquired_sources
-                ],
+                "sources": [item.content_sha256 for item in merged_package.acquired_sources],
                 "evidence": [item.id for item in merged_package.evidence],
             }
         )
@@ -388,11 +385,7 @@ class ResearchMappingIntegrationService:
         evidence_artifact_id: str,
     ) -> MappingResult:
         incremental = package.model_copy(
-            update={
-                "evidence": tuple(
-                    item for item in package.evidence if item.id in evidence_ids
-                )
-            }
+            update={"evidence": tuple(item for item in package.evidence if item.id in evidence_ids)}
         )
         if self._jev_mapping_enabled:
             if self._jev_decider is None:

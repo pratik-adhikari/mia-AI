@@ -46,18 +46,14 @@ class RunStore:
             raise KeyError(f"unknown run: {self.run_id}")
         if run.product_id != self.product_id:
             raise ValueError(
-                f"run {self.run_id} belongs to product {run.product_id}, "
-                f"not {self.product_id}"
+                f"run {self.run_id} belongs to product {run.product_id}, not {self.product_id}"
             )
         if run.thread_id != self.thread_id:
             raise ValueError(
-                f"run {self.run_id} belongs to thread {run.thread_id}, "
-                f"not {self.thread_id}"
+                f"run {self.run_id} belongs to thread {run.thread_id}, not {self.thread_id}"
             )
         if self._catalogue.get_thread(self.thread_id, user_id=self.user_id) is None:
-            raise PermissionError(
-                f"thread {self.thread_id} does not belong to user {self.user_id}"
-            )
+            raise PermissionError(f"thread {self.thread_id} does not belong to user {self.user_id}")
         self._assert_live(run)
 
     @staticmethod

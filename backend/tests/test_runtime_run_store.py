@@ -121,14 +121,17 @@ def _context() -> RunContext:
 
 
 def test_run_context_enforces_identity_on_every_construction_path() -> None:
-    assert RunContext.from_mapping(
-        {
-            "user_id": "user-a",
-            "thread_id": "thread-a",
-            "product_id": "product-a",
-            "run_id": "run-a",
-        }
-    ) == _context()
+    assert (
+        RunContext.from_mapping(
+            {
+                "user_id": "user-a",
+                "thread_id": "thread-a",
+                "product_id": "product-a",
+                "run_id": "run-a",
+            }
+        )
+        == _context()
+    )
 
     for key in ("user_id", "thread_id", "product_id", "run_id"):
         values = {
@@ -197,7 +200,6 @@ def test_run_store_initialization_validates_binding_then_renews_lease() -> None:
     assert store.run_id == "run-a"
     assert catalogue.assertions == ["run-a"]
     assert catalogue.renewals == ["run-a"]
-
 
 
 @pytest.mark.parametrize("status", (RunStatus.RUNNING, RunStatus.AWAITING_HUMAN))
@@ -276,9 +278,7 @@ def test_run_workspace_preserves_store_contract_and_translates_state_keys() -> N
     state["review_items_artifact_id"] = artifact_id
 
     assert workspace.load_json(artifact_id) == {"decision": "confirm"}
-    assert workspace.load_state_json("review_items_artifact_id") == {
-        "decision": "confirm"
-    }
+    assert workspace.load_state_json("review_items_artifact_id") == {"decision": "confirm"}
     assert workspace.state_id("review_items_artifact_id") == artifact_id
 
 
@@ -304,7 +304,6 @@ def test_run_store_binds_real_catalogue_execution_identity(tmp_path) -> None:
 
     assert store.load_json(artifact_id) == {"valid": True}
     assert len(catalogue.list_events(run.id, user_id="user-a")) == 1
-
 
     catalogue.set_run_status(run.id, RunStatus.AWAITING_HUMAN)
     awaiting = RunStore(valid, catalogue, artifacts)

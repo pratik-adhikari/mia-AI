@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Mapping
 
 
 @dataclass(frozen=True, slots=True)
@@ -26,7 +26,7 @@ class RunContext:
                 raise ValueError(f"{name} must be a non-empty string")
 
     @classmethod
-    def from_mapping(cls, values: Mapping[str, object]) -> "RunContext":
+    def from_mapping(cls, values: Mapping[str, object]) -> RunContext:
         """Build a validated context without depending on an orchestrator state type."""
 
         return cls(

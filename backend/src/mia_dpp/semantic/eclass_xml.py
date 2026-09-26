@@ -111,13 +111,9 @@ class EclassXmlZipProvider:
                 if not members:
                     raise ValueError(f"No ECLASS dictionary XML files found in {path}")
                 for member in members:
-                    release_match = re.search(
-                        r"ECLASS(\d+_\d+)", member, flags=re.IGNORECASE
-                    )
+                    release_match = re.search(r"ECLASS(\d+_\d+)", member, flags=re.IGNORECASE)
                     release = (
-                        release_match.group(1).replace("_", ".")
-                        if release_match
-                        else "unknown"
+                        release_match.group(1).replace("_", ".") if release_match else "unknown"
                     )
                     with archive.open(member) as source:
                         for _, element in ElementTree.iterparse(source, events=("end",)):

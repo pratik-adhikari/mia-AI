@@ -14,12 +14,44 @@ from pydantic_ai.exceptions import UnexpectedModelBehavior
 from mia_dpp.aas.templates import OfficialTemplateRepository
 from mia_dpp.agent.models import AgentResponse, AgentStatus
 from mia_dpp.api.routes import thread_event_stream
+from mia_dpp.config import Settings
 from mia_dpp.domain.mappings import MappingStatus
 from mia_dpp.domain.product import RunStatus
-from mia_dpp.main import app
+from mia_dpp.main import app, create_app
+from mia_dpp.mia import Mia
 from mia_dpp.persistence.catalogue import LOCAL_USER_ID
 from mia_dpp.services.product_query import EvidenceSearchHit, WorkStatusView
 from mia_dpp.tools.mapping.text_mapping import propose_text_mappings
+
+
+@pytest.fixture(scope="module", autouse=True)
+def isolated_api_runtime(tmp_path_factory: pytest.TempPathFactory):
+    global app
+
+    root = tmp_path_factory.mktemp("api-runtime")
+    config_path = root / "config.json"
+    config_path.write_text('{"auth": {"enabled": false}}', encoding="utf-8")
+    settings = Settings(
+        _env_file=None,
+        openrouter_api_key=None,
+        MIA_LOCAL_MODE=True,
+        MIA_CONFIG_PATH=config_path,
+        MIA_CATALOGUE_PATH=root / "catalogue.sqlite3",
+        MIA_THREAD_STORE_PATH=root / "checkpoints.sqlite3",
+        MIA_WORKSPACE_ROOT=root / "artifacts",
+        MIA_JEV_SHADOW_ENABLED=False,
+        MIA_JEV_MAPPING_ENABLED=False,
+        MIA_ECLASS_SHADOW_ENABLED=False,
+        MIA_SEMANTIC_PROMOTION_ENABLED=False,
+        VERCEL_ENV=None,
+    )
+    previous_app = app
+    app = create_app(Mia(settings=settings))
+    try:
+        yield
+    finally:
+        asyncio.run(app.state.mia.close())
+        app = previous_app
 
 
 def request(

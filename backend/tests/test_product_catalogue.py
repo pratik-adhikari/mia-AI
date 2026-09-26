@@ -13,6 +13,7 @@ from mia_dpp.domain.product import (
     MessageRole,
     RunStatus,
 )
+from mia_dpp.domain.product_identity import canonical_product_url
 from mia_dpp.domain.product_work import (
     HumanReviewAction,
     HumanReviewRecord,
@@ -21,7 +22,6 @@ from mia_dpp.domain.product_work import (
 )
 from mia_dpp.persistence.catalogue import ProductCatalogue, ProductSnapshotConflict
 from mia_dpp.storage.models import StoredArtifact
-from mia_dpp.domain.product_identity import canonical_product_url
 
 
 def test_canonical_url_removes_tracking_and_normalizes_host() -> None:

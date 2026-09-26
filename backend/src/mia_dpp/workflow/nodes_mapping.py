@@ -13,12 +13,12 @@ from mia_dpp.domain.product import RunStatus
 from mia_dpp.domain.targets import TemplateIndex
 from mia_dpp.runtime.run_context import RunContext
 from mia_dpp.runtime.services import ServiceContainer
-from mia_dpp.services.mapping_execution import MappingExecutionService
 from mia_dpp.services.human_submission import (
     HumanValueSubmission,
     MappingReviewDecision,
     MappingReviewSubmission,
 )
+from mia_dpp.services.mapping_execution import MappingExecutionService
 from mia_dpp.services.mapping_human import MappingHumanService
 from mia_dpp.services.research_mapping import (
     ResearchIntegrationRequest,
@@ -235,10 +235,7 @@ async def coverage(
     state: MiaWorkflowState,
     runtime: Runtime[ServiceContainer],
 ) -> dict[str, Any]:
-    mapping_id = (
-        state.get("reviewed_mapping_artifact_id")
-        or state["semantic_mapping_artifact_id"]
-    )
+    mapping_id = state.get("reviewed_mapping_artifact_id") or state["semantic_mapping_artifact_id"]
     result = _mapping_service(runtime).coverage(
         RunContext.from_mapping(state),
         evidence_artifact_id=state["evidence_artifact_id"],
@@ -271,9 +268,7 @@ async def integrate_background_research(
             evidence_artifact_id=state["evidence_artifact_id"],
             targets_artifact_id=state["targets_artifact_id"],
             semantic_mapping_artifact_id=state["semantic_mapping_artifact_id"],
-            reviewed_mapping_artifact_id=(
-                state.get("reviewed_mapping_artifact_id") or None
-            ),
+            reviewed_mapping_artifact_id=(state.get("reviewed_mapping_artifact_id") or None),
             review_items_artifact_id=state.get("review_items_artifact_id") or None,
             known_source_urls=state.get("known_source_urls", ()),
             expected_snapshot_version=int(state.get("product_snapshot_version", 0)),
@@ -352,10 +347,7 @@ async def human_value(
     if request.requirement_id != requirement_id:
         raise ValueError("human value targets a different requirement")
 
-    mapping_id = (
-        state.get("reviewed_mapping_artifact_id")
-        or state["semantic_mapping_artifact_id"]
-    )
+    mapping_id = state.get("reviewed_mapping_artifact_id") or state["semantic_mapping_artifact_id"]
     submission = HumanValueSubmission(
         value=request.value,
         use_dummy=request.use_dummy,

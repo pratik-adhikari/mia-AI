@@ -26,18 +26,22 @@ def test_exhausted_frontier_retries_deferred_mapping(mapping_pending: bool) -> N
 
     service._map_new_evidence = map_new
     work = SimpleNamespace(load=lambda artifact_id, model: package)
-    job = SimpleNamespace(metadata={
-        "seedEvidenceArtifactId": "seed-1",
-        "researchEvidenceArtifactId": "research-1",
-    })
+    job = SimpleNamespace(
+        metadata={
+            "seedEvidenceArtifactId": "seed-1",
+            "researchEvidenceArtifactId": "research-1",
+        }
+    )
 
     metadata, complete = asyncio.run(service._process_batch(job, work, iteration=2))
 
-    assert calls == [{
-        "added_ids": set(),
-        "evidence_artifact_id": "research-1",
-        "seed_evidence_artifact_id": "seed-1",
-    }]
+    assert calls == [
+        {
+            "added_ids": set(),
+            "evidence_artifact_id": "research-1",
+            "seed_evidence_artifact_id": "seed-1",
+        }
+    ]
     assert metadata["mappingRefreshPending"] is mapping_pending
     assert complete is not mapping_pending
 
@@ -63,10 +67,14 @@ def test_last_source_batch_remains_queued_when_targets_are_missing() -> None:
         load=lambda artifact_id, model: object(),
         event=lambda *args, **kwargs: None,
     )
-    job = SimpleNamespace(id="job-1", user_id="user-1", metadata={
-        "seedEvidenceArtifactId": "seed-1",
-        "seedUrl": "https://example.test/product",
-    })
+    job = SimpleNamespace(
+        id="job-1",
+        user_id="user-1",
+        metadata={
+            "seedEvidenceArtifactId": "seed-1",
+            "seedUrl": "https://example.test/product",
+        },
+    )
 
     metadata, complete = asyncio.run(service._process_batch(job, work, iteration=1))
 
@@ -79,9 +87,13 @@ def test_last_source_batch_remains_queued_when_targets_are_missing() -> None:
 def test_deferred_evidence_maps_after_targets_arrive_without_review(monkeypatch) -> None:
     service = object.__new__(DeepResearchService)
     seed = SimpleNamespace(evidence=(SimpleNamespace(id="seed-fact"),))
-    research = SimpleNamespace(evidence=(
-        SimpleNamespace(id="seed-fact"), SimpleNamespace(id="new-fact"),
-    ), model_copy=lambda update: SimpleNamespace(**update))
+    research = SimpleNamespace(
+        evidence=(
+            SimpleNamespace(id="seed-fact"),
+            SimpleNamespace(id="new-fact"),
+        ),
+        model_copy=lambda update: SimpleNamespace(**update),
+    )
     index = object()
     service._jev_mapping_enabled = True
     service._semantic_mapper = None
@@ -106,13 +118,15 @@ def test_deferred_evidence_maps_after_targets_arrive_without_review(monkeypatch)
         event=lambda *args, **kwargs: None,
     )
 
-    metadata = asyncio.run(service._map_new_evidence(
-        work,
-        research,
-        added_ids=set(),
-        evidence_artifact_id="research-1",
-        seed_evidence_artifact_id="seed-1",
-    ))
+    metadata = asyncio.run(
+        service._map_new_evidence(
+            work,
+            research,
+            added_ids=set(),
+            evidence_artifact_id="research-1",
+            seed_evidence_artifact_id="seed-1",
+        )
+    )
 
     assert called == [{"new-fact"}]
     assert metadata["mappingRefreshPending"] is False

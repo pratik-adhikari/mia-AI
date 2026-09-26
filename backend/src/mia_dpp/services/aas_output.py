@@ -156,9 +156,7 @@ class AasOutputService:
             and item.human_value_kind == "dummy"
         )
         release_status = (
-            DppReleaseStatus.PROVISIONAL
-            if dummy_mapping_ids
-            else DppReleaseStatus.VERIFIED
+            DppReleaseStatus.PROVISIONAL if dummy_mapping_ids else DppReleaseStatus.VERIFIED
         )
         metrics: dict[str, int | float | str | bool | None] = {
             "requiredUnresolved": required_unresolved,

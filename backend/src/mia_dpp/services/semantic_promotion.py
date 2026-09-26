@@ -120,10 +120,7 @@ class SemanticPromotionService:
         )
         review_id = work.put_json(
             "mapping/review-items-promoted.json",
-            [
-                item.model_dump(mode="json", by_alias=True)
-                for item in promoted.review_items
-            ],
+            [item.model_dump(mode="json", by_alias=True) for item in promoted.review_items],
             derived_from=(mapping_id, promotion_id),
         )
         review_required = bool(promoted.review_items)

@@ -36,7 +36,8 @@ class _TechnicalPropertiesDecider:
         del state, instructions
         self.criteria = dict(criteria)
         choice = next(
-            identifier for identifier in criteria
+            identifier
+            for identifier in criteria
             if identifier.endswith("/ArbitraryProperty")
             and identifier.startswith("technical_data|")
         )
@@ -122,10 +123,12 @@ def test_router_can_reach_open_technical_property_without_inventing_a_path() -> 
         "technical_data|TechnicalData/TechnicalPropertyAreas/[]/Section/ArbitraryProperty"
     )
     assert all(step.decision.choice in step.options for step in trace.steps)
-    index = build_template_index(tuple(
-        OfficialTemplateRepository().load(key)
-        for key in ("digital_nameplate", "technical_data")
-    ))
+    index = build_template_index(
+        tuple(
+            OfficialTemplateRepository().load(key)
+            for key in ("digital_nameplate", "technical_data")
+        )
+    )
     value_targets = {
         f"{item.template_key}|{'/'.join(item.template_path)}"
         for item in index.requirements
@@ -140,14 +143,16 @@ def test_router_keeps_abstention_without_a_target() -> None:
     contexts = build_context_views(package, normalization)
     view = next(item for item in contexts.views if item.scope is ContextScope.SIBLINGS)
 
-    trace = asyncio.run(route_context_view(
-        decider=_AbstainingDecider(),
-        repository=OfficialTemplateRepository(),
-        selected_template_keys=("digital_nameplate", "technical_data"),
-        package=package,
-        normalization=normalization,
-        view=view,
-    ))
+    trace = asyncio.run(
+        route_context_view(
+            decider=_AbstainingDecider(),
+            repository=OfficialTemplateRepository(),
+            selected_template_keys=("digital_nameplate", "technical_data"),
+            package=package,
+            normalization=normalization,
+            view=view,
+        )
+    )
 
     assert trace.terminal_reason == NO_IDTA_LOCATION
     assert trace.selected_template_key is None

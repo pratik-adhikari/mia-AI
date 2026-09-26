@@ -56,8 +56,7 @@ def _import_targets(tree: ast.AST, *, current_module: str) -> tuple[tuple[int, s
 
 def _is_forbidden(module: str) -> bool:
     return any(
-        module == prefix or module.startswith(f"{prefix}.")
-        for prefix in _FORBIDDEN_PREFIXES
+        module == prefix or module.startswith(f"{prefix}.") for prefix in _FORBIDDEN_PREFIXES
     )
 
 

@@ -19,17 +19,18 @@ from mia_dpp.domain.mappings import (
     MappingStatus,
     SemanticReviewItem,
 )
-from mia_dpp.domain.targets import RequirementKind, TemplateIndex
+from mia_dpp.domain.targets import Requirement, RequirementKind, TemplateIndex
 from mia_dpp.normalization import normalize_package
 from mia_dpp.semantic import build_context_views
 from mia_dpp.semantic.decision_policy import (
     DecisionPolicyReport,
     DecisionPolicySettings,
     DecisionPriority,
+    EvidencePolicyDecision,
     apply_decision_policy,
 )
 from mia_dpp.semantic.diagnostics import build_routing_diagnostics
-from mia_dpp.semantic.idta_routing import IdtaRoutingReport, route_views
+from mia_dpp.semantic.idta_routing import IdtaRoutingReport, IdtaRoutingTrace, route_views
 from mia_dpp.semantic.jev import JevDecisionClient
 from mia_dpp.semantic.models import ContextScope, ContextViewSet
 from mia_dpp.tools.mapping.review import MappingReviewService
@@ -71,7 +72,7 @@ def map_jev_routes(
     """Use only official fixed targets; wildcard routes need verified semantics later."""
 
     decisions = {item.evidence_id: item for item in policy.decisions}
-    traces: dict[str, list] = {}
+    traces: dict[str, list[IdtaRoutingTrace]] = {}
     for trace in routing.traces:
         traces.setdefault(trace.focus_evidence_id, []).append(trace)
     requirements = {
@@ -82,22 +83,26 @@ def map_jev_routes(
         and "[]" not in item.template_path
         and item.semantic_id
     }
-    selected: dict[str, tuple] = {}
+    selected: dict[str, tuple[Requirement, EvidencePolicyDecision]] = {}
     for record in package.evidence:
         decision = decisions.get(record.id)
         if decision is None:
             continue
         matching = [
-            trace for trace in traces.get(record.id, ())
+            trace
+            for trace in traces.get(record.id, ())
             if (
                 f"{trace.selected_template_key or '-'}|"
                 f"{'/'.join(trace.selected_path) if trace.selected_path else '-'}|"
                 f"{trace.terminal_reason}"
-            ) == decision.consensus_signature
+            )
+            == decision.consensus_signature
         ]
         matching.sort(key=lambda item: item.scope is ContextScope.FULL_PRODUCT, reverse=True)
         if matching and matching[0].terminal_reason == "leaf":
             trace = matching[0]
+            if trace.selected_template_key is None:
+                continue
             requirement = requirements.get((trace.selected_template_key, trace.selected_path))
             if requirement is not None:
                 selected[record.id] = (requirement, decision)
@@ -131,12 +136,15 @@ def map_jev_routes(
         requirement, decision = selected_item
         if not isinstance(record.value, (str, int, float, bool)):
             unmatched.append(record.id)
-            outcomes.append(EvidenceOutcome(
-                evidence_id=record.id,
-                status=EvidenceOutcomeStatus.UNMAPPED,
-                reason="Retained non-scalar source value; official AAS target requires a scalar.",
-                mapping_origin=MappingOrigin.SEMANTIC_ENGINE,
-            ))
+            reason = "Retained non-scalar source value; official AAS target requires a scalar."
+            outcomes.append(
+                EvidenceOutcome(
+                    evidence_id=record.id,
+                    status=EvidenceOutcomeStatus.UNMAPPED,
+                    reason=reason,
+                    mapping_origin=MappingOrigin.SEMANTIC_ENGINE,
+                )
+            )
             continue
         target = mapping_target(templates.load(requirement.template_key), requirement.template_path)
         priority = decision.priority
@@ -166,9 +174,8 @@ def map_jev_routes(
         if constraint_reasons:
             reason += " Deterministic constraints: " + "; ".join(constraint_reasons) + "."
         mapping = FieldMapping(
-            id="mapping-" + hashlib.sha256(
-                f"{record.id}\0{requirement.id}".encode()
-            ).hexdigest()[:24],
+            id="mapping-"
+            + hashlib.sha256(f"{record.id}\0{requirement.id}".encode()).hexdigest()[:24],
             evidence_id=record.id,
             source_field=record.source_label or record.predicate,
             source_value=f"{record.value} {record.unit}" if record.unit else str(record.value),
@@ -190,7 +197,8 @@ def map_jev_routes(
                 evidence_id=record.id,
                 status=(
                     EvidenceOutcomeStatus.UNCERTAIN
-                    if needs_review else EvidenceOutcomeStatus.MAPPED
+                    if needs_review
+                    else EvidenceOutcomeStatus.MAPPED
                 ),
                 requirement_id=requirement.id,
                 reason=reason[:600],
@@ -253,9 +261,7 @@ def require_review_for_projection_collisions(mapping: MappingResult) -> MappingR
 
     counts = Counter(item.target.projection_identity for item in mapping.mapped)
     collided = {
-        item.evidence_id
-        for item in mapping.mapped
-        if counts[item.target.projection_identity] > 1
+        item.evidence_id for item in mapping.mapped if counts[item.target.projection_identity] > 1
     }
     if not collided:
         return mapping
@@ -264,24 +270,34 @@ def require_review_for_projection_collisions(mapping: MappingResult) -> MappingR
         if item.evidence_id not in collided:
             return item
         reason = "Multiple source facts propose the same final AAS target."
-        return item.model_copy(update={
-            "status": MappingStatus.REVIEW,
-            "review_priority": "alarm",
-            "assessment": item.assessment.model_copy(update={
-                "review_required": True,
-                "reason": reason,
-                "uncertainties": (*item.assessment.uncertainties, reason),
-            }),
-            "reasoning": reason,
-        })
+        return item.model_copy(
+            update={
+                "status": MappingStatus.REVIEW,
+                "review_priority": "alarm",
+                "assessment": item.assessment.model_copy(
+                    update={
+                        "review_required": True,
+                        "reason": reason,
+                        "uncertainties": (*item.assessment.uncertainties, reason),
+                    }
+                ),
+                "reasoning": reason,
+            }
+        )
 
-    return mapping.model_copy(update={
-        "mapped": tuple(demote(item) for item in mapping.mapped),
-        "outcomes": tuple(
-            item.model_copy(update={
-                "status": EvidenceOutcomeStatus.UNCERTAIN,
-                "reason": "Multiple source facts propose the same final AAS target.",
-            }) if item.evidence_id in collided else item
-            for item in mapping.outcomes
-        ),
-    })
+    return mapping.model_copy(
+        update={
+            "mapped": tuple(demote(item) for item in mapping.mapped),
+            "outcomes": tuple(
+                item.model_copy(
+                    update={
+                        "status": EvidenceOutcomeStatus.UNCERTAIN,
+                        "reason": "Multiple source facts propose the same final AAS target.",
+                    }
+                )
+                if item.evidence_id in collided
+                else item
+                for item in mapping.outcomes
+            ),
+        }
+    )

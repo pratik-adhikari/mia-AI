@@ -45,8 +45,7 @@ _IDENTITY_WORD = re.compile(r"[a-z0-9]+(?:[-_][a-z0-9]+)*")
 def _words(value: str) -> frozenset[str]:
     compounds = _IDENTITY_WORD.findall(value.casefold())
     return frozenset(
-        token for compound in compounds
-        for token in (compound, *re.split(r"[-_]", compound))
+        token for compound in compounds for token in (compound, *re.split(r"[-_]", compound))
     )
 
 
@@ -221,8 +220,7 @@ class DeepResearchService:
                     # Human review belongs to the foreground mapping workflow. It must not
                     # back-pressure source acquisition or background mapping of later batches.
                     "phase": (
-                        "waiting_for_targets"
-                        if metadata.get("mappingRefreshPending") else "queued"
+                        "waiting_for_targets" if metadata.get("mappingRefreshPending") else "queued"
                     ),
                     "awaitingHumanReview": False,
                 },
@@ -277,8 +275,7 @@ class DeepResearchService:
                     "researchEvidenceArtifactId": evidence_id,
                     "sourcesArtifactId": sources_id,
                     "sourceCandidates": [
-                        {"url": item.url, "text": item.text, "title": item.title}
-                        for item in links
+                        {"url": item.url, "text": item.text, "title": item.title} for item in links
                     ],
                     "lastBatchNewEvidenceCount": 0,
                     **mapping_metadata,
@@ -326,7 +323,8 @@ class DeepResearchService:
                 seed_url = str(job.metadata["seedUrl"])
                 if _is_subtree(link.url, seed_url):
                     for discovered in self._links_from_package(
-                        incoming, seed_url=seed_url,
+                        incoming,
+                        seed_url=seed_url,
                     ):
                         candidate_key = _url_key(discovered.url)
                         if (
@@ -422,7 +420,9 @@ class DeepResearchService:
         if isinstance(stored, list) and isinstance(sources_id, str):
             seed_package = work.load(seed_id, ProductKnowledgePackage)
             direct_links = self._links_from_package(
-                seed_package, seed_url=seed_url, allow_off_subtree=True,
+                seed_package,
+                seed_url=seed_url,
+                allow_off_subtree=True,
             )
             allowed_off_subtree = {_url_key(item.url) for item in direct_links}
             old_index = int(job.metadata.get("nextSourceIndex", 0))
@@ -441,10 +441,7 @@ class DeepResearchService:
                 if (
                     candidate_key in seen
                     or len(links) >= self._crawl_scope.max_total_sources
-                    or not (
-                        _is_subtree(link.url, seed_url)
-                        or candidate_key in allowed_off_subtree
-                    )
+                    or not (_is_subtree(link.url, seed_url) or candidate_key in allowed_off_subtree)
                 ):
                     continue
                 links.append(link)
@@ -453,8 +450,7 @@ class DeepResearchService:
                     next_index += 1
             if len(links) != len(stored) or next_index != old_index:
                 payload = [
-                    {"url": item.url, "text": item.text, "title": item.title}
-                    for item in links
+                    {"url": item.url, "text": item.text, "title": item.title} for item in links
                 ]
                 sources_id = work.put_json(
                     "research/sources-scoped.json",
@@ -475,13 +471,15 @@ class DeepResearchService:
             return tuple(links), sources_id, next_index
 
         discovery_started = perf_counter()
-        links = self._links_from_package(
+        discovered_links = self._links_from_package(
             work.load(seed_id, ProductKnowledgePackage),
             seed_url=seed_url,
             allow_off_subtree=True,
         )
         discovery_duration_ms = round((perf_counter() - discovery_started) * 1000, 2)
-        payload = [{"url": item.url, "text": item.text, "title": item.title} for item in links]
+        payload = [
+            {"url": item.url, "text": item.text, "title": item.title} for item in discovered_links
+        ]
         sources_id = work.put_json(
             "research/sources.json",
             {
@@ -495,7 +493,7 @@ class DeepResearchService:
             job.id,
             user_id=job.user_id,
             metadata={
-                "totalSources": len(links),
+                "totalSources": len(discovered_links),
                 "sourceCandidates": payload,
                 "sourcesArtifactId": sources_id,
                 "discoveryDurationMs": discovery_duration_ms,
@@ -503,14 +501,15 @@ class DeepResearchService:
         )
         work.event(
             "research.frontier.discovered",
-            f"Persisted a frontier of {len(links)} candidate sources from retained HTML.",
+            f"Persisted a frontier of {len(discovered_links)} candidate sources "
+            "from retained HTML.",
             metadata={
                 "durationMs": discovery_duration_ms,
-                "sourceCount": len(links),
+                "sourceCount": len(discovered_links),
                 "artifactId": sources_id,
             },
         )
-        return links, sources_id, 0
+        return discovered_links, sources_id, 0
 
     def _links_from_package(
         self,
@@ -679,10 +678,7 @@ class DeepResearchService:
         evidence_artifact_id: str,
         seed_evidence_artifact_id: str,
     ) -> dict[str, Any]:
-        if (
-            self._semantic_mapper is None
-            and not self._jev_mapping_enabled
-        ):
+        if self._semantic_mapper is None and not self._jev_mapping_enabled:
             return {}
         current_artifact = self._latest_mapping_artifact(work)
         current_mapping = (
@@ -730,11 +726,13 @@ class DeepResearchService:
                 settings=self._jev_decision_policy,
             )
             routing_id = work.put_model(
-                "semantic/research-jev-routing.json", routing,
+                "semantic/research-jev-routing.json",
+                routing,
                 derived_from=(evidence_artifact_id, targets_artifact.id),
             )
             work.put_model(
-                "semantic/research-jev-policy.json", policy,
+                "semantic/research-jev-policy.json",
+                policy,
                 derived_from=(routing_id,),
             )
             model_requests = sum(

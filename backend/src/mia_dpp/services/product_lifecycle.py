@@ -98,9 +98,7 @@ class ProductLifecycleService:
                 workflow_generation=active.workflow_generation,
                 source_generation=snapshot.source_generation if snapshot is not None else 0,
                 status=(
-                    "awaiting_human"
-                    if active.status is RunStatus.AWAITING_HUMAN
-                    else "running"
+                    "awaiting_human" if active.status is RunStatus.AWAITING_HUMAN else "running"
                 ),
             )
 

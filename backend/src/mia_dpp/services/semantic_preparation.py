@@ -165,7 +165,9 @@ class SemanticPreparationService:
         )
         terminal_counts: dict[str, int] = {}
         for trace in report.traces:
-            terminal_counts[trace.terminal_reason] = terminal_counts.get(trace.terminal_reason, 0) + 1
+            terminal_counts[trace.terminal_reason] = (
+                terminal_counts.get(trace.terminal_reason, 0) + 1
+            )
         work.event(
             "semantic.jev_shadow_completed",
             f"Recorded {len(report.traces)} hierarchical Jev routing traces.",
@@ -179,7 +181,9 @@ class SemanticPreparationService:
         )
         return artifact_id
 
-    def analyze_jev(self, context: RunContext, routing_artifact_id: str | None) -> tuple[str, str] | None:
+    def analyze_jev(
+        self, context: RunContext, routing_artifact_id: str | None
+    ) -> tuple[str, str] | None:
         work = self._store(context)
         if not routing_artifact_id:
             work.event(
@@ -323,7 +327,9 @@ class SemanticPreparationService:
         status_counts: dict[str, int] = {}
         decision_count = 0
         for result in report.results:
-            status_counts[result.retrieval_status] = status_counts.get(result.retrieval_status, 0) + 1
+            status_counts[result.retrieval_status] = (
+                status_counts.get(result.retrieval_status, 0) + 1
+            )
             decision_count += len(result.decisions)
         work.event(
             "semantic.eclass_shadow_completed",
@@ -398,7 +404,8 @@ class SemanticPreparationService:
         if not resolution_artifact_id or not diagnostics_artifact_id:
             work.event(
                 "semantic.open_property_shadow_skipped",
-                "ECLASS resolution/diagnostics are unavailable, so wildcard proposals were skipped.",
+                "ECLASS resolution/diagnostics are unavailable, "
+                "so wildcard proposals were skipped.",
                 metadata={"shadowMode": True},
             )
             return None

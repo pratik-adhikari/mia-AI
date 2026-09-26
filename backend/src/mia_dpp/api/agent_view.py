@@ -17,10 +17,12 @@ from mia_dpp.agent.models import (
     ProductWork,
 )
 from mia_dpp.domain.evidence import ProductKnowledgePackage
+from mia_dpp.domain.mapping_merge import merge_mapping_results
 from mia_dpp.domain.mappings import MappingResult, SemanticReviewItem
+from mia_dpp.domain.product import BackgroundJob
+from mia_dpp.domain.product_work import ProductWorkSnapshot
 from mia_dpp.domain.targets import TemplateIndex
 from mia_dpp.persistence.workspace import WorkspaceView
-from mia_dpp.services.deep_research import merge_mapping_results
 from mia_dpp.runtime.services import ServiceContainer
 
 ModelT = TypeVar("ModelT", bound=BaseModel)
@@ -137,9 +139,7 @@ class AgentResponseView:
                     package = research_package
                 else:
                     sources = {item.id: item for item in package.acquired_sources}
-                    sources.update(
-                        {item.id: item for item in research_package.acquired_sources}
-                    )
+                    sources.update({item.id: item for item in research_package.acquired_sources})
                     evidence = {item.id: item for item in package.evidence}
                     for item in research_package.evidence:
                         evidence.setdefault(item.id, item)
@@ -240,7 +240,7 @@ class AgentResponseView:
             artifact_ids=tuple(item.id for item in artifacts),
         )
 
-    def _product_snapshot(self, state: dict[str, Any]):
+    def _product_snapshot(self, state: dict[str, Any]) -> ProductWorkSnapshot | None:
         product_id = state.get("product_id")
         run_id = state.get("run_id")
         if not product_id or not run_id:
@@ -250,7 +250,7 @@ class AgentResponseView:
         )
         return snapshot if snapshot is not None and snapshot.run_id == str(run_id) else None
 
-    def _background_job(self, state: dict[str, Any]):
+    def _background_job(self, state: dict[str, Any]) -> BackgroundJob | None:
         thread_id = str(state.get("thread_id", ""))
         run_id = str(state.get("run_id", ""))
         product_id = str(state.get("product_id", ""))
@@ -258,9 +258,7 @@ class AgentResponseView:
         if not thread_id or not run_id or not product_id:
             return None
         requested_id = state.get("background_job_id")
-        jobs = self._context.catalogue.list_background_jobs(
-            user_id=user_id, thread_id=thread_id
-        )
+        jobs = self._context.catalogue.list_background_jobs(user_id=user_id, thread_id=thread_id)
         matching = tuple(
             job for job in jobs if job.run_id == run_id and job.product_id == product_id
         )

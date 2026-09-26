@@ -41,6 +41,7 @@ from mia_dpp.persistence.catalogue import LOCAL_USER_ID, ActiveProductRunExists
 from mia_dpp.persistence.workspace import WorkspaceView
 from mia_dpp.runtime.checkpoints import open_checkpointer
 from mia_dpp.runtime.factory import create_artifact_store, create_catalogue
+from mia_dpp.runtime.services import ServiceContainer
 from mia_dpp.semantic.decision_policy import DecisionPolicySettings
 from mia_dpp.semantic.eclass import EclassJsonV2Provider, EclassPropertyProvider
 from mia_dpp.semantic.eclass_xml import EclassXmlZipProvider
@@ -52,7 +53,6 @@ from mia_dpp.tools.mapping.review import MappingReviewService
 from mia_dpp.tools.search import SearchProvider, SearchUnavailableError
 from mia_dpp.tools.web.models import PageLoadError
 from mia_dpp.tools.web.tool import WebExtractionTool
-from mia_dpp.runtime.services import ServiceContainer
 from mia_dpp.workflow.graph import create_graph
 from mia_dpp.workflow.identity import direct_product_url
 from mia_dpp.workflow.state import reset_product_state
@@ -126,8 +126,7 @@ class Mia:
                 if self.settings.eclass_provider_mode == "local":
                     if not self.settings.eclass_xml_dictionary_zips:
                         raise ValueError(
-                            "MIA_ECLASS_PROVIDER=local requires "
-                            "MIA_ECLASS_XML_DICTIONARY_ZIPS"
+                            "MIA_ECLASS_PROVIDER=local requires MIA_ECLASS_XML_DICTIONARY_ZIPS"
                         )
                     if self.settings.eclass_certificate_file is not None:
                         raise ValueError(

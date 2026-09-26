@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from urllib.parse import urlsplit
 
-from mia_dpp.domain.evidence import ProductKnowledgePackage
+from mia_dpp.domain.evidence import EvidenceRecord, ProductKnowledgePackage
 from mia_dpp.domain.mappings import (
     CoverageStatus,
     MappingResult,
@@ -156,9 +156,7 @@ class MappingHumanService:
             {
                 "mappingCycleId": mapping_cycle_id,
                 "actorName": submission.actor_name,
-                "decisions": [
-                    item.to_wire_dict() for item in submission.decisions
-                ],
+                "decisions": [item.to_wire_dict() for item in submission.decisions],
                 "result": [item.model_dump(mode="json", by_alias=True) for item in reviewed],
             },
             derived_from=(mapping_id,),
@@ -300,7 +298,7 @@ class MappingHumanService:
         )
 
 
-def _audit_evidence_value(record: object) -> str:
-    value = str(getattr(record, "value"))
-    unit = getattr(record, "unit", None)
+def _audit_evidence_value(record: EvidenceRecord) -> str:
+    value = str(record.value)
+    unit = record.unit
     return f"{value} {unit}".strip() if unit else value

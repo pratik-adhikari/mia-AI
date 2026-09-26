@@ -508,9 +508,7 @@ def test_evidence_to_verified_semantics_to_final_technical_data_is_end_to_end() 
             criteria: Mapping[str, str],
         ) -> ChoiceDecision:
             del state, instructions
-            choice = (
-                "technical_data|TechnicalData/TechnicalPropertyAreas/[]/ArbitraryProperty"
-            )
+            choice = "technical_data|TechnicalData/TechnicalPropertyAreas/[]/ArbitraryProperty"
             assert choice in criteria
             probabilities = dict.fromkeys(criteria, 0.0)
             probabilities[choice] = 1.0

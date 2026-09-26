@@ -77,8 +77,10 @@ def test_recovery_after_research_claim_never_leaves_job_running(tmp_path) -> Non
         jev_decision_policy=DecisionPolicySettings(),
     )
 
-    with pytest.raises(RuntimeError, match="workflow generation"):
+    with pytest.raises(RuntimeError, match="is not active: incomplete"):
         asyncio.run(service.run(job.id, user_id="user-a"))
+    with pytest.raises(RuntimeError, match="workflow generation"):
+        catalogue.assert_run_generation(old.id)
 
     old_job = catalogue.get_background_job(job.id, user_id="user-a")
     jobs = catalogue.list_background_jobs(

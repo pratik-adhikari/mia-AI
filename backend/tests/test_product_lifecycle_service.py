@@ -64,7 +64,6 @@ def test_product_lifecycle_and_snapshot_run_without_langgraph(tmp_path) -> None:
     assert resumed.product_snapshot_version == snapshot.version
 
 
-
 def test_product_lifecycle_continues_real_persisted_saved_work(tmp_path) -> None:
     catalogue = ProductCatalogue(tmp_path / "catalogue.sqlite3")
     artifacts = LocalArtifactStore(tmp_path / "artifacts")
@@ -90,6 +89,7 @@ def test_product_lifecycle_continues_real_persisted_saved_work(tmp_path) -> None
         ProductKnowledgePackage(
             product_id=first.product_id,
             product_name="Widget",
+            evidence=(),
         ),
     )
     snapshot = update_product_snapshot(

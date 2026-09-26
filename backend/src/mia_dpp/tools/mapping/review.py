@@ -235,7 +235,9 @@ class MappingReviewService:
                         mapping.review_priority
                         if mapping is not None
                         and mapping.review_priority in {"optional", "confirm", "alarm"}
-                        else "confirm" if outcome.direct_target else None
+                        else "confirm"
+                        if outcome.direct_target
+                        else None
                     ),
                     reason=outcome.reason,
                     mapping=mapping,

@@ -9,6 +9,8 @@ from mia_dpp.runtime.run_context import RunContext
 from mia_dpp.services.product_snapshot import (
     model_fingerprint,
     semantic_mapper_fingerprint,
+)
+from mia_dpp.services.product_snapshot import (
     update_product_snapshot as _update_product_snapshot,
 )
 from mia_dpp.workflow.workspace import RunWorkspace

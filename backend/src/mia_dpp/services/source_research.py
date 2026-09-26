@@ -73,8 +73,7 @@ class SourceResearchService:
             {
                 "query": result.query,
                 "candidates": [
-                    item.model_dump(mode="json", by_alias=True)
-                    for item in result.candidates
+                    item.model_dump(mode="json", by_alias=True) for item in result.candidates
                 ],
             },
             derived_from=(request.coverage_artifact_id,),
@@ -96,9 +95,7 @@ class SourceResearchService:
             )
         return SourceResearchResult(
             product_url=selected.url,
-            known_source_urls=tuple(
-                dict.fromkeys((*request.known_source_urls, selected.url))
-            ),
+            known_source_urls=tuple(dict.fromkeys((*request.known_source_urls, selected.url))),
             research_attempts=attempts,
             research_found_source=True,
         )

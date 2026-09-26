@@ -118,11 +118,13 @@ def _evidence_payload(
             candidates.append(identifier)
             sections_seen.add(section)
     candidates.extend(
-        identifier for identifier in view.evidence_ids
+        identifier
+        for identifier in view.evidence_ids
         if by_id[identifier].context_path == focus.context_path
     )
     candidates.extend(
-        identifier for identifier in view.evidence_ids
+        identifier
+        for identifier in view.evidence_ids
         if by_id[identifier].context_path[:1] == focus_section
     )
     candidates.extend(view.evidence_ids)

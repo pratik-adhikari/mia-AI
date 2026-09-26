@@ -26,10 +26,7 @@ async def build_aas(
     state: MiaWorkflowState,
     runtime: Runtime[ServiceContainer],
 ) -> dict[str, Any]:
-    mapping_id = (
-        state.get("reviewed_mapping_artifact_id")
-        or state["semantic_mapping_artifact_id"]
-    )
+    mapping_id = state.get("reviewed_mapping_artifact_id") or state["semantic_mapping_artifact_id"]
     result = _service(runtime).build(
         RunContext.from_mapping(state),
         evidence_artifact_id=state["evidence_artifact_id"],
@@ -52,10 +49,7 @@ async def store_result(
     state: MiaWorkflowState,
     runtime: Runtime[ServiceContainer],
 ) -> dict[str, Any]:
-    mapping_id = (
-        state.get("reviewed_mapping_artifact_id")
-        or state["semantic_mapping_artifact_id"]
-    )
+    mapping_id = state.get("reviewed_mapping_artifact_id") or state["semantic_mapping_artifact_id"]
     result = _service(runtime).store_result(
         RunContext.from_mapping(state),
         deployable=state.get("build_deployable", False),
@@ -72,9 +66,7 @@ async def store_result(
     if result.validation_failed:
         return {
             "status": result.status,
-            "reply": (
-                "The AAS was built but deterministic validation still blocks deployment."
-            ),
+            "reply": ("The AAS was built but deterministic validation still blocks deployment."),
             "decision_summary": "Validation failed; no DPP version was published.",
         }
 

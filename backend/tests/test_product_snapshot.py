@@ -172,7 +172,7 @@ def test_stale_workspace_cannot_start_after_generation_advances(tmp_path) -> Non
         require_expired_lease=True,
     )
 
-    with pytest.raises(RuntimeError, match="workflow generation"):
+    with pytest.raises(RuntimeError, match="is not active: incomplete"):
         RunWorkspace(
             {
                 "user_id": "user-a",
@@ -182,3 +182,5 @@ def test_stale_workspace_cannot_start_after_generation_advances(tmp_path) -> Non
             },
             SimpleNamespace(catalogue=catalogue, artifacts=SimpleNamespace()),
         )
+    with pytest.raises(RuntimeError, match="workflow generation"):
+        catalogue.assert_run_generation(old.id)

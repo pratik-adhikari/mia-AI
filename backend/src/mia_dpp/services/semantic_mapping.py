@@ -304,7 +304,7 @@ class SemanticMappingService:
                 "activityKey": "semantic-mapping",
             },
         )
-        mapper_fingerprint = semantic_mapper_fingerprint(mapper)
+        semantic_fingerprint = semantic_mapper_fingerprint(mapper)
         snapshot = update_product_snapshot(
             self._catalogue,
             context,
@@ -312,7 +312,7 @@ class SemanticMappingService:
             expected_version=expected_snapshot_version,
             source_generation=source_generation,
             semantic_mapping_artifact_id=mapping_id,
-            semantic_mapper_fingerprint=mapper_fingerprint,
+            semantic_mapper_fingerprint=semantic_fingerprint,
             mapping_cycle_id=cycle_id,
             human_review_pending=bool(reviews),
         )
@@ -321,7 +321,7 @@ class SemanticMappingService:
             review_items_artifact_id=review_id,
             mapping_cycle_id=cycle_id,
             review_required=bool(reviews),
-            semantic_mapper_fingerprint=mapper_fingerprint,
+            semantic_mapper_fingerprint=semantic_fingerprint,
             product_snapshot_version=snapshot.version,
         )
 
