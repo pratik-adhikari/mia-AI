@@ -14,6 +14,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from mia_dpp.capabilities.evidence import merge_packages
 from mia_dpp.capabilities.mapping import merge_mapping_results
+from mia_dpp.capabilities.semantic_mapping import run_semantic_mapping
 from mia_dpp.domain.evidence import ProductKnowledgePackage
 from mia_dpp.domain.mappings import MappingResult
 from mia_dpp.domain.product import BackgroundJob, BackgroundJobStatus
@@ -715,14 +716,15 @@ class DeepResearchService:
                 self._services.templates,
                 index,
             ).propose(incremental.evidence)
-            semantic = await mapper.map(incremental, index, deterministic)
-            mapped = self._services.mapping_review.apply_semantic_run(
+            execution = await run_semantic_mapping(
                 incremental,
-                deterministic,
                 index,
-                semantic,
+                deterministic,
+                mapper=mapper,
+                review=self._services.mapping_review,
             )
-            model_requests = semantic.metrics.model_requests
+            mapped = execution.mapping
+            model_requests = execution.semantic_run.metrics.model_requests
         mapping_id = work.put_model(
             "mapping/research-new-evidence.json",
             mapped,
