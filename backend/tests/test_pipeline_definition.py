@@ -56,3 +56,24 @@ def test_pipeline_definition_rejects_unknown_dependency() -> None:
                 ],
             }
         )
+
+
+def test_pipeline_definition_rejects_cycles() -> None:
+    with pytest.raises(ValueError, match="acyclic"):
+        PipelineDefinition.model_validate(
+            {
+                "id": "cycle",
+                "steps": [
+                    {
+                        "id": "a",
+                        "component": "normalize.evidence",
+                        "after": ["b"],
+                    },
+                    {
+                        "id": "b",
+                        "component": "semantic.context",
+                        "after": ["a"],
+                    },
+                ],
+            }
+        )
