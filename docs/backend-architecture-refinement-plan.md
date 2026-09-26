@@ -866,7 +866,15 @@ Graph node ─┐
 Agent tool ─┘
 ```
 
-### Rule 7 — configuration is observable
+### Rule 7 — active execution identity is bound durably
+
+`RunStore` represents an **active executor**, not a historical reader. Its `RunContext` must be validated and bound to the durable catalogue before generation fencing, lease renewal, artifact writes, or events are allowed.
+
+Runtime persistence depends on narrow ports such as `RunCatalogue` and `ArtifactStore`, not the full application catalogue/container.
+
+Architecture-neutral product identity helpers such as URL canonicalization belong in `domain/` (or another neutral core package), never under a concrete orchestration package.
+
+### Rule 8 — configuration is observable
 
 Every experimental run should eventually record:
 
