@@ -51,10 +51,6 @@ class ReusedDppResult:
     source_fingerprint: str | None
     dpp_version_id: str
     status: str = "reused"
-    reply: str = "Existing DPP reused; no extraction or mapping was repeated."
-    decision_summary: str = (
-        "A successful durable DPP already exists for this product URL."
-    )
 
 
 class ProductLifecycleService:
