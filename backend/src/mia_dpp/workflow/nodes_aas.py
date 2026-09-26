@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     from langgraph.runtime import Runtime
 
-from mia_dpp.aas.build import build_dpp
+from mia_dpp.capabilities.aas import build_validated_dpp
 from mia_dpp.domain.evidence import ProductKnowledgePackage
 from mia_dpp.domain.mappings import MappingResult, MappingStatus
 from mia_dpp.domain.product import DppReleaseStatus, RunStatus
@@ -28,16 +28,10 @@ async def build_aas(
         "semantic_mapping_artifact_id"
     )
     mapping = work.load(mapping_id, MappingResult)
-    accepted = [
-        item
-        for item in mapping.mapped
-        if item.status in {MappingStatus.AUTO, MappingStatus.APPROVED}
-    ]
-    package = build_dpp(
-        package_input.product_name,
-        accepted,
-        repository=work.ctx.templates,
-        evidence=package_input.evidence,
+    package = build_validated_dpp(
+        package_input,
+        mapping,
+        templates=work.ctx.templates,
     )
     dpp_id = work.put_model(
         "dpp/package.json",
