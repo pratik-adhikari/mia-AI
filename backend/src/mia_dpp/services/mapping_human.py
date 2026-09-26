@@ -2,10 +2,9 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from urllib.parse import urlsplit
 
-from mia_dpp.agent.models import AgentReviewRequest, AgentValueRequest
 from mia_dpp.domain.evidence import ProductKnowledgePackage
 from mia_dpp.domain.mappings import (
     CoverageStatus,
@@ -19,6 +18,7 @@ from mia_dpp.persistence.catalogue import ProductCatalogue
 from mia_dpp.runtime.run_context import RunContext
 from mia_dpp.runtime.run_store import RunStore
 from mia_dpp.services.human_review_audit import mapping_review_records, supplied_value_record
+from mia_dpp.services.human_submission import HumanValueSubmission, MappingReviewSubmission
 from mia_dpp.services.product_snapshot import model_fingerprint, update_product_snapshot
 from mia_dpp.storage.base import ArtifactStore
 from mia_dpp.tools.mapping.coverage import coverage as calculate_coverage
@@ -62,7 +62,7 @@ class MappingHumanService:
         self,
         context: RunContext,
         *,
-        request: AgentReviewRequest,
+        submission: MappingReviewSubmission,
         reviews: tuple[SemanticReviewItem, ...],
         evidence_artifact_id: str,
         targets_artifact_id: str,
@@ -78,7 +78,7 @@ class MappingHumanService:
     ) -> AppliedReviewResult:
         work = self._store(context)
         by_id = {item.id: item for item in reviews}
-        if {item.review_id for item in request.decisions} != set(by_id):
+        if {item.review_id for item in submission.decisions} != set(by_id):
             raise ValueError("mapping review must contain exactly one decision for every row")
 
         package = work.load(evidence_artifact_id, ProductKnowledgePackage)
@@ -86,7 +86,7 @@ class MappingHumanService:
         result = work.load(semantic_mapping_artifact_id, MappingResult)
         reviewed: list[SemanticReviewItem] = []
 
-        for decision in request.decisions:
+        for decision in submission.decisions:
             before = by_id[decision.review_id]
             proposed_record = next(
                 record for record in package.evidence if record.id == before.evidence_id
@@ -102,7 +102,7 @@ class MappingHumanService:
                 corrected_semantic_id=decision.corrected_semantic_id,
                 corrected_value=decision.corrected_value,
                 comment=decision.comment,
-                actor_name=request.actor_name,
+                actor_name=submission.actor_name,
             )
             reviewed.append(item)
             for audit in mapping_review_records(
@@ -111,7 +111,7 @@ class MappingHumanService:
                 run_id=context.run_id,
                 thread_id=context.thread_id,
                 mapping_cycle_id=mapping_cycle_id,
-                actor_name=request.actor_name,
+                actor_name=submission.actor_name,
                 decision=decision,
                 before=before,
                 after=item,
@@ -134,7 +134,7 @@ class MappingHumanService:
                     domain=domain,
                     product_family=None,
                     comment=decision.comment,
-                    actor_name=request.actor_name,
+                    actor_name=submission.actor_name,
                     user_id=context.user_id,
                     run_id=context.run_id,
                 )
@@ -155,10 +155,9 @@ class MappingHumanService:
             "mapping/review-decisions.json",
             {
                 "mappingCycleId": mapping_cycle_id,
-                "actorName": request.actor_name,
+                "actorName": submission.actor_name,
                 "decisions": [
-                    item.model_dump(mode="json", by_alias=True)
-                    for item in request.decisions
+                    asdict(item) for item in submission.decisions
                 ],
                 "result": [item.model_dump(mode="json", by_alias=True) for item in reviewed],
             },
@@ -219,7 +218,7 @@ class MappingHumanService:
         self,
         context: RunContext,
         *,
-        request: AgentValueRequest,
+        submission: HumanValueSubmission,
         requirement_id: str,
         question: str,
         evidence_artifact_id: str,
@@ -242,10 +241,10 @@ class MappingHumanService:
             result,
             index,
             requirement_id=requirement_id,
-            value=request.value,
+            value=submission.value,
             thread_id=context.thread_id,
-            actor_name=request.actor_name,
-            use_dummy=request.use_dummy,
+            actor_name=submission.actor_name,
+            use_dummy=submission.use_dummy,
         )
         supplied_mapping = result.mapped[-1]
         supplied_evidence = package.evidence[-1]
@@ -258,8 +257,8 @@ class MappingHumanService:
                 requirement_id=requirement_id,
                 evidence_id=supplied_evidence.id,
                 mapping_id=supplied_mapping.id,
-                actor_name=request.actor_name,
-                use_dummy=request.use_dummy,
+                actor_name=submission.actor_name,
+                use_dummy=submission.use_dummy,
                 final_value=_audit_evidence_value(supplied_evidence),
                 final_target_path=supplied_mapping.target.template_path,
             )
