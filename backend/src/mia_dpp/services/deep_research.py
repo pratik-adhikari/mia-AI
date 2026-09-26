@@ -21,7 +21,7 @@ from mia_dpp.storage.models import StoredArtifact
 from mia_dpp.tools.mapping.coverage import coverage
 from mia_dpp.tools.mapping.mapper import DeterministicWebsiteMapper
 from mia_dpp.tools.web.models import SourceLink
-from mia_dpp.workflow.context import MiaContext
+from mia_dpp.runtime.services import ServiceContainer
 from mia_dpp.workflow.nodes_product import merge_packages
 from mia_dpp.workflow.workspace import RunWorkspace
 
@@ -136,7 +136,7 @@ def merge_mapping_results(existing: MappingResult, incoming: MappingResult) -> M
 class DeepResearchService:
     """Advance one catalogue-owned crawl job by one retry-safe bounded batch."""
 
-    def __init__(self, context: MiaContext) -> None:
+    def __init__(self, context: ServiceContainer) -> None:
         self._context = context
         self._crawl_scope = CrawlScopeConfig.load()
 
