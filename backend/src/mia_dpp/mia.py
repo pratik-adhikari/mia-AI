@@ -37,7 +37,7 @@ from mia_dpp.integrations.crawl4ai import Crawl4AIPageLoader
 from mia_dpp.integrations.ddgs import DdgsSearchProvider
 from mia_dpp.persistence.catalogue import LOCAL_USER_ID, ActiveProductRunExists
 from mia_dpp.persistence.workspace import WorkspaceView
-from mia_dpp.orchestration.base import Orchestrator
+from mia_dpp.orchestration.base import Orchestrator, OrchestrationRunRequest, OrchestrationRunSeed
 from mia_dpp.orchestration.graph.orchestrator import GraphOrchestrator
 from mia_dpp.runtime.factory import create_artifact_store, create_catalogue
 from mia_dpp.runtime.services import ServiceContainer
@@ -53,7 +53,6 @@ from mia_dpp.tools.search import SearchProvider, SearchUnavailableError
 from mia_dpp.tools.web.models import PageLoadError
 from mia_dpp.tools.web.tool import WebExtractionTool
 from mia_dpp.workflow.identity import direct_product_url
-from mia_dpp.workflow.state import reset_product_state
 
 
 class Mia:
@@ -515,22 +514,13 @@ class Mia:
             return response
 
         initial = not bool(values)
-        update: dict[str, Any] = {
-            "thread_id": thread_id,
-            "user_id": user_id,
-            "user_message": request.message,
-            "refresh_requested": request.refresh_requested,
-        }
-        if initial:
-            update.update(
-                {
-                    "discovery_history_json": "[]",
-                    "target_submodels": ("digital_nameplate", "technical_data"),
-                    "max_research_attempts": 2,
-                    "research_attempts": 0,
-                    "status": "running",
-                }
-            )
+        run_request = OrchestrationRunRequest(
+            thread_id=thread_id,
+            user_id=user_id,
+            user_message=request.message,
+            refresh_requested=request.refresh_requested,
+            initialize=initial,
+        )
         invocation_thread = self.context.catalogue.get_thread(thread_id, user_id=user_id)
         invocation_generation = (
             invocation_thread.workflow_generation if invocation_thread is not None else 0
@@ -557,7 +547,7 @@ class Mia:
             return response
 
         try:
-            result = await self.orchestrator.run(thread_id, user_id, update)
+            result = await self.orchestrator.run(run_request)
         except ActiveProductRunExists as conflict:
             active = conflict.run
             self.context.catalogue.add_message(
@@ -828,47 +818,61 @@ class Mia:
             require_expired_lease=(active_run.status is RunStatus.RUNNING and not allow_terminal),
             allow_terminal=allow_terminal,
         )
-        update: dict[str, Any] = {
-            **reset_product_state(product_url=product_url),
-            "thread_id": thread_id,
-            "user_id": user_id,
-            "user_message": user_message,
-            "product_id": replacement.product_id,
-            "run_id": replacement.id,
-            "workflow_generation": replacement.workflow_generation,
-            "source_generation": (
-                (durable.source_generation + 1 if refresh_requested else durable.source_generation)
-                if durable is not None
-                else 1
+        run_request = OrchestrationRunRequest(
+            thread_id=thread_id,
+            user_id=user_id,
+            user_message=user_message,
+            refresh_requested=refresh_requested,
+            seed=OrchestrationRunSeed(
+                product_url=product_url,
+                product_id=replacement.product_id,
+                run_id=replacement.id,
+                workflow_generation=replacement.workflow_generation,
+                source_generation=(
+                    (
+                        durable.source_generation + 1
+                        if refresh_requested
+                        else durable.source_generation
+                    )
+                    if durable is not None
+                    else 1
+                ),
+                reuse_mode=(
+                    "refresh_sources" if refresh_requested else "continue_saved_work"
+                ),
+                reuse_prior_work=bool(
+                    not refresh_requested
+                    and durable is not None
+                    and durable.evidence_artifact_id
+                ),
+                seeded_from_run_id=active_run.id,
+                evidence_artifact_id=(
+                    durable.evidence_artifact_id
+                    if durable is not None and durable.evidence_artifact_id
+                    else ""
+                ),
+                reviewed_mapping_artifact_id=(
+                    durable.reviewed_mapping_artifact_id
+                    if durable is not None and durable.reviewed_mapping_artifact_id
+                    else ""
+                ),
+                product_snapshot_version=durable.version if durable is not None else 0,
+                discovery_history_json=str(
+                    previous_values.get("discovery_history_json", "[]")
+                ),
+                target_submodels=tuple(
+                    previous_values.get(
+                        "target_submodels",
+                        ("digital_nameplate", "technical_data"),
+                    )
+                ),
+                max_research_attempts=int(
+                    previous_values.get("max_research_attempts", 2)
+                ),
             ),
-            "refresh_requested": refresh_requested,
-            "reuse_mode": ("refresh_sources" if refresh_requested else "continue_saved_work"),
-            "reuse_prior_work": bool(
-                not refresh_requested and durable is not None and durable.evidence_artifact_id
-            ),
-            "seeded_from_run_id": active_run.id,
-            "evidence_artifact_id": (
-                durable.evidence_artifact_id
-                if durable is not None and durable.evidence_artifact_id
-                else ""
-            ),
-            "reviewed_mapping_artifact_id": (
-                durable.reviewed_mapping_artifact_id
-                if durable is not None and durable.reviewed_mapping_artifact_id
-                else ""
-            ),
-            "product_snapshot_version": durable.version if durable is not None else 0,
-            "discovery_history_json": previous_values.get("discovery_history_json", "[]"),
-            "target_submodels": previous_values.get(
-                "target_submodels",
-                ("digital_nameplate", "technical_data"),
-            ),
-            "max_research_attempts": previous_values.get("max_research_attempts", 2),
-            "research_attempts": 0,
-            "status": "running",
-        }
+        )
         try:
-            result = await self.orchestrator.run(thread_id, user_id, update)
+            result = await self.orchestrator.run(run_request)
         except Exception as error:
             self._record_failure(
                 thread_id,
