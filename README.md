@@ -246,14 +246,16 @@ MIA does not present handcrafted scores as statistical confidence.
 
 ```text
 app/, components/                  Next.js workspace + durable product library
-backend/src/mia_dpp/mia.py        small application/composition façade
-backend/src/mia_dpp/workflow/     LangGraph state, routing, nodes, HITL
-backend/src/mia_dpp/agents/       focused discovery, research, semantic agents
+backend/src/mia_dpp/mia.py          thin application façade
+backend/src/mia_dpp/orchestration/ replaceable graph / future agentic / pipeline engines
+backend/src/mia_dpp/capabilities/ reusable evidence, mapping, semantic, and AAS operations
+backend/src/mia_dpp/runtime/      service composition, run context/store, checkpoints
+backend/src/mia_dpp/workflow/     graph-v1 state, routing, thin LangGraph adapters, HITL
+backend/src/mia_dpp/agents/       model-backed implementations used by capabilities/workflows
 backend/src/mia_dpp/persistence/  products, runs, chat, events, DPP versions
 backend/src/mia_dpp/storage/      filesystem / Vercel Blob artifact adapters
-backend/src/mia_dpp/runtime/      SQLite/Postgres checkpoint composition
 backend/src/mia_dpp/tools/web/    provenance-aware generic evidence extraction
-backend/src/mia_dpp/tools/mapping/ mapping, coverage, review
+backend/src/mia_dpp/tools/mapping/ mapping primitives, coverage, review
 backend/src/mia_dpp/aas/          official templates, compiler, validator
 backend/src/mia_dpp/domain/       framework-neutral Pydantic concepts
 backend/src/mia_dpp/integrations/ vendor-specific adapters
