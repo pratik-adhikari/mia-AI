@@ -75,7 +75,13 @@ class RunStore:
             raise KeyError(f"unknown artifact: {artifact_id}")
         return json.loads(self.services.artifacts.get(artifact))
 
-    def put_model(self, key: str, value: BaseModel, *, derived_from: tuple[str, ...] = ()) -> str:
+    def put_model(
+        self,
+        key: str,
+        value: BaseModel,
+        *,
+        derived_from: tuple[str, ...] = (),
+    ) -> str:
         return self.put_bytes(
             key,
             value.model_dump_json(by_alias=True, indent=2).encode(),
@@ -83,7 +89,13 @@ class RunStore:
             derived_from=derived_from,
         )
 
-    def put_json(self, key: str, value: object, *, derived_from: tuple[str, ...] = ()) -> str:
+    def put_json(
+        self,
+        key: str,
+        value: object,
+        *,
+        derived_from: tuple[str, ...] = (),
+    ) -> str:
         return self.put_bytes(
             key,
             json.dumps(value, ensure_ascii=False, sort_keys=True, indent=2, default=str).encode(),
