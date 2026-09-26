@@ -5,13 +5,11 @@ from __future__ import annotations
 import asyncio
 import logging
 import uuid
-from collections.abc import AsyncIterator, Mapping
-from dataclasses import dataclass, field
+from collections.abc import AsyncIterator
 from pathlib import Path
-from typing import Any, cast
+from typing import Any
 
 import httpx
-from langgraph_sdk import get_client
 from pydantic_ai.models import Model
 from pydantic_ai.models.openrouter import OpenRouterModel
 from pydantic_ai.providers.openrouter import OpenRouterProvider
@@ -39,7 +37,8 @@ from mia_dpp.integrations.crawl4ai import Crawl4AIPageLoader
 from mia_dpp.integrations.ddgs import DdgsSearchProvider
 from mia_dpp.persistence.catalogue import LOCAL_USER_ID, ActiveProductRunExists
 from mia_dpp.persistence.workspace import WorkspaceView
-from mia_dpp.runtime.checkpoints import open_checkpointer
+from mia_dpp.orchestration.base import Orchestrator
+from mia_dpp.orchestration.graph.orchestrator import GraphOrchestrator
 from mia_dpp.runtime.factory import create_artifact_store, create_catalogue
 from mia_dpp.runtime.services import ServiceContainer
 from mia_dpp.semantic.decision_policy import DecisionPolicySettings
@@ -53,17 +52,8 @@ from mia_dpp.tools.mapping.review import MappingReviewService
 from mia_dpp.tools.search import SearchProvider, SearchUnavailableError
 from mia_dpp.tools.web.models import PageLoadError
 from mia_dpp.tools.web.tool import WebExtractionTool
-from mia_dpp.workflow.graph import create_graph
 from mia_dpp.workflow.identity import direct_product_url
 from mia_dpp.workflow.state import reset_product_state
-
-
-@dataclass
-class _GraphDebugSession:
-    run_id: str
-    status: str = "running"
-    events: list[dict[str, Any]] = field(default_factory=list)
-    listeners: set[asyncio.Queue[dict[str, Any] | None]] = field(default_factory=set)
 
 
 class Mia:
@@ -217,10 +207,7 @@ class Mia:
             jev_decision_policy=self.context.jev_decision_policy,
         )
         self._response_view = AgentResponseView(self.context, self.store)
-        self._graph: Any | None = None
-        self._checkpoint_cm: Any | None = None
-        self._agent_client: Any | None = None
-        self._graph_debug_sessions: dict[tuple[str, str], _GraphDebugSession] = {}
+        self.orchestrator: Orchestrator = GraphOrchestrator(self.settings, self.context)
 
     @property
     def configured(self) -> bool:
@@ -237,7 +224,7 @@ class Mia:
                 allow_live_lease = False
                 if run.status is RunStatus.RUNNING:
                     if self.context.catalogue.run_lease_is_live(run):
-                        if not self._use_agent_server or await self._agent_server_run_is_active(
+                        if not self.orchestrator.external_execution_enabled or await self._orchestrator_execution_is_active(
                             run, user_id=user_id
                         ):
                             return None
@@ -273,56 +260,17 @@ class Mia:
         ]
         return tuple(run for run in results if run is not None)
 
-    async def _agent_server_run_is_active(self, run: ProductRun, *, user_id: str) -> bool:
-        thread_id = self._agent_server_thread_id(run.thread_id, user_id)
-        try:
-            for status in ("running", "pending"):
-                if await self._agent_server_client().runs.list(thread_id, status=status, limit=1):
-                    return True
-        except httpx.HTTPStatusError as error:
-            if error.response.status_code != 404:
-                raise
-        return False
+    async def _orchestrator_execution_is_active(
+        self,
+        run: ProductRun,
+        *,
+        user_id: str,
+    ) -> bool:
+        return await self.orchestrator.execution_is_active(run.thread_id, user_id)
 
     async def _has_review_checkpoint(self, run: ProductRun, *, user_id: str) -> bool:
-        if self._use_agent_server:
-            snapshot = await self._agent_server_snapshot(run.thread_id, user_id)
-            if snapshot is not None:
-                return self._snapshot_matches_review(snapshot, run.id)
-        graph = await self._ensure_graph()
-        snapshot = await graph.aget_state(self._config(run.thread_id, user_id), subgraphs=True)
-        return self._snapshot_matches_review(snapshot, run.id)
-
-    @staticmethod
-    def _snapshot_matches_review(snapshot: Any, run_id: str) -> bool:
-        if Mia._snapshot_values(snapshot).get("run_id") != run_id:
-            return False
-        interrupts = (
-            snapshot.get("interrupts", ())
-            if isinstance(snapshot, Mapping)
-            else getattr(snapshot, "interrupts", ())
-        )
-        if interrupts:
-            return True
-        tasks = (
-            snapshot.get("tasks", ())
-            if isinstance(snapshot, Mapping)
-            else getattr(snapshot, "tasks", ())
-        )
-        for task in tasks:
-            task_interrupts = (
-                task.get("interrupts", ())
-                if isinstance(task, Mapping)
-                else getattr(task, "interrupts", ())
-            )
-            if task_interrupts:
-                return True
-            nested = (
-                task.get("state") if isinstance(task, Mapping) else getattr(task, "state", None)
-            )
-            if nested is not None and Mia._snapshot_matches_review(nested, run_id):
-                return True
-        return False
+        snapshot = await self.orchestrator.snapshot(run.thread_id, user_id)
+        return snapshot.values.get("run_id") == run.id and snapshot.interrupted
 
     async def message(
         self,
