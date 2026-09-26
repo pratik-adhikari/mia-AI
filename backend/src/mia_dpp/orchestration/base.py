@@ -8,6 +8,38 @@ from typing import Any, Protocol
 
 
 @dataclass(frozen=True, slots=True)
+class OrchestrationRunSeed:
+    """Durable product-work facts used when starting a replacement execution."""
+
+    product_url: str
+    product_id: str
+    run_id: str
+    workflow_generation: int
+    source_generation: int
+    reuse_mode: str
+    reuse_prior_work: bool
+    seeded_from_run_id: str
+    evidence_artifact_id: str
+    reviewed_mapping_artifact_id: str
+    product_snapshot_version: int
+    discovery_history_json: str = "[]"
+    target_submodels: tuple[str, ...] = ("digital_nameplate", "technical_data")
+    max_research_attempts: int = 2
+
+
+@dataclass(frozen=True, slots=True)
+class OrchestrationRunRequest:
+    """Architecture-neutral request to start or continue product processing."""
+
+    thread_id: str
+    user_id: str
+    user_message: str
+    refresh_requested: bool = False
+    initialize: bool = False
+    seed: OrchestrationRunSeed | None = None
+
+
+@dataclass(frozen=True, slots=True)
 class OrchestrationSnapshot:
     """Application-facing view of one orchestrator checkpoint/execution state."""
 
@@ -37,7 +69,7 @@ class Orchestrator(Protocol):
         self,
         thread_id: str,
         user_id: str,
-        run_input: dict[str, Any],
+        request: OrchestrationRunRequest,
     ) -> dict[str, Any]: ...
 
     async def resume(
