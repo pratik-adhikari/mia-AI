@@ -1039,6 +1039,7 @@ The architecture cleanup has now been implemented as a behavior-preserving found
 - machine-readable component catalog;
 - serializable `PipelineDefinition` suitable for a future GUI pipeline builder;
 - privacy modes `local`, `shareable`, and `hybrid` represented in pipeline definitions;
+- explicit execution-tier policy separates deterministic/local/remote/advanced model choices from capabilities;
 - architecture-boundary tests prevent reusable layers from importing graph/agent orchestration;
 - pipeline-contract tests validate component/dependency references.
 
