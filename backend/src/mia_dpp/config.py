@@ -39,6 +39,10 @@ class Settings(BaseSettings):
         default="deepseek/deepseek-v3.2",
         validation_alias="MIA_AGENT_MODEL",
     )
+    architecture_id: str = Field(
+        default="graph-v1",
+        validation_alias="MIA_ARCHITECTURE",
+    )
     jev_shadow_enabled: bool = Field(
         default=False,
         validation_alias="MIA_JEV_SHADOW_ENABLED",
