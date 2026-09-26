@@ -1,0 +1,7 @@
+{
+  "schemaVersion": 1,
+  "architecture": "pipeline-v1",
+  "description": "Future GUI-composed local/private pipeline profile.",
+  "privacyMode": "local",
+  "status": "planned"
+}
