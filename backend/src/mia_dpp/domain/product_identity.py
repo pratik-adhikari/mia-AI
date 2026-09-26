@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import re
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 _TRACKING_PREFIXES = ("utm_",)
 _TRACKING_KEYS = {"fbclid", "gclid", "msclkid"}
+_URL = re.compile(r"https?://[^\\s<>()]+", re.IGNORECASE)
 
 
 def canonical_product_url(url: str) -> str:
@@ -27,3 +29,10 @@ def canonical_product_url(url: str) -> str:
         )
     )
     return urlunsplit((parsed.scheme.casefold(), netloc, path, query, ""))
+
+
+def direct_product_url(message: str) -> str | None:
+    """Return the first explicit product URL from free-form input."""
+
+    match = _URL.search(message)
+    return match.group(0).rstrip(".,;") if match else None
