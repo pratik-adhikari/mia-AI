@@ -75,7 +75,10 @@ class Mia:
         self.deep_research = runtime.deep_research
         self._response_view = runtime.response_view
         self.architectures = ArchitectureRegistry()
-        self.orchestrator = self.architectures.create("graph-v1", self.context)
+        self.orchestrator = self.architectures.create(
+            self.settings.architecture_id,
+            self.context,
+        )
         self._graph: Any | None = None
         self._checkpoint_cm: Any | None = None
         self._agent_client: Any | None = None
