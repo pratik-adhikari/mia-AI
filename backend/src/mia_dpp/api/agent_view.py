@@ -8,7 +8,6 @@ from typing import Any, TypeVar
 from pydantic import BaseModel
 
 from mia_dpp.aas.models import DppPackage
-from mia_dpp.capabilities.mapping import merge_mapping_results
 from mia_dpp.agent.models import (
     AgentResponse,
     AgentStatus,
@@ -17,6 +16,7 @@ from mia_dpp.agent.models import (
     ProductStatus,
     ProductWork,
 )
+from mia_dpp.capabilities.mapping import merge_mapping_results
 from mia_dpp.domain.evidence import ProductKnowledgePackage
 from mia_dpp.domain.mappings import MappingResult, SemanticReviewItem
 from mia_dpp.domain.targets import TemplateIndex
