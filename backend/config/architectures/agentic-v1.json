@@ -1,0 +1,7 @@
+{
+  "schemaVersion": 1,
+  "architecture": "agentic-v1",
+  "description": "Future controller-LLM orchestration over the same capability catalog.",
+  "privacyMode": "hybrid",
+  "status": "planned"
+}
