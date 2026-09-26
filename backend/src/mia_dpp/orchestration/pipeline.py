@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
-from typing import Any, Literal
+from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from mia_dpp.capabilities.catalog import component_catalog
+from mia_dpp.orchestration.execution_policy import PrivacyMode
 
 
 class PipelineStep(BaseModel):
@@ -23,7 +24,7 @@ class PipelineDefinition(BaseModel):
 
     schema_version: int = Field(default=1, ge=1)
     id: str = Field(min_length=1, max_length=100)
-    privacy_mode: Literal["local", "shareable", "hybrid"] = "local"
+    privacy_mode: PrivacyMode = PrivacyMode.LOCAL
     steps: tuple[PipelineStep, ...] = Field(min_length=1)
 
     @model_validator(mode="after")
