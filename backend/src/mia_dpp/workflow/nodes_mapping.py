@@ -40,7 +40,7 @@ from mia_dpp.services.human_review_audit import mapping_review_records, supplied
 from mia_dpp.services.reconfirmation import ReviewReuseStatus, review_reuse_status
 from mia_dpp.tools.mapping.coverage import coverage as calculate_coverage
 from mia_dpp.tools.mapping.mapper import DeterministicWebsiteMapper
-from mia_dpp.workflow.context import MiaContext
+from mia_dpp.runtime.services import ServiceContainer
 from mia_dpp.workflow.nodes_product import merge_packages
 from mia_dpp.workflow.product_snapshot import (
     model_fingerprint,
@@ -53,7 +53,7 @@ from mia_dpp.workflow.workspace import RunWorkspace
 
 async def build_targets(
     state: MiaWorkflowState,
-    runtime: Runtime[MiaContext],
+    runtime: Runtime[ServiceContainer],
 ) -> dict[str, Any]:
     work = RunWorkspace(state, runtime.context)
     templates = tuple(
@@ -84,7 +84,7 @@ async def build_targets(
 
 async def deterministic_mapping(
     state: MiaWorkflowState,
-    runtime: Runtime[MiaContext],
+    runtime: Runtime[ServiceContainer],
 ) -> dict[str, Any]:
     work = RunWorkspace(state, runtime.context)
     package = work.load_state("evidence_artifact_id", ProductKnowledgePackage)
@@ -132,7 +132,7 @@ async def deterministic_mapping(
 
 async def semantic_mapping(
     state: MiaWorkflowState,
-    runtime: Runtime[MiaContext],
+    runtime: Runtime[ServiceContainer],
 ) -> dict[str, Any]:
     work = RunWorkspace(state, runtime.context)
     package = work.load_state("evidence_artifact_id", ProductKnowledgePackage)
@@ -369,7 +369,7 @@ def _audit_evidence_value(record: Any) -> str:
 
 async def human_review(
     state: MiaWorkflowState,
-    runtime: Runtime[MiaContext],
+    runtime: Runtime[ServiceContainer],
 ) -> dict[str, Any]:
     """Pause once for the complete mapping cycle and apply trusted decisions on resume."""
 
@@ -530,7 +530,7 @@ async def human_review(
 
 async def coverage(
     state: MiaWorkflowState,
-    runtime: Runtime[MiaContext],
+    runtime: Runtime[ServiceContainer],
 ) -> dict[str, Any]:
     work = RunWorkspace(state, runtime.context)
     package = work.load_state("evidence_artifact_id", ProductKnowledgePackage)
@@ -574,7 +574,7 @@ async def coverage(
 
 async def integrate_background_research(
     state: MiaWorkflowState,
-    runtime: Runtime[MiaContext],
+    runtime: Runtime[ServiceContainer],
 ) -> dict[str, Any]:
     """Integrate the next mapped batch; crawling and mapping continue during review."""
 
@@ -856,7 +856,7 @@ async def _map_research_evidence(
 
 async def human_value(
     state: MiaWorkflowState,
-    runtime: Runtime[MiaContext],
+    runtime: Runtime[ServiceContainer],
 ) -> dict[str, Any]:
     """Ask for one mandatory value only after public-source research is exhausted."""
 
