@@ -7,16 +7,12 @@ import logging
 import uuid
 from collections.abc import AsyncIterator, Mapping
 from dataclasses import dataclass, field
-from pathlib import Path
 from typing import Any, cast
 
 import httpx
 from langgraph_sdk import get_client
 from pydantic_ai.models import Model
-from pydantic_ai.models.openrouter import OpenRouterModel
-from pydantic_ai.providers.openrouter import OpenRouterProvider
 
-from mia_dpp.aas.templates import OfficialTemplateRepository
 from mia_dpp.agent.models import (
     AgentRequest,
     AgentResponse,
@@ -24,35 +20,17 @@ from mia_dpp.agent.models import (
     AgentStatus,
     AgentValueRequest,
 )
-from mia_dpp.agents.conversation import (
-    ConversationAction,
-    PydanticConversationSupervisor,
-)
-from mia_dpp.agents.discovery import PydanticDiscoveryAgent
-from mia_dpp.agents.research import DeterministicResearchAgent, PydanticResearchAgent
-from mia_dpp.agents.semantic_mapping import PydanticBatchSemanticMapper
-from mia_dpp.agents.source_exploration import PydanticSourceExplorationPlanner
-from mia_dpp.api.agent_view import AgentResponseView
+from mia_dpp.agents.conversation import ConversationAction
 from mia_dpp.config import Settings
+from mia_dpp.runtime.bootstrap import build_runtime
+from mia_dpp.semantic.eclass import EclassPropertyProvider
 from mia_dpp.domain.product import BackgroundJob, MessageRole, ProductRun, RunStatus
-from mia_dpp.integrations.crawl4ai import Crawl4AIPageLoader
-from mia_dpp.integrations.ddgs import DdgsSearchProvider
 from mia_dpp.persistence.catalogue import LOCAL_USER_ID, ActiveProductRunExists
-from mia_dpp.persistence.workspace import WorkspaceView
 from mia_dpp.runtime.checkpoints import open_checkpointer
-from mia_dpp.runtime.factory import create_artifact_store, create_catalogue
-from mia_dpp.semantic.decision_policy import DecisionPolicySettings
-from mia_dpp.semantic.eclass import EclassJsonV2Provider, EclassPropertyProvider
-from mia_dpp.semantic.eclass_xml import EclassXmlZipProvider
-from mia_dpp.semantic.jev import OpenRouterJevClient
-from mia_dpp.services.deep_research import DeepResearchService
-from mia_dpp.services.product_query import ProductQueryService
 from mia_dpp.tools.mapping.models import SemanticMapper
-from mia_dpp.tools.mapping.review import MappingReviewService
 from mia_dpp.tools.search import SearchProvider, SearchUnavailableError
 from mia_dpp.tools.web.models import PageLoadError
 from mia_dpp.tools.web.tool import WebExtractionTool
-from mia_dpp.workflow.context import MiaContext
 from mia_dpp.orchestration.registry import ArchitectureRegistry
 from mia_dpp.workflow.identity import direct_product_url
 from mia_dpp.workflow.state import reset_product_state
@@ -80,132 +58,22 @@ class Mia:
         eclass_provider: EclassPropertyProvider | None = None,
     ) -> None:
         self.settings = settings or Settings()
-        self.templates = OfficialTemplateRepository(self.settings.standards_root)
-        agent_model = model or self._configured_model()
-        # Credentials stay inside the Crawl4AI adapter; callers still receive only MIA models.
-        self.web_tool = web_tool or WebExtractionTool(
-            loader=Crawl4AIPageLoader(
-                model=self.settings.agent_model,
-                api_token=(
-                    self.settings.openrouter_api_key.get_secret_value()
-                    if self.settings.openrouter_api_key is not None
-                    else None
-                ),
-            ),
-            source_planner=(
-                PydanticSourceExplorationPlanner(agent_model) if agent_model is not None else None
-            ),
+        runtime = build_runtime(
+            self.settings,
+            model=model,
+            search_provider=search_provider,
+            web_tool=web_tool,
+            semantic_mapper=semantic_mapper,
+            eclass_provider=eclass_provider,
         )
-        search = search_provider or DdgsSearchProvider()
-        catalogue = create_catalogue(self.settings)
-        artifacts = create_artifact_store(self.settings)
-        mapping_review = MappingReviewService(self.templates)
-
-        semantic = semantic_mapper or (
-            PydanticBatchSemanticMapper(agent_model) if agent_model is not None else None
-        )
-        jev_decider: OpenRouterJevClient | None = None
-        if self.settings.jev_mapping_enabled and not self.settings.jev_shadow_enabled:
-            raise ValueError("MIA_JEV_MAPPING_ENABLED requires MIA_JEV_SHADOW_ENABLED")
-        if self.settings.jev_shadow_enabled:
-            if self.settings.openrouter_api_key is None:
-                raise ValueError("MIA_JEV_SHADOW_ENABLED requires OPENROUTER_API_KEY")
-            jev_decider = OpenRouterJevClient(
-                api_key=self.settings.openrouter_api_key.get_secret_value(),
-                model=self.settings.jev_model,
-                max_concurrency=self.settings.jev_max_concurrency,
-            )
-        if self.settings.semantic_promotion_enabled and not self.settings.eclass_shadow_enabled:
-            raise ValueError("MIA_SEMANTIC_PROMOTION_ENABLED requires MIA_ECLASS_SHADOW_ENABLED")
-
-        resolved_eclass_provider = eclass_provider
-        if self.settings.eclass_shadow_enabled:
-            if jev_decider is None:
-                raise ValueError("MIA_ECLASS_SHADOW_ENABLED requires MIA_JEV_SHADOW_ENABLED")
-            if resolved_eclass_provider is None:
-                if self.settings.eclass_provider_mode == "local":
-                    if not self.settings.eclass_xml_dictionary_zips:
-                        raise ValueError(
-                            "MIA_ECLASS_PROVIDER=local requires "
-                            "MIA_ECLASS_XML_DICTIONARY_ZIPS"
-                        )
-                    if self.settings.eclass_certificate_file is not None:
-                        raise ValueError(
-                            "Configure local ECLASS XML ZIPs or an ECLASS certificate, not both"
-                        )
-                    dictionary_zips = tuple(
-                        Path(item.strip())
-                        for item in self.settings.eclass_xml_dictionary_zips.split(",")
-                        if item.strip()
-                    )
-                    resolved_eclass_provider = EclassXmlZipProvider(
-                        dictionary_zips,
-                        language=self.settings.eclass_xml_language,
-                    )
-                elif self.settings.eclass_xml_dictionary_zips:
-                    raise ValueError(
-                        "Local ECLASS XML ZIPs are configured but "
-                        "MIA_ECLASS_PROVIDER is not set to 'local'"
-                    )
-                elif self.settings.eclass_certificate_file is None:
-                    raise ValueError(
-                        "MIA_ECLASS_SHADOW_ENABLED requires local ECLASS XML ZIPs or "
-                        "MIA_ECLASS_CERTIFICATE_FILE"
-                    )
-                else:
-                    resolved_eclass_provider = EclassJsonV2Provider(
-                        certificate_file=self.settings.eclass_certificate_file,
-                        key_file=self.settings.eclass_key_file,
-                        base_url=self.settings.eclass_json_base_url,
-                        search_parameter=self.settings.eclass_search_parameter,
-                    )
-
-        discovery = PydanticDiscoveryAgent(agent_model, search) if agent_model is not None else None
-        research = (
-            PydanticResearchAgent(agent_model, search)
-            if agent_model is not None
-            else DeterministicResearchAgent(search)
-        )
-        self.context = MiaContext(
-            catalogue=catalogue,
-            discovery_agent=discovery,
-            artifacts=artifacts,
-            templates=self.templates,
-            web_tool=self.web_tool,
-            mapping_review=mapping_review,
-            search=search,
-            research_agent=research,
-            semantic_mapper=semantic,
-            jev_decider=jev_decider,
-            jev_mapping_enabled=self.settings.jev_mapping_enabled,
-            jev_routing_max_concurrency=self.settings.jev_max_concurrency,
-            jev_decision_policy=DecisionPolicySettings(
-                auto_min_selected_probability=(self.settings.jev_auto_min_selected_probability),
-                auto_min_margin=self.settings.jev_auto_min_margin,
-                auto_max_runner_up_ratio=self.settings.jev_auto_max_runner_up_ratio,
-                auto_max_normalized_entropy=self.settings.jev_auto_max_entropy,
-                optional_min_selected_probability=(
-                    self.settings.jev_optional_min_selected_probability
-                ),
-                optional_min_margin=self.settings.jev_optional_min_margin,
-                optional_max_runner_up_ratio=(self.settings.jev_optional_max_runner_up_ratio),
-                optional_max_normalized_entropy=(self.settings.jev_optional_max_entropy),
-            ),
-            jev_grouping_max_groups=self.settings.jev_grouping_max_groups,
-            eclass_shadow_enabled=self.settings.eclass_shadow_enabled,
-            eclass_provider=resolved_eclass_provider,
-            eclass_candidate_limit=self.settings.eclass_candidate_limit,
-            semantic_promotion_enabled=self.settings.semantic_promotion_enabled,
-        )
-        self.store = WorkspaceView(catalogue, artifacts)
-        self.query = ProductQueryService(catalogue, artifacts)
-        self.conversation = (
-            PydanticConversationSupervisor(agent_model, self.query)
-            if agent_model is not None
-            else None
-        )
-        self.deep_research = DeepResearchService(self.context)
-        self._response_view = AgentResponseView(self.context, self.store)
+        self.templates = runtime.templates
+        self.web_tool = runtime.web_tool
+        self.context = runtime.services
+        self.store = runtime.store
+        self.query = runtime.query
+        self.conversation = runtime.conversation
+        self.deep_research = runtime.deep_research
+        self._response_view = runtime.response_view
         self.architectures = ArchitectureRegistry()
         self.orchestrator = self.architectures.create("graph-v1", self.context)
         self._graph: Any | None = None
@@ -1349,18 +1217,6 @@ class Mia:
         if interrupts:
             return "waiting"
         return "running"
-
-    def _configured_model(self) -> Model | None:
-        if self.settings.openrouter_api_key is None:
-            return None
-        return OpenRouterModel(
-            self.settings.agent_model,
-            provider=OpenRouterProvider(
-                api_key=self.settings.openrouter_api_key.get_secret_value(),
-                app_url="https://mia-dpp.vercel.app",
-                app_title="MIA Digital Product Passport",
-            ),
-        )
 
     def _record_assistant(self, response: AgentResponse, *, user_id: str) -> None:
         run = self._latest_run(response.thread_id, user_id=user_id)
