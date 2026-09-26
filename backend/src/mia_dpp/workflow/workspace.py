@@ -1,49 +1,30 @@
-"""Run-scoped helpers that keep persistence plumbing out of graph nodes."""
+"""LangGraph adapter over architecture-neutral run persistence."""
 
 from __future__ import annotations
 
-import json
-from dataclasses import dataclass
 from typing import Any, TypeVar
 
 from pydantic import BaseModel
 
-from mia_dpp.workflow.context import MiaContext
+from mia_dpp.runtime.run_context import RunContext
+from mia_dpp.runtime.run_store import RunStore
+from mia_dpp.runtime.services import ServiceContainer
 from mia_dpp.workflow.state import MiaWorkflowState
 
 ModelT = TypeVar("ModelT", bound=BaseModel)
 
 
-@dataclass(slots=True)
-class RunWorkspace:
-    state: MiaWorkflowState
-    ctx: MiaContext
+class RunWorkspace(RunStore):
+    """Adapt LangGraph state keys to the shared RunStore.
 
-    def __post_init__(self) -> None:
-        self._heartbeat()
+    Orchestration-specific conveniences stay here. Persistence, fencing, and
+    run identity live in the runtime package so future orchestrators can reuse them.
+    """
 
-    def _heartbeat(self) -> None:
-        """Fence stale workers and extend the lease of the current running generation."""
-
-        self.ctx.catalogue.assert_run_generation(self.run_id)
-        self.ctx.catalogue.renew_run_lease(self.run_id)
-
-    def heartbeat(self) -> None:
-        """Renew the run lease during a long wait while retaining generation fencing."""
-
-        self._heartbeat()
-
-    @property
-    def product_id(self) -> str:
-        return self.state["product_id"]
-
-    @property
-    def run_id(self) -> str:
-        return self.state["run_id"]
-
-    @property
-    def user_id(self) -> str:
-        return self.state["user_id"]
+    def __init__(self, state: MiaWorkflowState, ctx: ServiceContainer) -> None:
+        self.state = state
+        self.ctx = ctx
+        super().__init__(RunContext.from_mapping(state), ctx)
 
     def state_id(self, key: str) -> str:
         artifact_id = self.state.get(key)
@@ -51,80 +32,8 @@ class RunWorkspace:
             raise KeyError(f"missing state artifact id: {key}")
         return str(artifact_id)
 
-    def load(self, artifact_id: str, model: type[ModelT]) -> ModelT:
-        artifact = self.ctx.catalogue.get_artifact(artifact_id, user_id=self.user_id)
-        if artifact is None:
-            raise KeyError(f"unknown artifact: {artifact_id}")
-        return model.model_validate_json(self.ctx.artifacts.get(artifact))
-
     def load_state(self, key: str, model: type[ModelT]) -> ModelT:
         return self.load(self.state_id(key), model)
 
     def load_json(self, key: str) -> Any:
-        artifact = self.ctx.catalogue.get_artifact(
-            self.state_id(key),
-            user_id=self.user_id,
-        )
-        if artifact is None:
-            raise KeyError(f"unknown artifact: {self.state_id(key)}")
-        return json.loads(self.ctx.artifacts.get(artifact))
-
-    def put_model(
-        self,
-        key: str,
-        value: BaseModel,
-        *,
-        derived_from: tuple[str, ...] = (),
-    ) -> str:
-        return self.put_bytes(
-            key,
-            # Workspace JSON is an audit artifact, so optimize it for human review, not bytes.
-            value.model_dump_json(by_alias=True, indent=2).encode(),
-            content_type="application/json",
-            derived_from=derived_from,
-        )
-
-    def put_json(
-        self,
-        key: str,
-        value: object,
-        *,
-        derived_from: tuple[str, ...] = (),
-    ) -> str:
-        return self.put_bytes(
-            key,
-            # Keep deterministic key ordering while writing readable multi-line manifests.
-            json.dumps(value, ensure_ascii=False, sort_keys=True, indent=2, default=str).encode(),
-            content_type="application/json",
-            derived_from=derived_from,
-        )
-
-    def put_bytes(
-        self,
-        key: str,
-        data: bytes,
-        *,
-        content_type: str,
-        derived_from: tuple[str, ...] = (),
-    ) -> str:
-        self._heartbeat()
-        artifact = self.ctx.artifacts.put(
-            key,
-            data,
-            content_type=content_type,
-            product_id=self.product_id,
-            run_id=self.run_id,
-            derived_from=derived_from,
-        )
-        self.ctx.catalogue.register_artifact(artifact)
-        return artifact.id
-
-    def event(
-        self,
-        event_type: str,
-        summary: str,
-        *,
-        metadata: dict[str, Any] | None = None,
-    ) -> None:
-        self._heartbeat()
-        self.ctx.catalogue.add_event(self.run_id, event_type, summary, metadata=metadata)
+        return super().load_json(self.state_id(key))
