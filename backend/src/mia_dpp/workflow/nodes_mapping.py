@@ -13,11 +13,13 @@ from mia_dpp.domain.product import RunStatus
 from mia_dpp.domain.targets import TemplateIndex
 from mia_dpp.runtime.run_context import RunContext
 from mia_dpp.runtime.services import ServiceContainer
-from mia_dpp.services.mapping_execution import (
-    MappingExecutionService,
-    ResearchIntegrationRequest,
-)
+from mia_dpp.services.mapping_execution import MappingExecutionService
 from mia_dpp.services.mapping_human import MappingHumanService
+from mia_dpp.services.research_mapping import (
+    ResearchIntegrationRequest,
+    ResearchMappingIntegrationService,
+)
+from mia_dpp.services.semantic_mapping import SemanticMappingService
 from mia_dpp.workflow.state import MiaWorkflowState
 from mia_dpp.workflow.workspace import RunWorkspace
 
@@ -25,6 +27,31 @@ from mia_dpp.workflow.workspace import RunWorkspace
 def _mapping_service(runtime: Runtime[ServiceContainer]) -> MappingExecutionService:
     ctx = runtime.context
     return MappingExecutionService(
+        catalogue=ctx.catalogue,
+        artifacts=ctx.artifacts,
+        templates=ctx.templates,
+    )
+
+
+def _semantic_mapping_service(
+    runtime: Runtime[ServiceContainer],
+) -> SemanticMappingService:
+    ctx = runtime.context
+    return SemanticMappingService(
+        catalogue=ctx.catalogue,
+        artifacts=ctx.artifacts,
+        templates=ctx.templates,
+        mapping_review=ctx.mapping_review,
+        semantic_mapper=ctx.semantic_mapper,
+        jev_mapping_enabled=ctx.jev_mapping_enabled,
+    )
+
+
+def _research_mapping_service(
+    runtime: Runtime[ServiceContainer],
+) -> ResearchMappingIntegrationService:
+    ctx = runtime.context
+    return ResearchMappingIntegrationService(
         catalogue=ctx.catalogue,
         artifacts=ctx.artifacts,
         templates=ctx.templates,
@@ -93,7 +120,7 @@ async def semantic_mapping(
     state: MiaWorkflowState,
     runtime: Runtime[ServiceContainer],
 ) -> dict[str, Any]:
-    result = await _mapping_service(runtime).semantic_map(
+    result = await _semantic_mapping_service(runtime).map(
         RunContext.from_mapping(state),
         evidence_artifact_id=state["evidence_artifact_id"],
         targets_artifact_id=state["targets_artifact_id"],
@@ -217,7 +244,7 @@ async def integrate_background_research(
     if not job_id:
         return {}
 
-    result = await _mapping_service(runtime).integrate_background_research(
+    result = await _research_mapping_service(runtime).integrate(
         ResearchIntegrationRequest(
             context=RunContext.from_mapping(state),
             background_job_id=job_id,
