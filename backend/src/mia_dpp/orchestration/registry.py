@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+
 from mia_dpp.orchestration.base import Orchestrator
 from mia_dpp.orchestration.graph import GraphOrchestrator
 from mia_dpp.runtime.services import ServiceContainer
