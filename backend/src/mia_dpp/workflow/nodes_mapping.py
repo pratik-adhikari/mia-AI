@@ -13,6 +13,7 @@ from mia_dpp.aas.requirements import build_template_index
 from mia_dpp.agent.models import AgentReviewRequest, AgentValueRequest
 from mia_dpp.canonical import sha256_json
 from mia_dpp.domain.evidence import ProductKnowledgePackage
+from mia_dpp.domain.evidence_merge import merge_packages
 from mia_dpp.domain.mappings import (
     CoverageStatus,
     EvidenceOutcomeStatus,
@@ -38,10 +39,9 @@ from mia_dpp.services.evidence_conflicts import (
 )
 from mia_dpp.services.human_review_audit import mapping_review_records, supplied_value_record
 from mia_dpp.services.reconfirmation import ReviewReuseStatus, review_reuse_status
+from mia_dpp.runtime.services import ServiceContainer
 from mia_dpp.tools.mapping.coverage import coverage as calculate_coverage
 from mia_dpp.tools.mapping.mapper import DeterministicWebsiteMapper
-from mia_dpp.runtime.services import ServiceContainer
-from mia_dpp.domain.evidence_merge import merge_packages
 from mia_dpp.workflow.product_snapshot import (
     model_fingerprint,
     semantic_mapper_fingerprint,
