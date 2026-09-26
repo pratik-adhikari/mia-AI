@@ -52,7 +52,7 @@ from mia_dpp.tools.mapping.review import MappingReviewService
 from mia_dpp.tools.search import SearchProvider, SearchUnavailableError
 from mia_dpp.tools.web.models import PageLoadError
 from mia_dpp.tools.web.tool import WebExtractionTool
-from mia_dpp.workflow.context import MiaContext
+from mia_dpp.runtime.services import ServiceContainer
 from mia_dpp.workflow.graph import create_graph
 from mia_dpp.workflow.identity import direct_product_url
 from mia_dpp.workflow.state import reset_product_state
@@ -166,7 +166,7 @@ class Mia:
             if agent_model is not None
             else DeterministicResearchAgent(search)
         )
-        self.context = MiaContext(
+        self.context = ServiceContainer(
             catalogue=catalogue,
             discovery_agent=discovery,
             artifacts=artifacts,
