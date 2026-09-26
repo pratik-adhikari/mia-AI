@@ -5,9 +5,9 @@ from __future__ import annotations
 import uuid
 from collections.abc import Mapping
 
-from mia_dpp.agent.models import AgentReviewDecision
 from mia_dpp.domain.mappings import SemanticReviewItem
 from mia_dpp.domain.product_work import HumanReviewAction, HumanReviewRecord
+from mia_dpp.services.human_submission import MappingReviewDecision
 
 
 def mapping_review_records(
@@ -18,7 +18,7 @@ def mapping_review_records(
     thread_id: str,
     mapping_cycle_id: str | None,
     actor_name: str | None,
-    decision: AgentReviewDecision,
+    decision: MappingReviewDecision,
     before: SemanticReviewItem,
     after: SemanticReviewItem,
     proposed_value: str | None,
