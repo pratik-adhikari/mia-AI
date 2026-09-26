@@ -160,6 +160,68 @@ Phase 1 reduced **responsibility concentration**, not total repository LOC.
 
 The reusable code previously embedded in `RunWorkspace` was made explicit as `RunContext` and `RunStore`, so a temporary net increase in lines is expected. Future phases should reduce duplication as graph nodes and services converge on shared capabilities.
 
+## Final hardening after re-review
+
+The final Phase 1 hardening pass establishes the execution identity boundary rather than trusting caller-supplied metadata.
+
+### RunContext invariant is enforced by the type
+
+Direct construction and `from_mapping(...)` now both reject empty or whitespace-only identity fields. The invariant no longer depends on one factory method.
+
+### RunStore binds all four identifiers before becoming active
+
+Construction now verifies:
+
+```text
+run_id
+  ├── belongs to product_id
+  ├── belongs to thread_id
+  └── thread_id belongs to user_id
+```
+
+Only after this durable binding succeeds does `RunStore` assert workflow generation and renew the execution lease.
+
+### RunStore is explicitly an active execution object
+
+Creating `RunStore` has execution semantics:
+
+- validate durable identity;
+- assert current generation;
+- renew the execution lease.
+
+It is **not** a generic historical reader or report/query object. Future read-only inspection should use a separate query/reader abstraction instead of constructing `RunStore`.
+
+### RunCatalogue protocol
+
+`RunStore` now depends on the narrow `RunCatalogue` protocol rather than concrete `ProductCatalogue`.
+
+The protocol exposes only:
+
+- run/thread lookup needed for identity binding;
+- generation assertion;
+- lease renewal;
+- artifact lookup/registration;
+- event recording.
+
+This makes the persistence boundary machine-checkable and prevents `RunStore` from growing arbitrary catalogue responsibilities.
+
+### Product identity ownership
+
+`canonical_product_url(...)` moved from `workflow/identity.py` to `domain/product_identity.py`.
+
+`ProductCatalogue` now depends on the architecture-neutral domain helper, so persistence no longer imports the workflow package through URL canonicalization. `workflow.identity` temporarily re-exports the function for compatibility while retaining graph/application-oriented `direct_product_url(...)`.
+
+### Real-catalogue integration coverage
+
+The Phase 1 runtime tests now include a real SQLite `ProductCatalogue` and `LocalArtifactStore` integration case covering:
+
+- valid execution identity;
+- wrong product rejection;
+- wrong thread rejection;
+- wrong user rejection;
+- artifact persistence after successful binding;
+- event persistence after successful binding.
+
 ## Validation
 
 GitHub Actions has previously failed on this branch before exposing executable job steps or retrievable logs, so those runs did not provide a meaningful quality signal.
